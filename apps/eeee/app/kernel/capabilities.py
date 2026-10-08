@@ -85,7 +85,13 @@ class GeneralConversationCapability:
         return CapabilityPlan(
             capability_id=self.descriptor.id,
             summary=request.raw_text,
-            inputs={"text": request.raw_text, "workspace": request.context.get("workspace")},
+            inputs={
+                "text": request.raw_text,
+                "workspace": request.context.get("workspace"),
+                "memoryIds": context.memory_ids,
+                "qaBaselineIds": context.qa_baseline_ids,
+                "userPreferences": context.user_preferences,
+            },
             side_effect_level=self.descriptor.side_effect_level,
             requires_approval=False,
         )
@@ -97,7 +103,15 @@ class GeneralConversationCapability:
                 self.workspace_root / "assistant"
             )
             result = self.runtime.run(AgentRequest(
-                prompt=str(plan.inputs["text"]), workspace=workspace,
+                prompt=(
+                    f"사용자 요청: {plan.inputs['text']}\n"
+                    f"사용자 기억: {json.dumps({
+                        'memoryIds': plan.inputs.get('memoryIds', []),
+                        'qaBaselineIds': plan.inputs.get('qaBaselineIds', []),
+                        'userPreferences': plan.inputs.get('userPreferences', {}),
+                    }, ensure_ascii=False, sort_keys=True)}"
+                ),
+                workspace=workspace,
                 allowed_actions=["read"], run_id=envelope_context.envelope.execution_id,
             ))
             if result.status == "completed":

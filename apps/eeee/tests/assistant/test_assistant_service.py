@@ -90,6 +90,7 @@ def test_general_conversation_uses_configured_agent_runtime_without_project(tmp_
     class ConversationRuntime:
         def run(self, request):
             assert request.allowed_actions == ["read"]
+            assert "사용자 기억" in request.prompt
             return AgentResult(
                 status="completed", summary="오늘은 차분하게 우선순위를 정리해보자.",
                 events=[{"type": "assistant.response", "message": "오늘은 차분하게 우선순위를 정리해보자."}],

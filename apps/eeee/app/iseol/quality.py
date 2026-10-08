@@ -27,6 +27,89 @@ class QualityReport(BaseModel):
     checks: list[QualityCheck]
 
 
+class QualityArtifact(BaseModel):
+    """A durable product-quality obligation, not a cosmetic checklist item."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    title: str
+    paths: list[str]
+    rationale: str
+
+
+class ProductQualityProfile(BaseModel):
+    """Release contract for projects intended to be portfolio-grade.
+
+    The profile deliberately checks evidence that survives after the agents
+    finish: a later reviewer can inspect the workspace without trusting the
+    model's prose.  It is provider-neutral and therefore applies to local or
+    hosted implementations alike.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    id: str
+    minimum_test_commands: list[str]
+    required_viewports: list[str]
+    artifacts: list[QualityArtifact]
+
+    @classmethod
+    def portfolio_grade(cls) -> "ProductQualityProfile":
+        return cls(
+            id="portfolio-grade-v1",
+            minimum_test_commands=[
+                "unit",
+                "integration",
+                "e2e",
+                "responsive",
+                "encoding",
+                "build",
+            ],
+            required_viewports=["320px", "390px", "768px", "1440px"],
+            artifacts=[
+                QualityArtifact(id="requirements", title="Product brief and acceptance criteria", paths=["README.md"], rationale="The product goal and completion boundary must be explicit."),
+                QualityArtifact(id="design-system", title="Design system and interaction decisions", paths=["DESIGN.md"], rationale="Visual quality and states must be reproducible, not implied."),
+                QualityArtifact(id="architecture", title="FSD or equivalent architecture", paths=["DESIGN.md", "src"], rationale="Boundaries make later feature and plugin growth safe."),
+                QualityArtifact(id="implementation", title="Runnable product implementation", paths=["index.html", "package.json", "src"], rationale="A screenshot or scaffold is not a deliverable."),
+                QualityArtifact(id="test-suite", title="Unit, integration, and E2E scenarios", paths=["tests"], rationale="The primary user flow and failure paths need repeatable evidence."),
+                QualityArtifact(id="responsive-accessibility", title="Responsive and accessible behavior", paths=["DESIGN.md", "tests/e2e/todo-flow.md", "src/shared/ui/styles.css"], rationale="The product must remain usable across required viewports and input modes."),
+                QualityArtifact(id="security", title="Input and secret-safety review", paths=["PROJECT_LOG.md", "QA_REPORT.json"], rationale="Generated code must not turn user input or credentials into a release risk."),
+                QualityArtifact(id="troubleshooting", title="Troubleshooting and decision log", paths=["PROJECT_LOG.md"], rationale="Portfolio value includes why failures and tradeoffs were handled."),
+                QualityArtifact(id="runbook", title="Reproducible local runbook", paths=["README.md", "package.json"], rationale="A reviewer must be able to run the result without the agent."),
+                QualityArtifact(id="release-evidence", title="QA, ClaimLatch, and release evidence", paths=["QA_REPORT.json", "RELEASE_MANIFEST.json"], rationale="Only evidence-backed output may be handed to the user."),
+            ],
+        )
+
+    def evaluate(self, workspace: Path, *, require_release_evidence: bool = True) -> "QualityReport":
+        checks: list[QualityCheck] = []
+        root = Path(workspace).resolve()
+        for artifact in self.artifacts:
+            if artifact.id == "release-evidence" and not require_release_evidence:
+                continue
+            paths = [root / path for path in artifact.paths]
+            exists = all(path.exists() for path in paths)
+            missing = [str(path.relative_to(root)) for path in paths if not path.exists()]
+            checks.append(QualityCheck(
+                name=f"quality:{artifact.id}",
+                status="PASS" if exists else "BLOCK",
+                message=(f"{artifact.title} evidence is present" if exists else f"Missing {artifact.title} evidence: {', '.join(missing)}"),
+            ))
+        report_path = root / "QA_REPORT.json"
+        manifest_path = root / "RELEASE_MANIFEST.json"
+        if report_path.is_file():
+            checks.append(QualityCheck(name="quality:qa-report", status="PASS", message="Independent QA report is present"))
+        else:
+            checks.append(QualityCheck(name="quality:qa-report", status="BLOCK", message="Independent QA report is missing"))
+        if require_release_evidence:
+            if manifest_path.is_file():
+                checks.append(QualityCheck(name="quality:release-manifest", status="PASS", message="Release manifest is present"))
+            else:
+                checks.append(QualityCheck(name="quality:release-manifest", status="BLOCK", message="Release manifest is missing"))
+        decision = "BLOCK" if any(check.status == "BLOCK" for check in checks) else "PASS"
+        return QualityReport(decision=decision, checks=checks)
+
+
 class QualityGate:
     _secret_pattern = re.compile(
         r"(?:api[_-]?key|token|secret|password)\s*[:=]\s*['\"][^'\"]{8,}['\"]",

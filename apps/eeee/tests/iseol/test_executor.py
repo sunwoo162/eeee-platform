@@ -59,7 +59,10 @@ def test_executor_runs_only_ready_nodes_and_verifies_every_handoff(tmp_path):
     report = executor.execute(AgentTeamFactory.default_graph("Todo 앱"), _envelope())
 
     assert report.status == "completed"
-    assert set(runtime.calls) == {"requirements", "design", "frontend", "backend", "data", "test", "review", "integration"}
+    assert set(runtime.calls) == {
+        "requirements", "research", "design", "architecture", "frontend", "backend", "data",
+        "accessibility", "security", "test", "review", "documentation", "integration",
+    }
     assert set(trust.calls) == set(runtime.calls)
     assert all(item.status == "passed" for item in report.agents)
 

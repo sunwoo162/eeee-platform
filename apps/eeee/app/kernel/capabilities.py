@@ -11,7 +11,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from app.assistant.models import AssistantContext, AssistantRequest, CapabilityDescriptor, CapabilityPlan
-from app.agent.protocol import AgentRuntime
+from app.agent.protocol import AgentRequest, AgentRuntime
 from app.config import Settings
 from app.contracts import ExecutionEnvelope, ExecutionError, ExecutionStatus, SideEffectLevel
 from app.coordinator.service import Coordinator
@@ -75,19 +75,43 @@ class LocalPlanningCapability:
 class GeneralConversationCapability:
     """Keep EEEE useful when no specialized capability is required."""
 
-    def __init__(self, descriptor: CapabilityDescriptor) -> None:
+    def __init__(self, descriptor: CapabilityDescriptor, *, runtime: AgentRuntime | None = None,
+                 workspace_root: Path | None = None) -> None:
         self.descriptor = descriptor
+        self.runtime = runtime
+        self.workspace_root = workspace_root or Path.cwd()
 
     def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
         return CapabilityPlan(
             capability_id=self.descriptor.id,
             summary=request.raw_text,
-            inputs={"text": request.raw_text},
+            inputs={"text": request.raw_text, "workspace": request.context.get("workspace")},
             side_effect_level=self.descriptor.side_effect_level,
             requires_approval=False,
         )
 
     def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
+        if self.runtime is not None:
+            workspace_value = plan.inputs.get("workspace")
+            workspace = Path(workspace_value) if isinstance(workspace_value, str) and workspace_value else (
+                self.workspace_root / "assistant"
+            )
+            result = self.runtime.run(AgentRequest(
+                prompt=str(plan.inputs["text"]), workspace=workspace,
+                allowed_actions=["read"], run_id=envelope_context.envelope.execution_id,
+            ))
+            if result.status == "completed":
+                return CapabilityOutcome({
+                    "status": "completed", "capabilityStatus": "completed",
+                    "message": result.summary,
+                    "runtimeStatus": result.status, "events": result.events,
+                })
+            status = ExecutionStatus.FAILED if result.status == "failed" else ExecutionStatus.BLOCKED
+            return CapabilityOutcome({
+                "status": "blocked", "capabilityStatus": result.status,
+                "message": result.error or "실제 AI 응답을 사용할 수 없어.",
+                "runtimeStatus": result.status,
+            }, status, ExecutionError(code="assistant_runtime_unavailable", message=result.error or result.status))
         return CapabilityOutcome({
             "status": "completed",
             "capabilityStatus": "completed",

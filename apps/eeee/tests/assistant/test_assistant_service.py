@@ -8,6 +8,7 @@ from app.coordinator.service import Coordinator
 from app.project_runtime.provisioner import ProjectProvisioner
 from app.storage.sqlite import SQLiteStore
 from app.runtime.store import ExecutionStore
+from app.agent.protocol import AgentResult
 
 
 def test_assistant_service_creates_one_project_runtime_for_project_intent(tmp_path) -> None:
@@ -83,6 +84,36 @@ def test_assistant_service_handles_general_conversation_without_a_project(tmp_pa
     assert result.status == "completed"
     assert "EEEE" in result.message
     assert result.response_verification.profile_version == "claimlatch-v0.2.0"
+
+
+def test_general_conversation_uses_configured_agent_runtime_without_project(tmp_path) -> None:
+    class ConversationRuntime:
+        def run(self, request):
+            assert request.allowed_actions == ["read"]
+            return AgentResult(
+                status="completed", summary="오늘은 차분하게 우선순위를 정리해보자.",
+                events=[{"type": "assistant.response", "message": "오늘은 차분하게 우선순위를 정리해보자."}],
+                changed_files=[], test_commands=[], error=None,
+            )
+
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()),
+        coordinator=coordinator,
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+        agent_runtime=ConversationRuntime(),
+    )
+
+    result = service.route("오늘 기분이 어때?")
+
+    assert result.status == "completed"
+    assert result.message == "오늘은 차분하게 우선순위를 정리해보자."
+    assert result.project_id is None
 
 
 def test_assistant_service_reports_initial_stale_child_as_blocked_observation(tmp_path) -> None:

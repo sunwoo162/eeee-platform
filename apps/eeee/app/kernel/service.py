@@ -57,7 +57,9 @@ class KernelService:
             elif descriptor.id == "user-preference":
                 handler = UserPreferenceCapability(descriptor, coordinator)
             elif descriptor.id == "general-conversation":
-                handler = GeneralConversationCapability(descriptor)
+                handler = GeneralConversationCapability(
+                    descriptor, runtime=agent_runtime, workspace_root=settings.workspace_root,
+                )
             elif descriptor.id in {"personal-secretary", "knowledge-documents", "presence"}:
                 handler = LocalPlanningCapability(descriptor)
             else:

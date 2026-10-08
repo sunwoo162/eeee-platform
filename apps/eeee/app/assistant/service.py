@@ -59,7 +59,7 @@ class AssistantService:
         provisioner: ProjectProvisioner,
         event_publisher: Callable[[str, dict[str, object]], object] | None = None,
         document_service: ProjectDocumentService | None = None,
-        kernel: KernelService | None = None,
+        kernel: KernelService | None = None, agent_runtime=None,
     ) -> None:
         self.router = router
         self.coordinator = coordinator
@@ -71,7 +71,7 @@ class AssistantService:
         self.kernel = kernel or KernelService(
             router=router, coordinator=coordinator, store=store, settings=settings,
             provisioner=provisioner, event_publisher=event_publisher,
-            document_service=document_service,
+            document_service=document_service, agent_runtime=agent_runtime,
         )
 
     def route(

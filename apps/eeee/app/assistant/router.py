@@ -49,7 +49,37 @@ class CapabilityRouter:
                 )
 
         candidates.sort(key=lambda item: (-item.score, item.capability_id))
-        if not candidates or candidates[0].score < self.MINIMUM_SCORE:
+        if not candidates:
+            if any(
+                phrase in normalized
+                for phrase in ("이거", "저거", "해줘", "해 줘", "do it", "that")
+            ):
+                candidates = [
+                    CapabilityCandidate(
+                        capability_id=descriptor.id,
+                        score=0,
+                        reasons=["no trigger matched"],
+                    )
+                    for descriptor in self.registry.list()
+                ]
+                return CapabilitySelection(
+                    status="needs_clarification",
+                    candidates=candidates,
+                    reasons=["The request needs a clearer action or subject"],
+                )
+            fallback = self.registry.resolve("general-conversation")
+            return CapabilitySelection(
+                status="selected",
+                capability_id=fallback.descriptor.id,
+                candidates=[CapabilityCandidate(
+                    capability_id=fallback.descriptor.id,
+                    score=0,
+                    reasons=["default EEEE conversation fallback"],
+                )],
+                reasons=["No specialized capability matched; EEEE handles the conversation"],
+            )
+
+        if candidates[0].score < self.MINIMUM_SCORE:
             if not candidates:
                 candidates = [
                     CapabilityCandidate(

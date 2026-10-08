@@ -72,6 +72,30 @@ class LocalPlanningCapability:
         })
 
 
+class GeneralConversationCapability:
+    """Keep EEEE useful when no specialized capability is required."""
+
+    def __init__(self, descriptor: CapabilityDescriptor) -> None:
+        self.descriptor = descriptor
+
+    def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
+        return CapabilityPlan(
+            capability_id=self.descriptor.id,
+            summary=request.raw_text,
+            inputs={"text": request.raw_text},
+            side_effect_level=self.descriptor.side_effect_level,
+            requires_approval=False,
+        )
+
+    def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
+        return CapabilityOutcome({
+            "status": "completed",
+            "capabilityStatus": "completed",
+            "message": "EEEE가 요청을 이해했어. 필요한 작업이 있으면 말해줘.",
+            "context": envelope_context.assistant_context.model_dump(mode="json"),
+        })
+
+
 class UserPreferenceCapability:
     """Persist only explicitly phrased user preferences."""
 

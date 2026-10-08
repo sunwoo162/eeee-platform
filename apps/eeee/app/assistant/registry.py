@@ -67,6 +67,15 @@ def build_default_registry() -> CapabilityRegistry:
     registry = CapabilityRegistry()
     registry.register(
         _descriptor(
+            "general-conversation",
+            "EEEE General Assistant",
+            ["conversation", "question", "assistant"],
+            ["안녕", "고마워", "뭐해", "어때", "hello", "hi", "thanks", "how are you"],
+        ),
+        None,
+    )
+    registry.register(
+        _descriptor(
             "user-preference",
             "User Preference Memory",
             ["preference", "memory", "personalization"],

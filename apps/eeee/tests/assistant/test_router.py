@@ -37,6 +37,14 @@ def test_ambiguous_request_requires_clarification() -> None:
     assert result.candidates
 
 
+def test_unmatched_conversation_uses_eeee_direct_capability() -> None:
+    result = router().select(AssistantRequest(raw_text="안녕, 오늘 기분이 어때?"))
+
+    assert result.status == "selected"
+    assert result.capability_id == "general-conversation"
+    assert result.reasons
+
+
 def test_registered_explicit_capability_overrides_keyword_scoring() -> None:
     result = router().select(
         AssistantRequest(

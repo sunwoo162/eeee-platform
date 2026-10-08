@@ -47,6 +47,7 @@ def test_default_registry_contains_the_initial_eeee_capabilities() -> None:
     registry = build_default_registry()
 
     assert {item.id for item in registry.list()} == {
+        "general-conversation",
         "personal-secretary",
         "project-execution",
         "knowledge-documents",

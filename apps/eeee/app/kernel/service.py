@@ -12,7 +12,7 @@ from app.assistant.router import CapabilityRouter
 from app.config import Settings
 from app.contracts import ApprovalState, EventEnvelope, ExecutionEnvelope, ExecutionError, ExecutionStatus, LocalEventBus, SideEffectLevel
 from app.coordinator.service import Coordinator
-from app.kernel.capabilities import CapabilityOutcome, EnvelopeContext, LocalPlanningCapability, ProjectExecutionCapability, UserPreferenceCapability
+from app.kernel.capabilities import CapabilityOutcome, EnvelopeContext, GeneralConversationCapability, LocalPlanningCapability, ProjectExecutionCapability, UserPreferenceCapability
 from app.memory.store import MemoryStore
 from app.project_runtime.provisioner import ProjectProvisioner
 from app.planning.service import PlanningService
@@ -54,6 +54,8 @@ class KernelService:
                 )
             elif descriptor.id == "user-preference":
                 handler = UserPreferenceCapability(descriptor, coordinator)
+            elif descriptor.id == "general-conversation":
+                handler = GeneralConversationCapability(descriptor)
             elif descriptor.id in {"personal-secretary", "knowledge-documents", "presence"}:
                 handler = LocalPlanningCapability(descriptor)
             else:

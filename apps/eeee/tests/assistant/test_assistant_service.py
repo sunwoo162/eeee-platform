@@ -62,6 +62,29 @@ def test_assistant_service_does_not_create_project_for_a_reminder(tmp_path) -> N
     assert "project identity" in result.response_verification.reason.lower()
 
 
+def test_assistant_service_handles_general_conversation_without_a_project(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()),
+        coordinator=coordinator,
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+    )
+
+    result = service.route("안녕, 오늘 기분이 어때?")
+
+    assert result.selection.capability_id == "general-conversation"
+    assert result.project_id is None
+    assert result.project_profile is None
+    assert result.status == "completed"
+    assert "EEEE" in result.message
+    assert result.response_verification.profile_version == "claimlatch-v0.2.0"
+
+
 def test_assistant_service_reports_initial_stale_child_as_blocked_observation(tmp_path) -> None:
     class RevisionAdvancingCoordinator(Coordinator):
         def create_request(self, project_id, text):

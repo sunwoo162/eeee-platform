@@ -7,7 +7,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEventLoop
+from PySide6.QtCore import QEventLoop, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from app.desktop.window import PetWindow
@@ -113,4 +114,17 @@ def test_enter_submits_the_assistant_command():
     assert client.routed_text == "Todo 앱 만들어줘"
     assert window.current_state["state"] == "completed"
     assert window.detail.text() == "요청을 받았어요."
+    assert window.command_surface.isHidden()
+    window.close()
+
+
+def test_escape_closes_the_command_surface():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+
+    assert not window.command_surface.isHidden()
+    QTest.keyClick(window.assistant_input, Qt.Key.Key_Escape)
+
+    assert window.command_surface.isHidden()
     window.close()

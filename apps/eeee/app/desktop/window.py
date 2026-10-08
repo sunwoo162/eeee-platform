@@ -213,6 +213,7 @@ class PetWindow:
                 assistant_row = QHBoxLayout()
                 self.assistant_input = QLineEdit()
                 self.assistant_input.setObjectName("assistantComposer")
+                self.assistant_input.installEventFilter(self)
                 self.assistant_button = QPushButton()
                 self.assistant_button.setObjectName("primaryAction")
                 self.assistant_button.clicked.connect(self._route_assistant)
@@ -221,6 +222,7 @@ class PetWindow:
                 assistant_row.addWidget(self.assistant_button)
                 command_layout.addLayout(assistant_row)
                 root.addWidget(self.command_surface)
+                self.command_surface.installEventFilter(self)
 
                 actions_row = QHBoxLayout()
                 self.pairing_button = QPushButton()
@@ -322,6 +324,15 @@ class PetWindow:
                     self.refresh()
 
             def eventFilter(self, watched, event):
+                assistant_input = getattr(self, "assistant_input", None)
+                command_surface = getattr(self, "command_surface", None)
+                if (
+                    watched in (assistant_input, command_surface)
+                    and event.type() == QEvent.Type.KeyPress
+                    and event.key() == Qt.Key.Key_Escape
+                ):
+                    self.hide_command_surface()
+                    return True
                 if (
                     watched is self.character
                     and event.type() == QEvent.Type.MouseButtonDblClick
@@ -333,6 +344,10 @@ class PetWindow:
             def show_command_surface(self):
                 self.command_surface.show()
                 self.assistant_input.setFocus()
+
+            def hide_command_surface(self):
+                self.command_surface.hide()
+                self.clearFocus()
 
             def mousePressEvent(self, event):
                 if (
@@ -623,6 +638,7 @@ class PetWindow:
                 text = self.assistant_input.text().strip()
                 if not text:
                     return
+                self.hide_command_surface()
 
                 def on_success(payload):
                     self.assistant_input.clear()

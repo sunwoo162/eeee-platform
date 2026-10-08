@@ -81,6 +81,22 @@ class ProductQualityProfile(BaseModel):
             ],
         )
 
+    @classmethod
+    def web_app(cls) -> "ProductQualityProfile":
+        """Portfolio profile for a credential-free full-stack web app."""
+        profile = cls.portfolio_grade()
+        replacements = {
+            "architecture": ["DESIGN.md", "apps/web/src"],
+            "implementation": ["apps/web/index.html", "apps/api/server.py", "apps/api/store.py"],
+            "test-suite": ["tests"],
+            "responsive-accessibility": ["DESIGN.md", "tests/e2e/web-flow.md", "apps/web/src/shared/ui/styles.css"],
+            "troubleshooting": ["PROJECT_LOG.md"],
+            "runbook": ["README.md", "DEPLOYMENT.md"],
+            "release-evidence": ["QA_REPORT.json", "RELEASE_MANIFEST.json"],
+        }
+        artifacts = [artifact.model_copy(update={"paths": replacements.get(artifact.id, artifact.paths)}) for artifact in profile.artifacts]
+        return profile.model_copy(update={"artifacts": artifacts})
+
     def evaluate(self, workspace: Path, *, require_release_evidence: bool = True) -> "QualityReport":
         checks: list[QualityCheck] = []
         root = Path(workspace).resolve()

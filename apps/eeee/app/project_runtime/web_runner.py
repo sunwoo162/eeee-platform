@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 from app.project_runtime.git_workspace import GitWorkspaceError, record_workspace
 from app.release.manifest import build_release_manifest
+from app.iseol.quality import ProductQualityProfile
 
 
 @dataclass
@@ -150,6 +151,11 @@ class WebProjectRunner:
         }
         qa_path = root / "QA_REPORT.json"
         qa_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        quality = ProductQualityProfile.web_app().evaluate(root, require_release_evidence=False)
+        if quality.decision != "PASS":
+            raise ValueError("Web portfolio quality profile failed: " + "; ".join(check.message for check in quality.checks if check.status == "BLOCK"))
+        report["qualityProfile"] = quality.model_dump(mode="json")
+        qa_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return PreparedWebRun(
             qa_report=report, qa_report_path=str(qa_path),
             artifacts=[{"id": "web-source", "path": "apps", "evidence_ids": evidence_ids}, {"id": "web-qa", "path": "QA_REPORT.json", "evidence_ids": evidence_ids}],
@@ -165,6 +171,9 @@ class WebProjectRunner:
         manifest = build_release_manifest(project_id=project_id, project_revision=project_revision, workspace=str(Path(workspace).resolve()), artifacts=prepared.artifacts, qa_report=prepared.qa_report, claim_latch=dict(claim_latch))
         manifest_path = Path(workspace).resolve() / "RELEASE_MANIFEST.json"
         manifest_path.write_text(json.dumps(manifest.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        quality = ProductQualityProfile.web_app().evaluate(Path(workspace).resolve())
+        if quality.decision != "PASS":
+            return WebRunResult("BLOCKED", "Web portfolio quality profile did not PASS: " + "; ".join(check.message for check in quality.checks if check.status == "BLOCK"), prepared.qa_report_path, str(manifest_path))
         try:
             git = record_workspace(workspace, project_id=project_id, message="feat(web): generate verified web app")
         except GitWorkspaceError as exc:

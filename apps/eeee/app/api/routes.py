@@ -157,6 +157,9 @@ class DesignVerifyResponse(BaseModel):
 class AssistantRequestPayload(BaseModel):
     text: str = Field(min_length=1)
     workspace: str | None = None
+    project_id: str | None = Field(default=None, alias="projectId")
+
+    model_config = {"populate_by_name": True}
 
 
 class AssistantRouteResponse(AssistantRouteResult):
@@ -340,7 +343,7 @@ def build_assistant_router(
     def route_assistant_request(payload: AssistantRequestPayload) -> AssistantRouteResponse:
         try:
             return AssistantRouteResponse.model_validate(
-                service.route(payload.text, payload.workspace).model_dump()
+                service.route(payload.text, payload.workspace, project_id=payload.project_id).model_dump()
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -402,7 +405,7 @@ def build_mobile_router(
     ) -> AssistantRouteResponse:
         device = _authorize_mobile(bridge, bridge_token)
         try:
-            result = assistant.route(payload.text, payload.workspace)
+            result = assistant.route(payload.text, payload.workspace, project_id=payload.project_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         bridge.publish(

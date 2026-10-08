@@ -45,6 +45,19 @@ class CapabilityRouter:
             )
 
         normalized = _normalize(request.raw_text)
+        portfolio_phrases = ("포트폴리오", "기술 블로그", "이력서", "면접 설명", "회고", "portfolio", "resume", "retrospective", "interview")
+        if any(_contains(normalized, phrase) for phrase in portfolio_phrases):
+            portfolio = self.registry.resolve("portfolio-generation")
+            return CapabilitySelection(
+                status="selected",
+                capability_id=portfolio.descriptor.id,
+                candidates=[CapabilityCandidate(
+                    capability_id=portfolio.descriptor.id,
+                    score=1,
+                    reasons=["portfolio intent takes precedence over project creation"],
+                )],
+                reasons=["Portfolio output must use an existing project as evidence"],
+            )
         candidates: list[CapabilityCandidate] = []
         for descriptor in self.registry.list():
             matched = [phrase for phrase in descriptor.trigger_phrases if _contains(normalized, phrase)]

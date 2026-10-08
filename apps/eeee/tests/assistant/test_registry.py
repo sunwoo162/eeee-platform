@@ -50,6 +50,7 @@ def test_default_registry_contains_the_initial_eeee_capabilities() -> None:
         "general-conversation",
         "personal-secretary",
         "project-execution",
+        "portfolio-generation",
         "knowledge-documents",
         "presence",
         "user-preference",

@@ -15,6 +15,13 @@ def test_project_request_selects_project_execution() -> None:
     assert result.reasons
 
 
+def test_portfolio_request_has_precedence_over_project_creation() -> None:
+    result = router().select(AssistantRequest(raw_text="이 프로젝트 포트폴리오로 정리해줘"))
+
+    assert result.capability_id == "portfolio-generation"
+    assert result.status == "selected"
+
+
 def test_calendar_requests_select_the_matching_capability() -> None:
     calendar = router().select(AssistantRequest(raw_text="내일 오후 3시에 회의 일정 등록해줘"))
 

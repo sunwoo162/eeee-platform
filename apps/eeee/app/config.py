@@ -1,14 +1,20 @@
 from pathlib import Path
+import os
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _user_data_root() -> Path:
+    root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    return (Path(root) if root else Path.home() / ".local" / "share") / "Gleave"
 
 
 class Settings(BaseSettings):
     app_name: str = "Gleave"
-    data_dir: Path = Path(".gleave")
-    workspace_root: Path = Path("workspaces")
+    data_dir: Path = Field(default_factory=lambda: _user_data_root() / "data")
+    workspace_root: Path = Field(default_factory=lambda: _user_data_root() / "workspaces")
     github_token: str | None = None
     notion_token: str | None = None
     notion_parent_page_id: str | None = None

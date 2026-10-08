@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.contracts import ExecutionEnvelope, ExecutionStatus
 from app.project_view.service import ProjectViewService
@@ -15,6 +15,7 @@ def test_project_map_renders_real_agent_graph_and_handoff_status(tmp_path):
         project_revision="r1", capability_id="project-execution", tool_id="iseol",
         actor="ISEOL", status=ExecutionStatus.COMPLETED,
         evidence_ids=("evidence-frontend",),
+        started_at=datetime.now(timezone.utc) - timedelta(minutes=1),
         completed_at=datetime.now(timezone.utc),
         output={
             "agentGraph": {"schemaVersion": "iseol-agent-graph.v1", "agents": [

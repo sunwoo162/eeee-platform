@@ -86,6 +86,27 @@ def test_assistant_service_handles_general_conversation_without_a_project(tmp_pa
     assert result.response_verification.profile_version == "claimlatch-v0.2.0"
 
 
+def test_assistant_service_automatically_remembers_durable_design_decisions(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()),
+        coordinator=coordinator,
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+    )
+
+    service.route("포트폴리오는 나중에 플러그인으로 추가할거야")
+
+    preferences = coordinator.memory.search_user_preferences()
+    assert preferences["architecture.portfolio_delivery"].content == (
+        "포트폴리오는 EEEE 안정화 후 선택 플러그인으로 추가"
+    )
+
+
 def test_general_conversation_uses_configured_agent_runtime_without_project(tmp_path) -> None:
     class ConversationRuntime:
         def __init__(self):

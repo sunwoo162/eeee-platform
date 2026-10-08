@@ -14,6 +14,7 @@ from app.project_runtime.documents import ProjectDocumentService
 from app.project_runtime.provisioner import ProjectProvisioner
 from app.storage.sqlite import SQLiteStore
 from app.kernel.service import KernelService
+from app.memory.preferences import extract_implicit_preference
 
 
 class AssistantRouteResult(BaseModel):
@@ -77,6 +78,13 @@ class AssistantService:
     def route(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
     ) -> AssistantRouteResult:
+        implicit_preference = extract_implicit_preference(text)
+        if implicit_preference is not None:
+            self.coordinator.remember_user_preference(
+                implicit_preference.key,
+                implicit_preference.value,
+                scope={"source": "automatic_learning"},
+            )
         envelope = self.kernel.route(
             AssistantRequest(raw_text=text, context={"workspace": workspace},
                              requested_capability=requested_capability),

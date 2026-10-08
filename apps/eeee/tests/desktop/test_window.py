@@ -85,7 +85,7 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert window.assistant_input.objectName() == "assistantComposer"
     assert window.detail.objectName() == "assistantBubble"
     _wait_for(app, lambda: window.current_state.get("state") == "idle")
-    assert window.detail.text() == "무엇을 도와드릴까요?"
+    assert window.detail.text() == ""
     assert window.headline.isHidden()
     assert window.status_card.isHidden()
     assert window.command_surface.isHidden()

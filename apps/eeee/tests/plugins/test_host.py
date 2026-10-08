@@ -93,3 +93,28 @@ def test_unknown_permission_scope_cannot_connect(tmp_path):
 
     with pytest.raises(PermissionError):
         host.connect("restricted", approval=True)
+
+
+def test_routing_capabilities_require_connected_healthy_plugin(host):
+    manifest_data = host._manifest("echo", host.registrations.get("echo").manifest).model_dump(mode="json", by_alias=True)
+    manifest_data["capabilities"] = [{
+        "id": "echo-search",
+        "displayName": "Echo Search",
+        "intents": ["search"],
+        "triggerPhrases": ["echo search"],
+        "actionId": "echo",
+        "permissionIds": ["local.read"],
+        "sideEffectLevel": "none",
+    }]
+    manifest = PluginManifest.model_validate(manifest_data)
+    host._manifests["echo"] = manifest
+    host.registrations.set_status("echo", "available")
+
+    assert host.routing_capabilities() == []
+
+    host.connect("echo", approval=True)
+    available = host.routing_capabilities()
+    assert [item.id for item in available] == ["plugin:echo:echo-search"]
+
+    host.pause("echo")
+    assert host.routing_capabilities() == []

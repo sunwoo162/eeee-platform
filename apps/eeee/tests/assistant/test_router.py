@@ -45,6 +45,33 @@ def test_unmatched_conversation_uses_eeee_direct_capability() -> None:
     assert result.reasons
 
 
+def test_connected_plugin_capability_can_win_routing_but_unavailable_plugin_cannot() -> None:
+    from app.assistant.models import CapabilityDescriptor
+    from app.assistant.registry import CapabilityRegistry
+
+    registry = CapabilityRegistry()
+    registry.register(
+        CapabilityDescriptor(
+            id="general-conversation", version="1.0.0", display_name="EEEE",
+            intents=["conversation"], trigger_phrases=["hello"], required_connectors=[],
+            side_effect_level="none", approval_level="none", claim_latch_policy="claimlatch-v0.2.0",
+        ),
+        None,
+    )
+    enabled = False
+    plugin_descriptor = CapabilityDescriptor(
+        id="plugin:notion:search", version="1.0.0", display_name="Notion Search",
+        intents=["search"], trigger_phrases=["notion search"], required_connectors=["plugin:notion"],
+        side_effect_level="none", approval_level="none", claim_latch_policy="claimlatch-v0.2.0",
+    )
+    registry.set_dynamic_provider(lambda: [plugin_descriptor] if enabled else [])
+    router = CapabilityRouter(registry)
+
+    assert router.select(AssistantRequest(raw_text="notion search")).capability_id == "general-conversation"
+    enabled = True
+    assert router.select(AssistantRequest(raw_text="notion search")).capability_id == "plugin:notion:search"
+
+
 def test_registered_explicit_capability_overrides_keyword_scoring() -> None:
     result = router().select(
         AssistantRequest(

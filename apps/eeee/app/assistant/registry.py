@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
 
 from app.assistant.models import CapabilityDescriptor
@@ -17,6 +18,7 @@ class CapabilityRegistry:
 
     def __init__(self) -> None:
         self._capabilities: dict[str, RegisteredCapability] = {}
+        self._dynamic_provider: Callable[[], list[CapabilityDescriptor]] | None = None
 
     def register(self, descriptor: CapabilityDescriptor, handler: Any) -> None:
         if descriptor.id in self._capabilities:
@@ -24,13 +26,24 @@ class CapabilityRegistry:
         self._capabilities[descriptor.id] = RegisteredCapability(descriptor, handler)
 
     def list(self) -> list[CapabilityDescriptor]:
-        return [item.descriptor for item in self._capabilities.values()]
+        descriptors = [item.descriptor for item in self._capabilities.values()]
+        if self._dynamic_provider is not None:
+            descriptors.extend(self._dynamic_provider())
+        return descriptors
 
     def resolve(self, capability_id: str) -> RegisteredCapability:
         try:
             return self._capabilities[capability_id]
         except KeyError as exc:
+            if self._dynamic_provider is not None:
+                for descriptor in self._dynamic_provider():
+                    if descriptor.id == capability_id:
+                        return RegisteredCapability(descriptor, None)
             raise KeyError(f"Unknown capability: {capability_id}") from exc
+
+    def set_dynamic_provider(self, provider: Callable[[], list[CapabilityDescriptor]] | None) -> None:
+        """Project ephemeral capabilities such as currently healthy plugins."""
+        self._dynamic_provider = provider
 
     def bind(self, capability_id: str, handler: Any) -> None:
         """Attach a runtime implementation while retaining the registered policy."""

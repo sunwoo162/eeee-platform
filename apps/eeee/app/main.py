@@ -222,6 +222,7 @@ def create_app(
     design_service = DesignService(store=store)
     application.state.design_service = design_service
     plugin_host = PluginHost(store, execution_store=kernel.executions)
+    capability_router.registry.set_dynamic_provider(plugin_host.routing_capabilities)
     application.state.plugin_host = plugin_host
 
     def mobile_snapshot(project_id: str | None) -> dict[str, object]:

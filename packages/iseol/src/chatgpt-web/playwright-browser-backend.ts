@@ -37,8 +37,8 @@ const TEMPORARY_RESTRICTION_TEXT = /(?:too many requests|sending requests too qu
 const CONVERSATION_LIMIT_TEXT = /(?:maximum length for this conversation|reached.{0,20}(?:maximum length|limit).{0,20}(?:for )?this conversation|this conversation.{0,30}(?:has )?reached.{0,20}(?:maximum length|limit)|conversation.{0,30}(?:maximum length|limit).{0,20}reached|이 대화.{0,30}(?:최대 길이|한도).{0,20}(?:도달|초과))/i;
 const USAGE_LIMIT_TEXT = /(?:you(?:\x27|’)ve reached (?:your )?.{0,40}(?:message|model|usage|plan|gpt-[a-z0-9._-]+)?.{0,20}limit|(?:message|model|usage|plan|gpt-[a-z0-9._-]+).{0,30}limit.{0,20}(?:reached|reset|try again)|(?:메시지|모델|사용|사용량|계정|gpt-[a-z0-9._-]+).{0,20}(?:한도|제한).{0,20}(?:도달|초과))/i;
 const TEMPORARY_DISMISS_TEXT = /^(?:알겠습니다|확인|got it|ok|okay)$/i;
-const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
-const COPY_SELECTOR = 'button[data-testid="copy-turn-action-button"]';
+const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"], [data-markdown-text-style="assistant-message"]';
+const COPY_SELECTOR = 'button[data-testid="copy-turn-action-button"], button[aria-label="메시지 복사"], button[aria-label="Copy"]';
 const ASSISTANT_CONTROL_SELECTOR = 'button, [role="button"], [role="toolbar"], [data-testid*="action"], [aria-hidden="true"]';
 const COPY_CAPTURE_TIMEOUT_MS = 2_000;
 const INSTALL_CLIPBOARD_CAPTURE_SCRIPT = `(() => {
@@ -216,7 +216,9 @@ export async function createPlaywrightBrowserBackend(
       const primaryCount = await primary.count();
       if (primaryCount > 1) throw new Error("send control ambiguous");
       if (primaryCount === 1) { await primary.click(); return; }
-      const semantic = owned.locator('button[aria-label="Send prompt"], button[aria-label="Send message"], button[aria-label="Send"]');
+      const semantic = owned.locator(
+        'button[aria-label="Send prompt"], button[aria-label="Send message"], button[aria-label="Send"], button[aria-label="보내기"], button[aria-label="전송"]'
+      );
       if (await semantic.count() !== 1) throw new Error("send control unavailable or ambiguous");
       await semantic.click();
     },
@@ -293,7 +295,7 @@ export async function createPlaywrightBrowserBackend(
       const owned = await ownedPage();
       const assistant = owned.locator(ASSISTANT_SELECTOR);
       if (await assistant.count() === 0) return null;
-      const turn = assistant.last().locator('xpath=ancestor::*[.//button[@data-testid="copy-turn-action-button"]][1]');
+      const turn = assistant.last().locator('xpath=ancestor::*[.//button[@data-testid="copy-turn-action-button" or @aria-label="메시지 복사" or @aria-label="Copy"]][1]');
       if (await turn.count() !== 1) throw new Error("assistant turn copy control unavailable or ambiguous");
       const copy = turn.locator(COPY_SELECTOR);
       if (await copy.count() !== 1) throw new Error("assistant copy control unavailable or ambiguous");

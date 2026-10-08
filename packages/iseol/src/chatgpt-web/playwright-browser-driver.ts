@@ -36,7 +36,7 @@ function conversationFrom(url: string): string | undefined {
   try {
     const parsed = new URL(url);
     if (parsed.origin !== "https://chatgpt.com") return undefined;
-    const match = parsed.pathname.match(/^\/c\/([^/]+)\/?$/);
+    const match = decodeURIComponent(parsed.pathname).match(/^\/c\/([^/]+)\/?$/);
     return match?.[1] && REF.test(match[1]) ? match[1] : undefined;
   } catch { return undefined; }
 }
@@ -467,7 +467,7 @@ export async function createPlaywrightChatGptBrowserDriver(
       const url = await backend.currentUrl();
       if (authUrl(url)) throw new ChatGptWebAuthenticationRequiredError("ChatGPT authentication is required");
       const actual = conversationFrom(url);
-      if (actual && !actual.startsWith("WEB:")) return actual;
+      if (actual && !actual.startsWith("WEB:") && !actual.startsWith("local-chatgpt:")) return actual;
       if (now() - startedAt >= NEW_CONVERSATION_REF_TIMEOUT_MS) {
         return lost("ChatGPT did not assign a canonical conversation identity after prompt submission");
       }

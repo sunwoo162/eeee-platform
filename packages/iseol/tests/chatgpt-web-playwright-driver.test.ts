@@ -833,7 +833,7 @@ test("first submit ignores provisional WEB conversation refs until canonical ide
   let now = 0;
   const item = fakeBackend();
   item.backend.sendPrompt = async () => {
-    item.setUrl("https://chatgpt.com/c/WEB:temporary-ref");
+    item.setUrl("https://chatgpt.com/c/local-chatgpt%3Atemporary-ref");
   };
   const sleep = async (ms: number) => {
     now += ms;

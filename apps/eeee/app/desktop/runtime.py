@@ -22,6 +22,10 @@ _CHROME_CANDIDATES = (
     Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Google/Chrome/Application/chrome.exe",
     Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
 )
+_NODE_CANDIDATES = (
+    Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs/node.exe",
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/nodejs/node.exe",
+)
 
 
 def _resolve_browser_executable(configured: str | None) -> str:
@@ -36,6 +40,16 @@ def _resolve_browser_executable(configured: str | None) -> str:
     return configured or "chrome.exe"
 
 
+def _resolve_node_executable(configured: str) -> str:
+    discovered = shutil.which(configured)
+    if discovered:
+        return discovered
+    for candidate in _NODE_CANDIDATES:
+        if candidate.exists():
+            return str(candidate)
+    return configured
+
+
 def _wait_for_tcp_port(host: str, port: int, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -45,6 +59,16 @@ def _wait_for_tcp_port(host: str, port: int, timeout: float = 10.0) -> bool:
         except OSError:
             time.sleep(0.1)
     return False
+
+
+def _runtime_debug(message: str) -> None:
+    """Write temporary startup diagnostics without requiring a console window."""
+    try:
+        path = Path(os.environ.get("TEMP", ".")) / "gleave-runtime-debug.log"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
+    except OSError:
+        pass
 
 
 class ApiStartupError(RuntimeError):
@@ -71,6 +95,7 @@ class EmbeddedApiRuntime:
         self._error: BaseException | None = None
         self._chatgpt_bridge: subprocess.Popen[str] | None = None
         self._chatgpt_browser: subprocess.Popen[str] | None = None
+        self._chatgpt_bridge_log = None
 
     @property
     def is_running(self) -> bool:
@@ -130,6 +155,9 @@ class EmbeddedApiRuntime:
             except subprocess.TimeoutExpired:
                 self._chatgpt_bridge.kill()
             self._chatgpt_bridge = None
+        if self._chatgpt_bridge_log is not None:
+            self._chatgpt_bridge_log.close()
+            self._chatgpt_bridge_log = None
         if self._chatgpt_browser is not None:
             self._chatgpt_browser.terminate()
             try:
@@ -139,17 +167,28 @@ class EmbeddedApiRuntime:
             self._chatgpt_browser = None
 
     def _start_chatgpt_web_bridge(self) -> None:
+        _runtime_debug(
+            "start "
+            f"enabled={self.settings.chatgpt_web_enabled} "
+            f"autostart={self.settings.chatgpt_web_autostart} "
+            f"profile={self.settings.chatgpt_web_profile_root!s} "
+            f"frozen={getattr(sys, 'frozen', False)}"
+        )
         if not (self.settings.chatgpt_web_enabled and self.settings.chatgpt_web_autostart):
+            _runtime_debug("skip disabled")
             return
         if not self.settings.chatgpt_web_profile_root:
+            _runtime_debug("skip no profile")
             return
         if getattr(sys, "frozen", False):
             root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-            script = root / "chatgpt-web" / "eeee-bridge.js"
+            script = root / "chatgpt-runtime" / "chatgpt-web" / "eeee-bridge.js"
         else:
             root = Path(__file__).resolve().parents[4]
             script = root / "packages" / "iseol" / "dist" / "chatgpt-web" / "eeee-bridge.js"
+        _runtime_debug(f"script={script} exists={script.exists()}")
         if not script.exists():
+            _runtime_debug("skip missing script")
             return
         env = os.environ.copy()
         env.update({
@@ -163,20 +202,40 @@ class EmbeddedApiRuntime:
         if self.settings.chatgpt_web_browser_executable:
             env["ISEOL_CHATGPT_BROWSER_EXECUTABLE"] = self.settings.chatgpt_web_browser_executable
         self._launch_chatgpt_browser()
-        if not _wait_for_tcp_port("127.0.0.1", self.settings.chatgpt_web_bridge_port + 1):
+        cdp_ready = _wait_for_tcp_port("127.0.0.1", self.settings.chatgpt_web_bridge_port + 1)
+        _runtime_debug(f"cdp_ready={cdp_ready}")
+        if not cdp_ready:
             self.stop()
             return
+        self.settings.data_dir.mkdir(parents=True, exist_ok=True)
+        self._chatgpt_bridge_log = (self.settings.data_dir / "chatgpt-web-bridge.log").open(
+            "a", encoding="utf-8"
+        )
         self._chatgpt_bridge = subprocess.Popen(
-            [self.settings.chatgpt_web_node_path, str(script)],
+            [_resolve_node_executable(self.settings.chatgpt_web_node_path), str(script)],
             cwd=str(script.parent),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=self._chatgpt_bridge_log,
+            stderr=subprocess.STDOUT,
             text=True,
         )
+        _runtime_debug(f"bridge_pid={self._chatgpt_bridge.pid}")
         self.settings.chatgpt_web_bridge_url = (
             f"http://127.0.0.1:{self.settings.chatgpt_web_bridge_port}"
         )
+        bridge_ready = _wait_for_tcp_port(
+            "127.0.0.1", self.settings.chatgpt_web_bridge_port, timeout=45.0
+        )
+        if self._chatgpt_bridge.poll() is not None:
+            _runtime_debug(f"bridge_exit_code={self._chatgpt_bridge.returncode}")
+            bridge_ready = False
+        if not bridge_ready:
+            _runtime_debug("bridge_ready=false")
+            self._chatgpt_bridge.terminate()
+            self._chatgpt_bridge = None
+            self.settings.chatgpt_web_bridge_url = None
+        else:
+            _runtime_debug("bridge_ready=true")
 
     def open_chatgpt_login(self) -> bool:
         """Open the persisted normal-Chrome profile used for ChatGPT login."""
@@ -197,6 +256,8 @@ class EmbeddedApiRuntime:
             chrome,
             f"--user-data-dir={self.settings.chatgpt_web_profile_root}",
             f"--remote-debugging-port={self.settings.chatgpt_web_bridge_port + 1}",
+            "--remote-allow-origins=*",
+            "--remote-debugging-address=127.0.0.1",
             "--no-first-run",
             "--no-default-browser-check",
             "https://chatgpt.com/",

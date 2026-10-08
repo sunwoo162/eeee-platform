@@ -26,6 +26,21 @@ class DesktopSession:
             self.project_id = selected_project
         snapshot = self.refresh()
         snapshot["assistantRoute"] = result
+        if not isinstance(selected_project, str) or not selected_project:
+            # A direct EEEE/plugin response has no project snapshot to carry
+            # its state. Projectless responses must still be visible in the
+            # pet bubble instead of being overwritten by the default project.
+            route_status = result.get("status")
+            state = {
+                "completed": "completed",
+                "blocked": "blocked",
+                "plugin_required": "blocked",
+                "needs_clarification": "idle",
+            }.get(route_status, "idle")
+            snapshot.update({
+                "state": state,
+                "message": result.get("message", "EEEE가 응답을 준비했어."),
+            })
         self.snapshot = snapshot
         return snapshot
 

@@ -46,7 +46,7 @@ class RouteClient(SlowClient):
 
     def route_assistant(self, text, workspace=None):
         self.routed_text = text
-        return {"project_id": "project-1", "message": "요청을 받았어요."}
+        return {"status": "completed", "message": "요청을 받았어요."}
 
 
 def _wait_for(app: QApplication, predicate) -> None:
@@ -104,7 +104,13 @@ def test_enter_submits_the_assistant_command():
     window.assistant_input.setText("Todo 앱 만들어줘")
     window.assistant_input.returnPressed.emit()
 
-    _wait_for(app, lambda: client.routed_text == "Todo 앱 만들어줘")
+    _wait_for(
+        app,
+        lambda: client.routed_text == "Todo 앱 만들어줘"
+        and window.current_state.get("state") == "completed",
+    )
 
     assert client.routed_text == "Todo 앱 만들어줘"
+    assert window.current_state["state"] == "completed"
+    assert window.detail.text() == "요청을 받았어요."
     window.close()

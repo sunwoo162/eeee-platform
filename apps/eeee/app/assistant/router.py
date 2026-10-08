@@ -14,6 +14,16 @@ class CapabilityRouter:
     """Select the best registered EEEE capability without hidden side effects."""
 
     MINIMUM_SCORE = 1
+    OPTIONAL_PLUGIN_HINTS = (
+        ("notion", "Notion", ["pages.read", "pages.write"]),
+        ("노션", "Notion", ["pages.read", "pages.write"]),
+        ("google calendar", "Google Calendar", ["calendar.read", "calendar.write"]),
+        ("구글 캘린더", "Google Calendar", ["calendar.read", "calendar.write"]),
+        ("github", "GitHub", ["repository.read", "repository.write"]),
+        ("깃허브", "GitHub", ["repository.read", "repository.write"]),
+        ("slack", "Slack", ["messages.read", "messages.write"]),
+        ("슬랙", "Slack", ["messages.read", "messages.write"]),
+    )
 
     def __init__(self, registry: CapabilityRegistry) -> None:
         self.registry = registry
@@ -49,6 +59,19 @@ class CapabilityRouter:
                 )
 
         candidates.sort(key=lambda item: (-item.score, item.capability_id))
+        hint = self._optional_plugin_hint(normalized)
+        if hint is not None and not any(
+            candidate.capability_id.startswith(f"plugin:{hint[0]}:") for candidate in candidates
+        ):
+            plugin_id, plugin_name, permissions = hint
+            return CapabilitySelection(
+                status="plugin_required",
+                reasons=[f"Optional plugin is required: {plugin_id}"],
+                required_plugin_id=plugin_id,
+                required_plugin_name=plugin_name,
+                required_plugin_permissions=permissions,
+                suggested_action=f"{plugin_name} 플러그인을 설치하고 연결해줘",
+            )
         if not candidates:
             if any(
                 phrase in normalized
@@ -102,6 +125,16 @@ class CapabilityRouter:
             candidates=candidates,
             reasons=winner.reasons,
         )
+
+    def _optional_plugin_hint(self, normalized: str) -> tuple[str, str, list[str]] | None:
+        for phrase, plugin_name, permissions in self.OPTIONAL_PLUGIN_HINTS:
+            if _contains(normalized, phrase):
+                plugin_id = phrase if phrase.isascii() else {
+                    "노션": "notion", "구글 캘린더": "google-calendar",
+                    "깃허브": "github", "슬랙": "slack",
+                }[phrase]
+                return plugin_id, plugin_name, permissions
+        return None
 
 
 def _normalize(value: str) -> str:

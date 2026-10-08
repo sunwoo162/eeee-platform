@@ -67,9 +67,19 @@ def test_connected_plugin_capability_can_win_routing_but_unavailable_plugin_cann
     registry.set_dynamic_provider(lambda: [plugin_descriptor] if enabled else [])
     router = CapabilityRouter(registry)
 
-    assert router.select(AssistantRequest(raw_text="notion search")).capability_id == "general-conversation"
+    unavailable = router.select(AssistantRequest(raw_text="notion search"))
+    assert unavailable.status == "plugin_required"
+    assert unavailable.required_plugin_id == "notion"
     enabled = True
     assert router.select(AssistantRequest(raw_text="notion search")).capability_id == "plugin:notion:search"
+
+
+def test_known_optional_plugin_request_is_not_misreported_as_general_conversation() -> None:
+    result = router().select(AssistantRequest(raw_text="노션에 회의록 저장해줘"))
+
+    assert result.status == "plugin_required"
+    assert result.required_plugin_id == "notion"
+    assert result.required_plugin_name == "Notion"
 
 
 def test_registered_explicit_capability_overrides_keyword_scoring() -> None:

@@ -8,7 +8,7 @@ from app.contracts.execution import SideEffectLevel
 
 
 ApprovalLevel = Literal["none", "user", "always"]
-SelectionStatus = Literal["selected", "needs_clarification"]
+SelectionStatus = Literal["selected", "needs_clarification", "plugin_required"]
 
 
 class CapabilityDescriptor(BaseModel):
@@ -81,7 +81,13 @@ class CapabilityCandidate(BaseModel):
 
 
 class CapabilitySelection(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     status: SelectionStatus
     capability_id: str | None = None
     candidates: list[CapabilityCandidate] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
+    required_plugin_id: str | None = Field(default=None, alias="requiredPluginId")
+    required_plugin_name: str | None = Field(default=None, alias="requiredPluginName")
+    required_plugin_permissions: list[str] = Field(default_factory=list, alias="requiredPluginPermissions")
+    suggested_action: str | None = Field(default=None, alias="suggestedAction")

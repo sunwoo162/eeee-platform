@@ -19,6 +19,7 @@ from app.planning.service import PlanningService
 from app.runtime.store import ExecutionStore, StaleProjectRevision
 from app.storage.sqlite import SQLiteStore
 from app.trust.gate import TrustGate
+from app.plugins.host import PluginHost
 
 
 class KernelService:
@@ -28,13 +29,14 @@ class KernelService:
         trust_gate: TrustGate | None = None, event_bus: LocalEventBus | None = None,
         event_publisher: Callable[[str, dict[str, object]], object] | None = None,
         document_service: Any | None = None, planning_service: PlanningService | None = None,
-        agent_runtime: AgentRuntime | None = None,
+        agent_runtime: AgentRuntime | None = None, plugin_host: PluginHost | None = None,
     ) -> None:
         self.router = router
         self.coordinator = coordinator
         self.store = store
         self.memory = memory or coordinator.memory
         self.trust_gate = trust_gate or coordinator.trust_gate or TrustGate(None, mode="advisory")
+        self.plugin_host = plugin_host
         self.executions = ExecutionStore(store)
         planning_service = planning_service or PlanningService(store)
         self.event_bus = event_bus or LocalEventBus()
@@ -85,6 +87,20 @@ class KernelService:
             "capabilityId": selection.capability_id, "selectionStatus": selection.status,
         })
         if registered is None:
+            if selection.status == "plugin_required":
+                return self._finish_route(parent, CapabilityOutcome(
+                    {
+                        "status": "plugin_required",
+                        "message": selection.suggested_action or "필요한 플러그인을 설치하고 연결해줘.",
+                        "pluginRequired": {
+                            "id": selection.required_plugin_id,
+                            "name": selection.required_plugin_name,
+                            "permissions": selection.required_plugin_permissions,
+                            "suggestedAction": selection.suggested_action,
+                        },
+                    },
+                    ExecutionStatus.BLOCKED,
+                ), selection)
             return self._finish_route(parent, CapabilityOutcome(
                 {"status": "needs_clarification", "message": "어떤 작업 영역인지 조금 더 알려줘."},
                 ExecutionStatus.BLOCKED,
@@ -104,7 +120,28 @@ class KernelService:
             retrieved = self._retrieve_context(request, context)
             handler = registered.handler
             if handler is None:
-                raise RuntimeError("Capability implementation is unavailable")
+                if self.plugin_host is None or not selection.capability_id.startswith("plugin:"):
+                    raise RuntimeError("Capability implementation is unavailable")
+                plugin_id, plugin_execution = self.plugin_host.invoke_capability(
+                    selection.capability_id, {"text": request.raw_text, "context": request.context}
+                )
+                plugin_status = plugin_execution.status
+                plugin_output = {
+                    "status": "completed" if plugin_status == ExecutionStatus.COMPLETED else plugin_status.value,
+                    "message": "플러그인 작업이 완료됐어." if plugin_status == ExecutionStatus.COMPLETED
+                    else plugin_execution.error.message if plugin_execution.error else "플러그인 작업이 완료되지 않았어.",
+                    "pluginId": plugin_id,
+                    "pluginExecutionId": plugin_execution.execution_id,
+                    "claimLatchPolicy": registered.descriptor.claim_latch_policy,
+                }
+                return self._finish_route(
+                    parent,
+                    CapabilityOutcome(
+                        plugin_output,
+                        ExecutionStatus.COMPLETED if plugin_status == ExecutionStatus.COMPLETED else ExecutionStatus.BLOCKED,
+                    ),
+                    selection,
+                )
             plan = handler.plan(request, retrieved)
             if (plan.capability_id != registered.descriptor.id
                 or plan.side_effect_level != parent.side_effect_level

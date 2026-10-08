@@ -21,7 +21,7 @@ class AssistantRouteResult(BaseModel):
 
     status: Literal[
         "selected", "needs_clarification", "ready", "awaiting_configuration",
-        "completed", "blocked",
+        "completed", "blocked", "plugin_required",
     ]
     selection: CapabilitySelection
     message: str = Field(min_length=1)
@@ -38,6 +38,12 @@ class AssistantRouteResult(BaseModel):
     git_branch: str | None = Field(default=None, alias="gitBranch")
     git_commit: str | None = Field(default=None, alias="gitCommit")
     response_verification: ResponseVerification
+    required_plugin_id: str | None = None
+    required_plugin_name: str | None = None
+    required_plugin_permissions: list[str] = Field(default_factory=list)
+    suggested_action: str | None = None
+    plugin_id: str | None = None
+    plugin_execution_id: str | None = None
 
 
 class AssistantService:
@@ -113,6 +119,12 @@ class AssistantService:
             release_manifest_path=output.get("releaseManifestPath"),
             git_branch=output.get("gitBranch"),
             git_commit=output.get("gitCommit"),
+            required_plugin_id=output.get("pluginRequired", {}).get("id") if isinstance(output.get("pluginRequired"), dict) else None,
+            required_plugin_name=output.get("pluginRequired", {}).get("name") if isinstance(output.get("pluginRequired"), dict) else None,
+            required_plugin_permissions=output.get("pluginRequired", {}).get("permissions", []) if isinstance(output.get("pluginRequired"), dict) else [],
+            suggested_action=output.get("pluginRequired", {}).get("suggestedAction") if isinstance(output.get("pluginRequired"), dict) else None,
+            plugin_id=output.get("pluginId"),
+            plugin_execution_id=output.get("pluginExecutionId"),
             response_verification=ResponseVerification.model_validate(
                 output.get("responseVerification", {
                     "decision": "WARN",

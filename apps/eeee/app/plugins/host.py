@@ -141,6 +141,21 @@ class PluginHost:
                 ))
         return projected
 
+    def invoke_capability(self, capability_id: str, value: dict[str, object]) -> tuple[str, ExecutionEnvelope]:
+        """Resolve a projected capability and invoke its declared plugin action."""
+        prefix = "plugin:"
+        if not capability_id.startswith(prefix):
+            raise KeyError(f"Not a plugin capability: {capability_id}")
+        _, plugin_id, manifest_capability_id = capability_id.split(":", 2)
+        registration = self.registrations.get(plugin_id)
+        manifest = self._manifest(plugin_id, registration.manifest)
+        capability = next((item for item in manifest.capabilities if item.id == manifest_capability_id), None)
+        if capability is None:
+            raise KeyError(f"Plugin capability not found: {capability_id}")
+        if not any(item.id == capability_id for item in self.routing_capabilities()):
+            raise PermissionError("plugin capability is not connected and healthy")
+        return plugin_id, self.invoke(plugin_id, capability.action_id, value)
+
     def _manifest(self, plugin_id: str, data: dict) -> PluginManifest:
         return self._manifests.get(plugin_id) or PluginManifest.model_validate(data)
 

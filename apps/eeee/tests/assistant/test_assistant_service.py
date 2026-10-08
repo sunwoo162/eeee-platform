@@ -88,9 +88,13 @@ def test_assistant_service_handles_general_conversation_without_a_project(tmp_pa
 
 def test_general_conversation_uses_configured_agent_runtime_without_project(tmp_path) -> None:
     class ConversationRuntime:
+        def __init__(self):
+            self.prompts = []
+
         def run(self, request):
             assert request.allowed_actions == ["read"]
             assert "사용자 기억" in request.prompt
+            self.prompts.append(request.prompt)
             return AgentResult(
                 status="completed", summary="오늘은 차분하게 우선순위를 정리해보자.",
                 events=[{"type": "assistant.response", "message": "오늘은 차분하게 우선순위를 정리해보자."}],
@@ -101,20 +105,24 @@ def test_general_conversation_uses_configured_agent_runtime_without_project(tmp_
     store = SQLiteStore(settings.data_dir / "state.sqlite3")
     store.init()
     coordinator = Coordinator(store)
+    runtime = ConversationRuntime()
     service = AssistantService(
         router=CapabilityRouter(build_default_registry()),
         coordinator=coordinator,
         store=store,
         settings=settings,
         provisioner=ProjectProvisioner(store),
-        agent_runtime=ConversationRuntime(),
+        agent_runtime=runtime,
     )
 
+    preference = service.route("기억해줘 내 이름은 응아니")
+    assert preference.project_id is None
     result = service.route("오늘 기분이 어때?")
 
     assert result.status == "completed"
     assert result.message == "오늘은 차분하게 우선순위를 정리해보자."
     assert result.project_id is None
+    assert any("응아니" in prompt for prompt in runtime.prompts)
 
 
 def test_assistant_service_reports_initial_stale_child_as_blocked_observation(tmp_path) -> None:

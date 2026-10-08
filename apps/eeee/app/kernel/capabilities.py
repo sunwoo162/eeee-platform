@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from app.assistant.models import AssistantContext, AssistantRequest, CapabilityDescriptor, CapabilityPlan
 from app.agent.protocol import AgentRequest, AgentRuntime
+from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
 from app.config import Settings
 from app.contracts import ExecutionEnvelope, ExecutionError, ExecutionStatus, SideEffectLevel
 from app.coordinator.service import Coordinator
@@ -76,10 +77,12 @@ class GeneralConversationCapability:
     """Keep EEEE useful when no specialized capability is required."""
 
     def __init__(self, descriptor: CapabilityDescriptor, *, runtime: AgentRuntime | None = None,
-                 workspace_root: Path | None = None) -> None:
+                 workspace_root: Path | None = None,
+                 chatgpt_web_enabled: bool = False) -> None:
         self.descriptor = descriptor
         self.runtime = runtime
         self.workspace_root = workspace_root or Path.cwd()
+        self.chatgpt_web_enabled = chatgpt_web_enabled
 
     def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
         return CapabilityPlan(
@@ -91,6 +94,7 @@ class GeneralConversationCapability:
                 "memoryIds": context.memory_ids,
                 "qaBaselineIds": context.qa_baseline_ids,
                 "userPreferences": context.user_preferences,
+                "chatgptWebEnabled": self.chatgpt_web_enabled,
             },
             side_effect_level=self.descriptor.side_effect_level,
             requires_approval=False,
@@ -126,6 +130,16 @@ class GeneralConversationCapability:
                 "message": result.error or "실제 AI 응답을 사용할 수 없어.",
                 "runtimeStatus": result.status,
             }, status, ExecutionError(code="assistant_runtime_unavailable", message=result.error or result.status))
+        if plan.inputs.get("chatgptWebEnabled"):
+            return CapabilityOutcome({
+                "status": "blocked",
+                "capabilityStatus": "blocked",
+                "message": "ChatGPT Web 연결이 설정되지 않았어. 브라우저 연결을 먼저 완료해줘.",
+                "runtimeStatus": "unavailable",
+            }, ExecutionStatus.BLOCKED, ExecutionError(
+                code="chatgpt_web_bridge_unavailable",
+                message="ChatGPT Web bridge is not configured",
+            ))
         return CapabilityOutcome({
             "status": "completed",
             "capabilityStatus": "completed",

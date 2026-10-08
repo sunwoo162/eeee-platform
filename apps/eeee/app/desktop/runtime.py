@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import threading
 import time
+import os
+import subprocess
+from pathlib import Path
 
 import uvicorn
 
@@ -33,6 +36,7 @@ class EmbeddedApiRuntime:
         self._server: uvicorn.Server | None = None
         self._thread: threading.Thread | None = None
         self._error: BaseException | None = None
+        self._chatgpt_bridge: subprocess.Popen[str] | None = None
 
     @property
     def is_running(self) -> bool:
@@ -49,6 +53,7 @@ class EmbeddedApiRuntime:
             raise RuntimeError("Embedded API is already running")
 
         self._error = None
+        self._start_chatgpt_web_bridge()
         self._server = uvicorn.Server(
             uvicorn.Config(
                 create_app(self.settings),
@@ -84,6 +89,44 @@ class EmbeddedApiRuntime:
             self._server.should_exit = True
         if self._thread is not None:
             self._thread.join(timeout=self.startup_timeout)
+        if self._chatgpt_bridge is not None:
+            self._chatgpt_bridge.terminate()
+            try:
+                self._chatgpt_bridge.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self._chatgpt_bridge.kill()
+            self._chatgpt_bridge = None
+
+    def _start_chatgpt_web_bridge(self) -> None:
+        if not (self.settings.chatgpt_web_enabled and self.settings.chatgpt_web_autostart):
+            return
+        if not self.settings.chatgpt_web_profile_root:
+            return
+        root = Path(__file__).resolve().parents[4]
+        script = root / "packages" / "iseol" / "dist" / "chatgpt-web" / "eeee-bridge.js"
+        if not script.exists():
+            return
+        env = os.environ.copy()
+        env.update({
+            "ISEOL_CHATGPT_WEB_ENABLED": "true",
+            "ISEOL_CHATGPT_BROWSER_ENABLED": "true",
+            "ISEOL_CHATGPT_BROWSER_PROFILE_ROOT": str(self.settings.chatgpt_web_profile_root),
+            "ISEOL_CHATGPT_BROWSER_HEADLESS": str(self.settings.chatgpt_web_headless).lower(),
+            "EEEE_CHATGPT_WEB_BRIDGE_PORT": str(self.settings.chatgpt_web_bridge_port),
+        })
+        if self.settings.chatgpt_web_browser_executable:
+            env["ISEOL_CHATGPT_BROWSER_EXECUTABLE"] = self.settings.chatgpt_web_browser_executable
+        self._chatgpt_bridge = subprocess.Popen(
+            [self.settings.chatgpt_web_node_path, str(script)],
+            cwd=str(root / "packages" / "iseol"),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        self.settings.chatgpt_web_bridge_url = (
+            f"http://127.0.0.1:{self.settings.chatgpt_web_bridge_port}"
+        )
 
     def _run_server(self) -> None:
         assert self._server is not None

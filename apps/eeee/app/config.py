@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
+    chatgpt_web_enabled: bool = False
+    chatgpt_web_bridge_url: str | None = None
+    chatgpt_web_autostart: bool = False
+    chatgpt_web_profile_root: Path | None = None
+    chatgpt_web_browser_executable: str | None = None
+    chatgpt_web_headless: bool = False
+    chatgpt_web_bridge_port: int = 47831
+    chatgpt_web_node_path: str = "node"
+    chatgpt_web_timeout_seconds: float = 120.0
     local_model_base_url: str = "http://127.0.0.1:11434/api/chat"
     local_model: str | None = None
     local_model_timeout_seconds: float = 120.0
@@ -65,6 +74,20 @@ class Settings(BaseSettings):
     def validate_local_model_timeout(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("local_model_timeout_seconds must be positive")
+        return value
+
+    @field_validator("chatgpt_web_timeout_seconds")
+    @classmethod
+    def validate_chatgpt_web_timeout(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("chatgpt_web_timeout_seconds must be positive")
+        return value
+
+    @field_validator("chatgpt_web_bridge_port")
+    @classmethod
+    def validate_chatgpt_web_port(cls, value: int) -> int:
+        if value < 1024 or value > 65535:
+            raise ValueError("chatgpt_web_bridge_port must be between 1024 and 65535")
         return value
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

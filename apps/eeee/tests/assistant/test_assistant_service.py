@@ -86,6 +86,30 @@ def test_assistant_service_handles_general_conversation_without_a_project(tmp_pa
     assert result.response_verification.profile_version == "claimlatch-v0.2.0"
 
 
+def test_assistant_service_blocks_enabled_chatgpt_web_without_a_bridge(tmp_path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+        chatgpt_web_enabled=True,
+    )
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()),
+        coordinator=coordinator,
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+    )
+
+    result = service.route("안녕")
+
+    assert result.status == "blocked"
+    assert "ChatGPT Web" in result.message
+    assert result.project_id is None
+
+
 def test_assistant_service_automatically_remembers_durable_design_decisions(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     store = SQLiteStore(settings.data_dir / "state.sqlite3")

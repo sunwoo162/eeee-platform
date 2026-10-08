@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app.agent.local_runtime import LocalAgentRuntime, OllamaBackend
 from app.agent.openhands_runtime import OpenHandsRuntime
 from app.agent.protocol import AgentRuntime
+from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
 from app.activity.store import ActivityLedger
 from app.api.service import ApiFlowService
 from app.api.routes import (
@@ -183,6 +184,12 @@ def create_app(
             model=app_settings.llm_model,
             base_url=app_settings.llm_base_url,
         )
+    general_runtime: AgentRuntime | None = None
+    if app_settings.chatgpt_web_enabled and app_settings.chatgpt_web_bridge_url:
+        general_runtime = ChatGptWebRuntime(
+            app_settings.chatgpt_web_bridge_url,
+            timeout_seconds=app_settings.chatgpt_web_timeout_seconds,
+        )
     api_flow = ApiFlowService(
         coordinator,
         store,
@@ -202,6 +209,8 @@ def create_app(
         trust_gate=trust_gate, event_bus=event_bus, event_publisher=mobile_bridge.publish,
         document_service=project_documents, planning_service=planning_service,
         agent_runtime=runtime if agent_runtime is not None or app_settings.llm_api_key or app_settings.local_model else None,
+        general_runtime=general_runtime,
+        chatgpt_web_enabled=app_settings.chatgpt_web_enabled,
     )
     application.state.kernel = kernel
     application.state.execution_store = kernel.executions

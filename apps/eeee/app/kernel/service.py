@@ -29,7 +29,8 @@ class KernelService:
         trust_gate: TrustGate | None = None, event_bus: LocalEventBus | None = None,
         event_publisher: Callable[[str, dict[str, object]], object] | None = None,
         document_service: Any | None = None, planning_service: PlanningService | None = None,
-        agent_runtime: AgentRuntime | None = None, plugin_host: PluginHost | None = None,
+        agent_runtime: AgentRuntime | None = None, general_runtime: AgentRuntime | None = None,
+        chatgpt_web_enabled: bool = False, plugin_host: PluginHost | None = None,
     ) -> None:
         self.router = router
         self.coordinator = coordinator
@@ -58,7 +59,9 @@ class KernelService:
                 handler = UserPreferenceCapability(descriptor, coordinator)
             elif descriptor.id == "general-conversation":
                 handler = GeneralConversationCapability(
-                    descriptor, runtime=agent_runtime, workspace_root=settings.workspace_root,
+                    descriptor, runtime=general_runtime or agent_runtime,
+                    workspace_root=settings.workspace_root,
+                    chatgpt_web_enabled=chatgpt_web_enabled,
                 )
             elif descriptor.id in {"personal-secretary", "knowledge-documents", "presence"}:
                 handler = LocalPlanningCapability(descriptor)

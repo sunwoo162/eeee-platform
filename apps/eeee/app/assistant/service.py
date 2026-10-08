@@ -73,6 +73,7 @@ class AssistantService:
             router=router, coordinator=coordinator, store=store, settings=settings,
             provisioner=provisioner, event_publisher=event_publisher,
             document_service=document_service, agent_runtime=agent_runtime,
+            chatgpt_web_enabled=settings.chatgpt_web_enabled,
         )
 
     def route(

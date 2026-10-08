@@ -21,7 +21,6 @@ from app.iseol.agents import AgentGraph
 from app.iseol.executor import AgentGraphExecutor
 from app.project_runtime.provisioner import ProjectProvisioner, is_todo_request
 from app.planning.service import PlanningService
-from app.portfolio.service import PortfolioGenerator
 from app.runtime.store import StaleProjectRevision
 from app.storage.sqlite import SQLiteStore
 from app.workflow.planner import parse_request
@@ -133,69 +132,6 @@ class GeneralConversationCapability:
             "message": "EEEE가 요청을 이해했어. 필요한 작업이 있으면 말해줘.",
             "context": envelope_context.assistant_context.model_dump(mode="json"),
         })
-
-
-class PortfolioGenerationCapability:
-    """Turn an existing project's verified record into portfolio documents."""
-
-    def __init__(self, descriptor: CapabilityDescriptor, coordinator: Coordinator) -> None:
-        self.descriptor = descriptor
-        self.coordinator = coordinator
-        self.generator = PortfolioGenerator()
-
-    def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
-        project_id = request.context.get("projectId")
-        if not isinstance(project_id, str) or not project_id:
-            return CapabilityPlan(
-                capability_id=self.descriptor.id,
-                summary=request.raw_text,
-                inputs={"missingProject": True, "text": request.raw_text},
-                side_effect_level=self.descriptor.side_effect_level,
-                requires_approval=False,
-            )
-        try:
-            project = self.coordinator.store.get_project(project_id)
-        except KeyError:
-            return CapabilityPlan(
-                capability_id=self.descriptor.id,
-                summary=request.raw_text,
-                inputs={"missingProject": True, "projectId": project_id, "text": request.raw_text},
-                side_effect_level=self.descriptor.side_effect_level,
-                requires_approval=False,
-            )
-        return CapabilityPlan(
-            capability_id=self.descriptor.id,
-            summary=f"Portfolio for {project_id}",
-            inputs={
-                "projectId": project_id,
-                "projectRevision": project.revision,
-                "workspace": project.workspace,
-                "text": request.raw_text,
-            },
-            side_effect_level=self.descriptor.side_effect_level,
-            requires_approval=False,
-        )
-
-    def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
-        if plan.inputs.get("missingProject"):
-            return CapabilityOutcome(
-                {"status": "blocked", "message": "포트폴리오로 정리할 기존 프로젝트를 먼저 선택해줘."},
-                ExecutionStatus.BLOCKED,
-            )
-        result = self.generator.generate(
-            str(plan.inputs["projectId"]),
-            str(plan.inputs["projectRevision"]),
-            Path(str(plan.inputs["workspace"])),
-        )
-        status = ExecutionStatus.COMPLETED if result.status == "completed" else ExecutionStatus.BLOCKED
-        return CapabilityOutcome({
-            "status": result.status,
-            "message": result.message,
-            "projectId": plan.inputs["projectId"],
-            "projectRevision": plan.inputs["projectRevision"],
-            "portfolioArtifacts": result.artifacts,
-            "portfolioSourcePaths": result.source_paths,
-        }, status)
 
 
 class UserPreferenceCapability:

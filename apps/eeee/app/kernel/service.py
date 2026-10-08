@@ -12,7 +12,7 @@ from app.assistant.router import CapabilityRouter
 from app.config import Settings
 from app.contracts import ApprovalState, EventEnvelope, ExecutionEnvelope, ExecutionError, ExecutionStatus, LocalEventBus, SideEffectLevel
 from app.coordinator.service import Coordinator
-from app.kernel.capabilities import CapabilityOutcome, EnvelopeContext, GeneralConversationCapability, LocalPlanningCapability, PortfolioGenerationCapability, ProjectExecutionCapability, UserPreferenceCapability
+from app.kernel.capabilities import CapabilityOutcome, EnvelopeContext, GeneralConversationCapability, LocalPlanningCapability, ProjectExecutionCapability, UserPreferenceCapability
 from app.memory.store import MemoryStore
 from app.project_runtime.provisioner import ProjectProvisioner
 from app.planning.service import PlanningService
@@ -60,8 +60,6 @@ class KernelService:
                 handler = GeneralConversationCapability(
                     descriptor, runtime=agent_runtime, workspace_root=settings.workspace_root,
                 )
-            elif descriptor.id == "portfolio-generation":
-                handler = PortfolioGenerationCapability(descriptor, coordinator)
             elif descriptor.id in {"personal-secretary", "knowledge-documents", "presence"}:
                 handler = LocalPlanningCapability(descriptor)
             else:

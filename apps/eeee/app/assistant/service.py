@@ -44,8 +44,6 @@ class AssistantRouteResult(BaseModel):
     suggested_action: str | None = None
     plugin_id: str | None = None
     plugin_execution_id: str | None = None
-    portfolio_artifacts: list[dict[str, object]] = Field(default_factory=list, alias="portfolioArtifacts")
-    portfolio_source_paths: list[str] = Field(default_factory=list, alias="portfolioSourcePaths")
 
 
 class AssistantService:
@@ -78,17 +76,9 @@ class AssistantService:
 
     def route(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
-        project_id: str | None = None,
     ) -> AssistantRouteResult:
-        context = {"workspace": workspace}
-        if project_id is not None:
-            context["projectId"] = project_id
-            try:
-                context["projectRevision"] = self.store.get_project(project_id).revision
-            except KeyError:
-                pass
         envelope = self.kernel.route(
-            AssistantRequest(raw_text=text, context=context,
+            AssistantRequest(raw_text=text, context={"workspace": workspace},
                              requested_capability=requested_capability),
             AssistantContext(),
         )
@@ -135,8 +125,6 @@ class AssistantService:
             suggested_action=output.get("pluginRequired", {}).get("suggestedAction") if isinstance(output.get("pluginRequired"), dict) else None,
             plugin_id=output.get("pluginId"),
             plugin_execution_id=output.get("pluginExecutionId"),
-            portfolio_artifacts=output.get("portfolioArtifacts", []),
-            portfolio_source_paths=output.get("portfolioSourcePaths", []),
             response_verification=ResponseVerification.model_validate(
                 output.get("responseVerification", {
                     "decision": "WARN",

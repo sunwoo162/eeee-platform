@@ -20,14 +20,7 @@ class DesktopSession:
         return self.snapshot
 
     def route(self, text: str, workspace: str | None = None) -> dict[str, object]:
-        if self.project_id is not None:
-            try:
-                result = self.client.route_assistant(text, workspace, self.project_id)
-            except TypeError:
-                # Keep compatibility with small headless test clients and older bridges.
-                result = self.client.route_assistant(text, workspace)
-        else:
-            result = self.client.route_assistant(text, workspace)
+        result = self.client.route_assistant(text, workspace)
         selected_project = result.get("project_id")
         if isinstance(selected_project, str) and selected_project:
             self.project_id = selected_project

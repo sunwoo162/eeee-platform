@@ -119,16 +119,6 @@ def build_default_registry() -> CapabilityRegistry:
     )
     registry.register(
         _descriptor(
-            "portfolio-generation",
-            "Portfolio Generation",
-            ["portfolio", "retrospective", "resume", "interview"],
-            ["포트폴리오", "기술 블로그", "이력서", "면접 설명", "회고", "portfolio", "resume", "retrospective", "interview"],
-            side_effect_level="local",
-        ),
-        None,
-    )
-    registry.register(
-        _descriptor(
             "knowledge-documents",
             "Knowledge and Documents",
             ["document", "knowledge", "search"],

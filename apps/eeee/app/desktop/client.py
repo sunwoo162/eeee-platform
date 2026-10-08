@@ -40,13 +40,11 @@ class PetApiClient:
         )
 
     def route_assistant(
-        self, text: str, workspace: str | None = None, project_id: str | None = None
+        self, text: str, workspace: str | None = None
     ) -> dict[str, object]:
         payload: dict[str, object] = {"text": text}
         if workspace is not None:
             payload["workspace"] = workspace
-        if project_id is not None:
-            payload["projectId"] = project_id
         return self._request("POST", "/api/assistant/route", json=payload)
 
     def open_project(self, project_id: str) -> dict[str, object]:

@@ -1,4 +1,4 @@
-import { chromium, type BrowserContext, type Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { PlaywrightBrowserDriverConfig } from "./playwright-browser-config.js";
@@ -141,10 +141,19 @@ export async function createPlaywrightBrowserBackend(
 ): Promise<PlaywrightBrowserBackend> {
   const launchPersistentContext = deps.launchPersistentContext
     ?? ((profileRoot, options) => chromium.launchPersistentContext(profileRoot, options));
-  const context = await launchPersistentContext(config.profileRoot, {
-    ...(config.executablePath ? { executablePath: config.executablePath } : {}),
-    headless: config.headless,
-  });
+  let connectedBrowser: Browser | null = null;
+  let ownsContext = true;
+  let context: BrowserContext;
+  if (config.cdpUrl) {
+    connectedBrowser = await chromium.connectOverCDP(config.cdpUrl);
+    context = connectedBrowser.contexts()[0] ?? await connectedBrowser.newContext();
+    ownsContext = false;
+  } else {
+    context = await launchPersistentContext(config.profileRoot, {
+      ...(config.executablePath ? { executablePath: config.executablePath } : {}),
+      headless: config.headless,
+    });
+  }
   let page: Page | null = await context.newPage();
   let disposed = false;
   const lifecycleFile = config.lifecycleRoot ? resolve(config.lifecycleRoot, "web-workers", "lifecycle.jsonl") : null;
@@ -320,7 +329,8 @@ export async function createPlaywrightBrowserBackend(
       if (disposed) return;
       disposed = true;
       page = null;
-      await context.close();
+      if (ownsContext) await context.close();
+      else (connectedBrowser as (Browser & { disconnect?: () => void }) | null)?.disconnect?.();
       lifecycle("context-disposed");
       await lifecycleWrites;
     },

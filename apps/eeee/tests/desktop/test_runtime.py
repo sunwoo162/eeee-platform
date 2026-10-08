@@ -1,10 +1,23 @@
 import time
+from pathlib import Path
 
 import httpx
 
 from app.config import Settings
 from app.desktop.__main__ import connect_desktop_api, run_gui_self_test, run_self_test
-from app.desktop.runtime import EmbeddedApiRuntime
+from app.desktop.runtime import EmbeddedApiRuntime, _resolve_browser_executable
+
+
+def test_resolves_chrome_from_common_windows_install_path(monkeypatch, tmp_path):
+    chrome = tmp_path / "chrome.exe"
+    chrome.write_bytes(b"")
+    monkeypatch.setattr("app.desktop.runtime.shutil.which", lambda _: None)
+    monkeypatch.setattr(
+        "app.desktop.runtime._CHROME_CANDIDATES",
+        (Path(chrome),),
+    )
+
+    assert _resolve_browser_executable(None) == str(chrome)
 
 
 def test_embedded_runtime_serves_health_and_stops(tmp_path):

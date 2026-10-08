@@ -6,6 +6,7 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 spec_dir = Path(SPECPATH).resolve()
 eeee_root = spec_dir.parent / "eeee"
 static_dir = eeee_root / "app" / "static"
+chatgpt_bridge_dir = spec_dir.parent / ".." / "packages" / "iseol" / "dist" / "chatgpt-web"
 
 hiddenimports = [
     "app.desktop.__main__",
@@ -27,7 +28,7 @@ a = Analysis(
     [str(eeee_root / "app" / "desktop" / "__main__.py")],
     pathex=[str(eeee_root)],
     binaries=binaries,
-    datas=[(str(static_dir), "app/static")],
+    datas=[(str(static_dir), "app/static"), (str(chatgpt_bridge_dir), "chatgpt-web")],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

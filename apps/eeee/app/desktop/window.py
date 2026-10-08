@@ -29,6 +29,8 @@ _DESKTOP_TEXT = {
         "hide": "트레이로 숨기기",
         "connecting": "로컬 EEEE 코디네이터에 연결 중…",
         "assistant_busy": "EEEE가 가장 적합한 기능을 선택하는 중…",
+        "chatgpt_login": "ChatGPT 연결 창 열기",
+        "chatgpt_opened": "Chrome에서 ChatGPT 로그인 후 EEEE에게 말해줘.",
         "pairing_busy": "짧은 휴대폰 연결 코드를 발급하는 중…",
         "project_prefix": "프로젝트",
         "claim_prefix": "ClaimLatch",
@@ -70,6 +72,8 @@ _DESKTOP_TEXT = {
         "hide": "Hide to tray",
         "connecting": "Connecting to the local EEEE coordinator…",
         "assistant_busy": "EEEE is selecting the best capability…",
+        "chatgpt_login": "Open ChatGPT connection",
+        "chatgpt_opened": "Sign in to ChatGPT in Chrome, then talk to EEEE.",
         "pairing_busy": "Issuing a short-lived phone pairing code…",
         "project_prefix": "Project",
         "claim_prefix": "ClaimLatch",
@@ -95,7 +99,13 @@ _DESKTOP_TEXT = {
 class PetWindow:
     """Build the GUI lazily so importing the desktop package stays display-free."""
 
-    def __new__(cls, client: PetApiClient, *, initial_error: str | None = None):
+    def __new__(
+        cls,
+        client: PetApiClient,
+        *,
+        initial_error: str | None = None,
+        on_open_chatgpt=None,
+    ):
         try:
             from PySide6.QtCore import QEvent, QSettings, QTimer, Qt
             from PySide6.QtGui import QAction, QFont
@@ -122,6 +132,7 @@ class PetWindow:
             def __init__(self):
                 super().__init__()
                 self.client = client
+                self._on_open_chatgpt = on_open_chatgpt
                 self.session = DesktopSession(client)
                 self.current_state: dict[str, object] = {}
                 self.desktop_snapshot: dict[str, object] = {}
@@ -221,6 +232,11 @@ class PetWindow:
                 assistant_row.addWidget(self.assistant_input)
                 assistant_row.addWidget(self.assistant_button)
                 command_layout.addLayout(assistant_row)
+                self.chatgpt_button = QPushButton()
+                self.chatgpt_button.setObjectName("secondaryAction")
+                self.chatgpt_button.clicked.connect(self._open_chatgpt_login)
+                self.chatgpt_button.setVisible(self._on_open_chatgpt is not None)
+                command_layout.addWidget(self.chatgpt_button)
                 root.addWidget(self.command_surface)
                 self.command_surface.installEventFilter(self)
 
@@ -438,6 +454,7 @@ class PetWindow:
                 self.language_label.setText(self._text("language"))
                 self.assistant_input.setPlaceholderText(self._text("assistant_placeholder"))
                 self.assistant_button.setText(self._text("ask"))
+                self.chatgpt_button.setText(self._text("chatgpt_login"))
                 self.pairing_button.setText(self._text("pairing"))
                 self.pairing_status.setText(self._text("pairing_none"))
                 self.workspace_button.setText(self._text("open_workspace"))
@@ -647,6 +664,21 @@ class PetWindow:
                 self._submit(
                     lambda: self.session.route(text),
                     self._text("assistant_busy"),
+                    on_success=on_success,
+                )
+
+            def _open_chatgpt_login(self):
+                if self._on_open_chatgpt is None:
+                    return
+
+                def on_success(opened):
+                    self.detail.setText(
+                        self._text("chatgpt_opened") if opened else "ChatGPT 연결 창을 열 수 없어."
+                    )
+
+                self._submit(
+                    self._on_open_chatgpt,
+                    self._text("connecting"),
                     on_success=on_success,
                 )
 

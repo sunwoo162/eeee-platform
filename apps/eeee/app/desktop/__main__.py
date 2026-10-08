@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.desktop.client import PetApiClient
+from app.desktop.preferences import apply_preferences, load_preferences, save_preferences
 from app.desktop.runtime import ApiStartupError, EmbeddedApiRuntime
 
 
@@ -30,7 +31,17 @@ def connect_desktop_api(
     if configured_url:
         return PetApiClient(configured_url, project_id), None
 
-    runtime = EmbeddedApiRuntime(settings=settings)
+    desktop_settings = settings or Settings()
+    preferences = load_preferences()
+    apply_preferences(desktop_settings, preferences)
+    if not settings:
+        save_preferences(
+            chatgpt_web_enabled=preferences.chatgpt_web_enabled,
+            chatgpt_web_autostart=preferences.chatgpt_web_autostart,
+            profile_root=preferences.profile_root,
+            browser_executable=preferences.browser_executable,
+        )
+    runtime = EmbeddedApiRuntime(settings=desktop_settings)
     try:
         return PetApiClient(runtime.start(), project_id), runtime
     except Exception:
@@ -134,7 +145,11 @@ def main(argv: list[str] | None = None) -> int:
         client = PetApiClient("http://127.0.0.1:1")
         startup_error = str(exc)
 
-    window = PetWindow(client, initial_error=startup_error)
+    window = PetWindow(
+        client,
+        initial_error=startup_error,
+        on_open_chatgpt=runtime.open_chatgpt_login if runtime is not None else None,
+    )
     window.show()
     try:
         return application.exec()

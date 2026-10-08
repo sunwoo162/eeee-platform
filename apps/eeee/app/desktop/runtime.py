@@ -162,15 +162,7 @@ class EmbeddedApiRuntime:
         })
         if self.settings.chatgpt_web_browser_executable:
             env["ISEOL_CHATGPT_BROWSER_EXECUTABLE"] = self.settings.chatgpt_web_browser_executable
-        chrome = _resolve_browser_executable(self.settings.chatgpt_web_browser_executable)
-        self._chatgpt_browser = subprocess.Popen([
-            chrome,
-            f"--user-data-dir={self.settings.chatgpt_web_profile_root}",
-            f"--remote-debugging-port={self.settings.chatgpt_web_bridge_port + 1}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "https://chatgpt.com/",
-        ])
+        self._launch_chatgpt_browser()
         if not _wait_for_tcp_port("127.0.0.1", self.settings.chatgpt_web_bridge_port + 1):
             self.stop()
             return
@@ -185,6 +177,30 @@ class EmbeddedApiRuntime:
         self.settings.chatgpt_web_bridge_url = (
             f"http://127.0.0.1:{self.settings.chatgpt_web_bridge_port}"
         )
+
+    def open_chatgpt_login(self) -> bool:
+        """Open the persisted normal-Chrome profile used for ChatGPT login."""
+
+        if not self.settings.chatgpt_web_profile_root:
+            return False
+        if self._chatgpt_browser is not None and self._chatgpt_browser.poll() is None:
+            return True
+        try:
+            self._launch_chatgpt_browser()
+            return True
+        except OSError:
+            return False
+
+    def _launch_chatgpt_browser(self) -> None:
+        chrome = _resolve_browser_executable(self.settings.chatgpt_web_browser_executable)
+        self._chatgpt_browser = subprocess.Popen([
+            chrome,
+            f"--user-data-dir={self.settings.chatgpt_web_profile_root}",
+            f"--remote-debugging-port={self.settings.chatgpt_web_bridge_port + 1}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "https://chatgpt.com/",
+        ])
 
     def _run_server(self) -> None:
         assert self._server is not None

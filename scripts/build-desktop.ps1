@@ -27,4 +27,10 @@ $executable = Join-Path $dist "GleaveDesktop.exe"
 if (-not (Test-Path -LiteralPath $executable)) {
     throw "Gleave Desktop executable was not produced at $executable."
 }
+
+$guiTest = Start-Process -FilePath $executable -ArgumentList "--gui-self-test" -Wait -PassThru
+if ($guiTest.ExitCode -ne 0) {
+    throw "Gleave Desktop GUI import self-test failed with code $($guiTest.ExitCode)."
+}
+
 Write-Output "Gleave Desktop executable: $executable"

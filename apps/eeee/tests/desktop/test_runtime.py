@@ -3,7 +3,7 @@ import time
 import httpx
 
 from app.config import Settings
-from app.desktop.__main__ import connect_desktop_api, run_self_test
+from app.desktop.__main__ import connect_desktop_api, run_gui_self_test, run_self_test
 from app.desktop.runtime import EmbeddedApiRuntime
 
 
@@ -63,3 +63,7 @@ def test_desktop_self_test_starts_and_checks_the_embedded_api(tmp_path):
     )
 
     assert result == 0
+
+
+def test_desktop_gui_self_test_imports_qt_widgets():
+    assert run_gui_self_test() == 0

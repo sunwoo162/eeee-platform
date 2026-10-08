@@ -1,9 +1,22 @@
 import argparse
 import os
+import sys
+from pathlib import Path
 
 from app.config import Settings
 from app.desktop.client import PetApiClient
 from app.desktop.runtime import ApiStartupError, EmbeddedApiRuntime
+
+
+def prepare_qt_runtime() -> None:
+    """Make bundled Qt/Shiboken DLLs discoverable before importing QtWidgets."""
+
+    if not getattr(sys, "frozen", False):
+        return
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    for candidate in (bundle_root / "PySide6", bundle_root / "shiboken6", bundle_root):
+        if candidate.is_dir():
+            os.add_dll_directory(str(candidate))
 
 
 def connect_desktop_api(
@@ -37,6 +50,17 @@ def run_self_test(settings: Settings | None = None) -> int:
         runtime.stop()
 
 
+def run_gui_self_test() -> int:
+    """Import the desktop Qt surface without starting the window or API."""
+
+    try:
+        prepare_qt_runtime()
+        from PySide6.QtWidgets import QApplication  # noqa: F401
+    except Exception:
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Gleave Desktop")
     parser.add_argument(
@@ -44,10 +68,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="start the embedded API, verify /health, and exit",
     )
+    parser.add_argument(
+        "--gui-self-test",
+        action="store_true",
+        help="import the Qt desktop surface and exit",
+    )
     arguments = parser.parse_args(argv)
     if arguments.self_test:
         return run_self_test()
+    if arguments.gui_self_test:
+        return run_gui_self_test()
 
+    prepare_qt_runtime()
     from PySide6.QtWidgets import QApplication
 
     from app.desktop.window import PetWindow

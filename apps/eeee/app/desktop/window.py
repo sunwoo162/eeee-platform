@@ -97,10 +97,11 @@ class PetWindow:
 
     def __new__(cls, client: PetApiClient, *, initial_error: str | None = None):
         try:
-            from PySide6.QtCore import QSettings, QTimer, Qt
+            from PySide6.QtCore import QEvent, QSettings, QTimer, Qt
             from PySide6.QtGui import QAction, QFont
             from PySide6.QtWidgets import (
                 QComboBox,
+                QFrame,
                 QHBoxLayout,
                 QLabel,
                 QLineEdit,
@@ -147,10 +148,12 @@ class PetWindow:
                 self.setMaximumWidth(520)
 
                 root = QVBoxLayout(self)
-                root.setContentsMargins(18, 16, 18, 16)
-                root.setSpacing(10)
+                root.setContentsMargins(22, 18, 22, 20)
+                root.setSpacing(12)
 
-                language_row = QHBoxLayout()
+                language_row_widget = QWidget()
+                language_row = QHBoxLayout(language_row_widget)
+                language_row.setContentsMargins(0, 0, 0, 0)
                 self.language_label = QLabel()
                 self.language_select = QComboBox()
                 self.language_select.addItem("한국어", "ko")
@@ -160,11 +163,13 @@ class PetWindow:
                 language_row.addStretch(1)
                 language_row.addWidget(self.language_label)
                 language_row.addWidget(self.language_select)
-                root.addLayout(language_row)
+                root.addWidget(language_row_widget)
 
                 self.character = QLabel("🐾")
+                self.character.setObjectName("assistantCharacter")
                 self.character.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.character.setFont(QFont("Segoe UI Emoji", 34))
+                self.character.installEventFilter(self)
                 root.addWidget(self.character)
 
                 self.headline = QLabel()
@@ -173,49 +178,71 @@ class PetWindow:
                 root.addWidget(self.headline)
 
                 self.detail = QLabel()
+                self.detail.setObjectName("assistantBubble")
                 self.detail.setWordWrap(True)
                 self.detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 root.addWidget(self.detail)
 
+                self.status_card = QFrame()
+                self.status_card.setObjectName("projectStatusCard")
+                status_layout = QVBoxLayout(self.status_card)
+                status_layout.setContentsMargins(14, 10, 14, 10)
+                status_layout.setSpacing(5)
                 self.project_status = QLabel()
                 self.project_status.setWordWrap(True)
-                root.addWidget(self.project_status)
+                self.project_status.setObjectName("projectStatus")
+                status_layout.addWidget(self.project_status)
                 self.runtime_status = QLabel()
                 self.runtime_status.setWordWrap(True)
-                root.addWidget(self.runtime_status)
+                self.runtime_status.setObjectName("runtimeStatus")
+                status_layout.addWidget(self.runtime_status)
                 self.trust_status = QLabel()
                 self.trust_status.setWordWrap(True)
-                root.addWidget(self.trust_status)
+                self.trust_status.setObjectName("trustStatus")
+                status_layout.addWidget(self.trust_status)
                 self.mobile_status = QLabel()
                 self.mobile_status.setWordWrap(True)
-                root.addWidget(self.mobile_status)
+                self.mobile_status.setObjectName("mobileStatus")
+                status_layout.addWidget(self.mobile_status)
+                root.addWidget(self.status_card)
 
+                self.command_surface = QFrame()
+                self.command_surface.setObjectName("commandSurface")
+                command_layout = QVBoxLayout(self.command_surface)
+                command_layout.setContentsMargins(0, 0, 0, 0)
                 assistant_row = QHBoxLayout()
                 self.assistant_input = QLineEdit()
+                self.assistant_input.setObjectName("assistantComposer")
                 self.assistant_button = QPushButton()
+                self.assistant_button.setObjectName("primaryAction")
                 self.assistant_button.clicked.connect(self._route_assistant)
+                self.assistant_input.returnPressed.connect(self._route_assistant)
                 assistant_row.addWidget(self.assistant_input)
                 assistant_row.addWidget(self.assistant_button)
-                root.addLayout(assistant_row)
+                command_layout.addLayout(assistant_row)
+                root.addWidget(self.command_surface)
 
-                pairing_row = QHBoxLayout()
+                actions_row = QHBoxLayout()
                 self.pairing_button = QPushButton()
+                self.pairing_button.setObjectName("secondaryAction")
                 self.pairing_button.clicked.connect(self._issue_pairing_code)
                 self.pairing_status = QLabel()
                 self.pairing_status.setWordWrap(True)
-                pairing_row.addWidget(self.pairing_button)
-                pairing_row.addWidget(self.pairing_status)
-                root.addLayout(pairing_row)
+                actions_row.addWidget(self.pairing_button)
+                actions_row.addWidget(self.pairing_status, 1)
+                root.addLayout(actions_row)
 
                 self.events_view = QLabel()
                 self.events_view.setWordWrap(True)
                 root.addWidget(self.events_view)
 
                 self.workspace_button = QPushButton()
+                self.workspace_button.setObjectName("secondaryAction")
                 self.workspace_button.clicked.connect(self._open_workspace)
                 root.addWidget(self.workspace_button)
 
                 self.hide_button = QPushButton()
+                self.hide_button.setObjectName("secondaryAction")
                 self.hide_button.clicked.connect(self.hide_to_tray)
                 root.addWidget(self.hide_button)
 
@@ -249,17 +276,37 @@ class PetWindow:
                 self.legacy_panel.setVisible(False)
                 root.addWidget(self.legacy_panel)
 
+                language_row_widget.hide()
+                self.headline.hide()
+                self.status_card.hide()
+                self.command_surface.hide()
+                self.pairing_button.hide()
+                self.pairing_status.hide()
+                self.events_view.hide()
+                self.workspace_button.hide()
+                self.hide_button.hide()
+
                 self.setStyleSheet(
-                    "#desktopCompanion { background: #20232b; border: 1px solid #4b5263; "
-                    "border-radius: 18px; color: #f3f5f8; }"
+                    "#desktopCompanion { background: #171923; border: 1px solid #35394b; "
+                    "border-radius: 24px; color: #f4f3fb; }"
                     "#desktopCompanion QLabel { background: transparent; border: none; "
-                    "color: #f3f5f8; }"
+                    "color: #f4f3fb; }"
+                    "#assistantCharacter { padding: 4px; }"
+                    "#assistantBubble { background: #272a39; border: 1px solid #464b65; "
+                    "border-radius: 14px; padding: 10px 14px; color: #dedcff; }"
+                    "#projectStatusCard { background: #202332; border: 1px solid #373c53; "
+                    "border-radius: 14px; }"
+                    "#projectStatus { color: #ffffff; font-weight: 600; }"
+                    "#runtimeStatus, #trustStatus, #mobileStatus { color: #b9bdd0; font-size: 11px; }"
                     "#desktopCompanion QLineEdit, #desktopCompanion QComboBox { "
-                    "background: #2b303b; padding: 8px; border: 1px solid #596274; "
-                    "border-radius: 9px; color: #f3f5f8; }"
-                    "#desktopCompanion QPushButton { background: #8f7cff; padding: 8px 10px; "
-                    "border: none; border-radius: 9px; color: #ffffff; }"
-                    "#desktopCompanion QPushButton:hover { background: #a294ff; }"
+                    "background: #252838; padding: 10px 12px; border: 1px solid #4b516c; "
+                    "border-radius: 11px; color: #f4f3fb; selection-background-color: #5d55bc; }"
+                    "#desktopCompanion QPushButton { background: #8f7cff; padding: 10px 12px; "
+                    "border: none; border-radius: 11px; color: #ffffff; font-weight: 600; }"
+                    "#desktopCompanion QPushButton:hover { background: #a69aff; }"
+                    "#desktopCompanion QPushButton#secondaryAction { background: #2a2d3d; "
+                    "border: 1px solid #464b65; color: #d9d8e8; font-weight: 500; }"
+                    "#desktopCompanion QPushButton#secondaryAction:hover { background: #35394d; }"
                     "#desktopCompanion QPushButton:disabled { background: #3b414d; color: #8e96a5; }"
                     "#desktopCompanion QComboBox QAbstractItemView { background: #2b303b; "
                     "color: #f3f5f8; selection-background-color: #5147a5; }"
@@ -274,7 +321,27 @@ class PetWindow:
                     self._timer.start(5000)
                     self.refresh()
 
+            def eventFilter(self, watched, event):
+                if (
+                    watched is self.character
+                    and event.type() == QEvent.Type.MouseButtonDblClick
+                ):
+                    self.show_command_surface()
+                    return True
+                return super().eventFilter(watched, event)
+
+            def show_command_surface(self):
+                self.command_surface.show()
+                self.assistant_input.setFocus()
+
             def mousePressEvent(self, event):
+                if (
+                    event.button() == Qt.MouseButton.LeftButton
+                    and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                ):
+                    self._open_workspace()
+                    event.accept()
+                    return
                 if event.button() == Qt.MouseButton.LeftButton:
                     self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 super().mousePressEvent(event)
@@ -477,7 +544,10 @@ class PetWindow:
                 }[view.expression])
                 headlines = _DESKTOP_TEXT[self.language]["headline"]
                 self.headline.setText(headlines.get(view.state, view.headline))
-                self.detail.setText(view.detail)
+                detail = view.detail
+                if view.state == "idle" and detail == "Ready for a development request":
+                    detail = self._text("start_hint")
+                self.detail.setText(detail)
                 self._render_desktop_status(payload)
                 candidates = payload.get("candidates", [])
                 self.candidate_select.clear()

@@ -20,6 +20,8 @@ def test_user_can_request_todo_and_receive_a_generated_project(tmp_path) -> None
     assert payload["status"] == "completed", payload
     assert payload["qualityStatus"] == "PASS", payload
     assert payload["qaReportPath"].endswith("QA_REPORT.json")
+    assert payload["releaseManifestPath"].endswith("RELEASE_MANIFEST.json")
+    assert payload["response_verification"]["profile_version"] == "claimlatch-v0.2.0"
     assert payload["gitBranch"].startswith("project/")
     assert len(payload["gitCommit"]) == 40
     assert payload["executionPlanPath"].endswith("execution-plan.json")

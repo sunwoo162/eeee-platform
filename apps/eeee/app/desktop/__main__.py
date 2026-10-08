@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 import os
 import sys
 from pathlib import Path
@@ -51,14 +52,54 @@ def run_self_test(settings: Settings | None = None) -> int:
 
 
 def run_gui_self_test() -> int:
-    """Import the desktop Qt surface without starting the window or API."""
+    """Exercise the real Qt surface, including Enter-to-route, without networking."""
 
     try:
         prepare_qt_runtime()
-        from PySide6.QtWidgets import QApplication  # noqa: F401
+        from PySide6.QtCore import QEventLoop
+        from PySide6.QtWidgets import QApplication
+        from app.desktop.window import PetWindow
+
+        class SelfTestClient:
+            def __init__(self):
+                self.routed_text = None
+
+            def get_state(self):
+                return {"state": "idle", "message": "Ready for a development request"}
+
+            def get_desktop_state(self, project_id=None):
+                return {"state": "idle", "message": "Ready for a development request"}
+
+            def route_assistant(self, text, workspace=None):
+                self.routed_text = text
+                return {"status": "completed", "message": "GUI self-test response"}
+
+        application = QApplication.instance() or QApplication([])
+        client = SelfTestClient()
+        window = PetWindow(client)
+        initial_deadline = datetime.now().timestamp() + 3
+        while window._busy and datetime.now().timestamp() < initial_deadline:
+            application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+        window.show_command_surface()
+        window.assistant_input.setText("GUI self-test")
+        window.assistant_input.returnPressed.emit()
+        deadline = datetime.now().timestamp() + 3
+        while (
+            client.routed_text != "GUI self-test"
+            or window.current_state.get("state") != "completed"
+        ) and datetime.now().timestamp() < deadline:
+            application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+        passed = (
+            client.routed_text == "GUI self-test"
+            and window.current_state.get("state") == "completed"
+            and window.detail.text() == "GUI self-test response"
+        )
+        window.request_quit()
+        window.close()
+        application.processEvents()
+        return 0 if passed else 1
     except Exception:
         return 1
-    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

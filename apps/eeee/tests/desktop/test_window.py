@@ -211,7 +211,7 @@ def test_keyboard_hand_map_follows_physical_qwerty_columns(key_code, expected_ha
     window.close()
 
 
-def test_repeated_keys_keep_the_same_visual_hand_until_the_physical_side_changes():
+def test_repeated_keys_animate_the_same_visual_hand_until_the_physical_side_changes():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
     window._read_global_key_states = lambda: {}
@@ -219,14 +219,14 @@ def test_repeated_keys_keep_the_same_visual_hand_until_the_physical_side_changes
     window._apply_global_key_states({0x41: True})  # A: left, first pose
     assert window._typing_frame_name() == "left"
     window._apply_global_key_states({})
-    window._apply_global_key_states({0x53: True})  # S: same hand, still left
-    assert window._typing_frame_name() == "left"
+    window._apply_global_key_states({0x53: True})  # S: same hand, pressed pose
+    assert window._typing_frame_name() == "left_press"
     window._apply_global_key_states({})
     window._apply_global_key_states({0x4C: True})  # L: switch hand, primary pose
     assert window._typing_frame_name() == "right"
     window._apply_global_key_states({})
-    window._apply_global_key_states({0xBC: True})  # comma: same hand, still right
-    assert window._typing_frame_name() == "right"
+    window._apply_global_key_states({0xBC: True})  # comma: same hand, pressed pose
+    assert window._typing_frame_name() == "right_press"
     window.close()
 
 
@@ -238,7 +238,7 @@ def test_repeated_korean_jamo_physical_key_does_not_flip_paws():
     for _ in range(5):
         window._apply_global_key_states({0x44: True})  # D produces ㅇ on Korean 2-set
         assert window._typing_hand == "left"
-        assert window._typing_frame_name() == "left"
+        assert window._typing_frame_name() == ("left" if _ % 2 == 0 else "left_press")
         window._apply_global_key_states({})
 
     window.close()
@@ -265,7 +265,7 @@ def test_gaze_tracks_cursor_during_typing_without_changing_keyboard_frame():
     window.close()
 
 
-def test_repeated_same_hand_input_keeps_the_same_typing_asset():
+def test_repeated_same_hand_input_animates_without_switching_paws():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
     # Keep this state-machine test deterministic; the production timer reads
@@ -282,7 +282,21 @@ def test_repeated_same_hand_input_keeps_the_same_typing_asset():
     second = window._last_rendered_frame
 
     assert first == "left"
-    assert second == "left"
+    assert second == "left_press"
+    assert first != second
+    window.close()
+
+
+def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    base = window._source_pixmap_for_frame("left").toImage()
+    pressed = window._source_pixmap_for_frame("left_press").toImage()
+    opposite = window._source_pixmap_for_frame("right").toImage()
+
+    assert pressed != base
+    assert pressed != opposite
     window.close()
 
 

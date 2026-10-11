@@ -120,6 +120,34 @@ _DESKTOP_TEXT = {
 }
 
 
+# Virtual-key codes grouped by physical QWERTY position.  The boundary is
+# between T/Y, G/H, and B/N, matching the user's left/right keyboard split.
+_LEFT_HAND_KEY_CODES = frozenset(
+    {
+        *range(0x31, 0x36),  # 1-5
+        0x51, 0x57, 0x45, 0x52, 0x54,  # QWERT
+        0x41, 0x53, 0x44, 0x46, 0x47,  # ASDFG
+        0x5A, 0x58, 0x43, 0x56, 0x42,  # ZXCVB
+        0x09, 0x14,  # Tab, Caps Lock
+        0x70, 0x71, 0x72, 0x73, 0x74,  # F1-F5
+        0xA0, 0xA2, 0xA4,  # Left Shift/Ctrl/Alt
+    }
+)
+_RIGHT_HAND_KEY_CODES = frozenset(
+    {
+        0x36, 0x37, 0x38, 0x39, 0x30,  # 6-0
+        0x59, 0x55, 0x49, 0x4F, 0x50,  # YUIOP
+        0x48, 0x4A, 0x4B, 0x4C,  # HJKL
+        0x4E, 0x4D,  # NM
+        0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0,  # punctuation
+        0xDB, 0xDC, 0xDD, 0xDE,
+        0x08, 0x0D,  # Backspace, Enter
+        0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B,  # F6-F12
+        0xA1, 0xA3, 0xA5,  # Right Shift/Ctrl/Alt
+    }
+)
+
+
 class PetWindow:
     """Build the GUI lazily so importing the desktop package stays display-free."""
 
@@ -255,6 +283,7 @@ class PetWindow:
                 self._global_key_states: dict[int, bool] = {}
                 self._global_key_press_events: list[int] = []
                 self._typing_event_count = 0
+                self._typing_hand_press_count = 0
                 self._last_global_key_code: int | None = None
                 self.character = QLabel()
                 self.character.setObjectName("assistantCharacter")
@@ -509,10 +538,7 @@ class PetWindow:
                     and event.key() not in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape)
                 ):
                     key_code = int(event.nativeVirtualKey() or event.key())
-                    self._typing_hand = self._hand_for_key_code(key_code)
-                    self._typing_active = True
-                    self._last_text_edit_at = time.monotonic()
-                    self._typing_event_count += 1
+                    self._register_key_press(key_code)
                 if (
                     watched is self.character
                     and event.type() == QEvent.Type.MouseButtonPress
@@ -647,8 +673,14 @@ class PetWindow:
             def _source_pixmap_for_frame(self, frame: str):
                 """Keep the keyboard fixed while changing only the eyes."""
                 base = self._pet_pixmaps.get("idle")
-                if base is None or base.isNull() or not frame.startswith("gaze_"):
+                is_gaze = frame.startswith("gaze_")
+                is_typing = frame in {"left", "right", "left_alt", "right_alt"}
+                if not is_gaze and not is_typing:
                     return self._pet_pixmaps.get(frame)
+                if is_typing:
+                    base = self._pet_pixmaps.get(frame)
+                if base is None or base.isNull():
+                    return base
 
                 rendered = base.copy()
                 painter = QPainter(rendered)
@@ -700,20 +732,32 @@ class PetWindow:
                     self._typing_frame = 0
                 self._update_pet_motion()
 
-            @staticmethod
-            def _hand_for_key_code(code: int) -> str:
-                """Map a physical keyboard key to the hand that normally presses it."""
-                left_hand = {
-                    0x51, 0x57, 0x45, 0x52, 0x54,
-                    0x41, 0x53, 0x44, 0x46, 0x47,
-                    0x5A, 0x58, 0x43, 0x56, 0x42,
-                }
-                return "left" if code in left_hand else "right"
+            def _hand_for_key_code(self, code: int) -> str:
+                """Map a physical key to its QWERTY hand, preserving neutral keys."""
+                if code in _LEFT_HAND_KEY_CODES:
+                    return "left"
+                if code in _RIGHT_HAND_KEY_CODES:
+                    return "right"
+                # Space and layout-specific keys have no unique hand. Keep
+                # the current side rather than making them flip the mascot.
+                return self._typing_hand
+
+            def _register_key_press(self, code: int) -> None:
+                hand = self._hand_for_key_code(code)
+                if hand == self._typing_hand:
+                    self._typing_hand_press_count += 1
+                else:
+                    self._typing_hand = hand
+                    self._typing_hand_press_count = 1
+                self._last_global_key_code = code
+                self._typing_active = True
+                self._last_text_edit_at = time.monotonic()
+                self._typing_event_count += 1
 
             def _typing_frame_name(self) -> str:
                 """Alternate a second pose when the same hand keeps typing."""
                 hand = self._typing_hand
-                suffix = "_alt" if self._typing_event_count and self._typing_event_count % 2 == 0 else ""
+                suffix = "_alt" if self._typing_hand_press_count % 2 == 0 else ""
                 return f"{hand}{suffix}"
 
             def _read_global_key_states(self) -> dict[int, bool]:
@@ -752,21 +796,41 @@ class PetWindow:
                 ]
                 transition_presses = list(self._global_key_press_events)
                 self._global_key_press_events.clear()
-                pressed = list(dict.fromkeys(transition_presses + edge_presses))
+                # Preserve the transition queue exactly: two fast presses of
+                # the same key are two poses, not one deduplicated event.
+                pressed = transition_presses + [
+                    code for code in edge_presses if code not in transition_presses
+                ]
                 self._global_key_states = states
                 if pressed:
-                    code = pressed[-1]
-                    self._last_global_key_code = code
-                    self._typing_hand = self._hand_for_key_code(code)
-                    self._typing_active = True
-                    self._last_text_edit_at = time.monotonic()
-                    self._typing_event_count += len(pressed)
+                    for code in pressed:
+                        self._register_key_press(code)
                 elif not any(states.values()):
                     self._typing_active = False
+
+            def _gaze_for_cursor(self, cursor) -> tuple[str, tuple[int, int]]:
+                pet_center = self.character.mapToGlobal(self.character.rect().center())
+                delta_x = cursor.x() - pet_center.x()
+                delta_y = cursor.y() - pet_center.y()
+                offset = (
+                    max(-16, min(16, round(delta_x / 110))),
+                    max(-12, min(12, round(delta_y / 110))),
+                )
+                if delta_x < -72:
+                    frame = "gaze_left"
+                elif delta_x > 72:
+                    frame = "gaze_right"
+                else:
+                    frame = "gaze_center"
+                return frame, offset
 
             def _update_pet_motion(self) -> None:
                 global_states = self._read_global_key_states()
                 self._apply_global_key_states(global_states)
+                gaze_frame, gaze_offset = self._gaze_for_cursor(QCursor.pos())
+                self._gaze_offset = gaze_offset
+                self._last_gaze_frame = gaze_frame
+                self._last_gaze_offset = gaze_offset
                 if global_states and any(global_states.values()):
                     self._set_pet_frame(self._typing_frame_name())
                     return
@@ -781,24 +845,7 @@ class PetWindow:
                     return
 
                 self._typing_active = False
-                pet_center = self.character.mapToGlobal(self.character.rect().center())
-                cursor = QCursor.pos()
-                delta_x = cursor.x() - pet_center.x()
-                delta_y = cursor.y() - pet_center.y()
-                self._gaze_offset = (
-                    max(-15, min(15, round(delta_x / 180))),
-                    max(-10, min(10, round(delta_y / 180))),
-                )
-                if delta_x < -24:
-                    frame = "gaze_left"
-                elif delta_x > 24:
-                    frame = "gaze_right"
-                else:
-                    frame = "gaze_center"
-                if frame != self._last_gaze_frame or self._gaze_offset != self._last_gaze_offset:
-                    self._last_gaze_frame = frame
-                    self._last_gaze_offset = self._gaze_offset
-                    self._set_pet_frame(frame)
+                self._set_pet_frame(gaze_frame)
 
             def _start_reply_typing(self, text: str) -> None:
                 self._typing_timer.stop()

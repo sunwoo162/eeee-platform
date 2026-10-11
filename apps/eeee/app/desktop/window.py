@@ -260,13 +260,13 @@ class PetWindow:
                     frame: QPixmap(str(asset_dir / filename))
                     for frame, filename in {
                         "idle": "cat-keyboard-idle.png",
-                        # The visual source files are named by their legacy
-                        # export direction; user input direction is the
-                        # opposite, so keep the mapping explicit here.
-                        "left": "cat-keyboard-right.png",
-                        "right": "cat-keyboard-left.png",
-                        "left_alt": "cat-keyboard-right-alt.png",
-                        "right_alt": "cat-keyboard-left-alt.png",
+                        # Keep the visual side and physical keyboard side
+                        # aligned: left input uses the left-paw artwork and
+                        # right input uses the right-paw artwork.
+                        "left": "cat-keyboard-left.png",
+                        "right": "cat-keyboard-right.png",
+                        "left_alt": "cat-keyboard-left-alt.png",
+                        "right_alt": "cat-keyboard-right-alt.png",
                         "gaze_left": "cat-keyboard-gaze-left.png",
                         "gaze_right": "cat-keyboard-gaze-right.png",
                     }.items()

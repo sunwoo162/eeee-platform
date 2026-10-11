@@ -291,6 +291,9 @@ def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
+    assert window._press_source_frame("left") == "right_alt"
+    assert window._press_source_frame("right") == "left_alt"
+
     base = window._source_pixmap_for_frame("left").toImage()
     pressed = window._source_pixmap_for_frame("left_press").toImage()
     opposite = window._source_pixmap_for_frame("right").toImage()

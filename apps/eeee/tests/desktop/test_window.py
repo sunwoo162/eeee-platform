@@ -162,6 +162,9 @@ def test_every_pet_frame_stays_inside_the_compact_character_bounds():
 def test_pet_motion_uses_fixed_size_and_interactive_keyboard_polling():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
+    # The production timer reads the real Windows keyboard globally. Isolate
+    # this state-machine assertion from keys held while pytest is running.
+    window._read_global_key_states = lambda: {}
 
     assert window._pet_display_size == QSize(180, 108)
     assert window._pet_motion_timer.interval() <= 32

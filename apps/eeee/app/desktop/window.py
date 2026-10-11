@@ -160,7 +160,15 @@ class PetWindow:
     ):
         try:
             from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, QSize, QTimer, Qt
-            from PySide6.QtGui import QAction, QColor, QCursor, QFont, QPainter, QPixmap
+            from PySide6.QtGui import (
+                QAction,
+                QColor,
+                QCursor,
+                QFont,
+                QPainter,
+                QPainterPath,
+                QPixmap,
+            )
             from PySide6.QtWidgets import (
                 QComboBox,
                 QFrame,
@@ -682,6 +690,26 @@ class PetWindow:
                 """
                 return {"left": "right_alt", "right": "left_alt"}.get(frame, frame)
 
+            def _same_paw_clip_path(self, frame: str) -> QPainterPath:
+                """Limit a press-frame swap to the active front paw."""
+                path = QPainterPath()
+                if frame == "left":
+                    # Physical left is the viewer-right paw in the artwork.
+                    path.moveTo(970, 515)
+                    path.cubicTo(1050, 485, 1180, 490, 1250, 585)
+                    path.cubicTo(1280, 650, 1260, 735, 1200, 785)
+                    path.cubicTo(1120, 815, 1025, 780, 985, 715)
+                    path.cubicTo(950, 650, 940, 555, 970, 515)
+                else:
+                    # Physical right is the viewer-left paw in the artwork.
+                    path.moveTo(365, 515)
+                    path.cubicTo(445, 485, 575, 490, 650, 585)
+                    path.cubicTo(680, 650, 660, 735, 600, 785)
+                    path.cubicTo(520, 815, 425, 780, 385, 715)
+                    path.cubicTo(350, 650, 335, 555, 365, 515)
+                path.closeSubpath()
+                return path
+
             def _source_pixmap_for_frame(self, frame: str):
                 """Keep the keyboard fixed while changing only the eyes."""
                 base = self._pet_pixmaps.get("idle")
@@ -692,12 +720,20 @@ class PetWindow:
                 if not is_gaze and not is_typing:
                     return self._pet_pixmaps.get(frame)
                 if is_typing:
-                    source_frame = (
-                        self._press_source_frame(base_frame)
-                        if is_press
-                        else base_frame
-                    )
-                    base = self._pet_pixmaps.get(source_frame)
+                    base = self._pet_pixmaps.get(base_frame)
+                    if is_press:
+                        press_source = self._pet_pixmaps.get(
+                            self._press_source_frame(base_frame)
+                        )
+                        if press_source is not None and not press_source.isNull():
+                            pressed = base.copy()
+                            press_painter = QPainter(pressed)
+                            press_painter.setClipPath(
+                                self._same_paw_clip_path(base_frame)
+                            )
+                            press_painter.drawPixmap(0, 0, press_source)
+                            press_painter.end()
+                            base = pressed
                 if base is None or base.isNull():
                     return base
 

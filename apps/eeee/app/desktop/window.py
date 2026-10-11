@@ -675,13 +675,24 @@ class PetWindow:
                 """Keep the keyboard fixed while changing only the eyes."""
                 base = self._pet_pixmaps.get("idle")
                 is_gaze = frame.startswith("gaze_")
-                is_typing = frame in {"left", "right", "left_alt", "right_alt"}
+                is_press = frame.endswith("_press")
+                base_frame = frame.removesuffix("_press")
+                is_typing = base_frame in {"left", "right", "left_alt", "right_alt"}
                 if not is_gaze and not is_typing:
                     return self._pet_pixmaps.get(frame)
                 if is_typing:
-                    base = self._pet_pixmaps.get(frame)
+                    base = self._pet_pixmaps.get(base_frame)
                 if base is None or base.isNull():
                     return base
+
+                press_offset_y = 12 if is_press else 0
+                if press_offset_y:
+                    pressed = QPixmap(base.size())
+                    pressed.fill(Qt.GlobalColor.transparent)
+                    press_painter = QPainter(pressed)
+                    press_painter.drawPixmap(0, press_offset_y, base)
+                    press_painter.end()
+                    base = pressed
 
                 rendered = base.copy()
                 painter = QPainter(rendered)
@@ -689,12 +700,14 @@ class PetWindow:
                 painter.setBrush(QColor("#ffffff"))
                 eyes = ((721, 455, 28), (1029, 545, 28))
                 for x, y, radius in eyes:
-                    painter.drawEllipse(QPoint(x, y), radius, radius)
+                    painter.drawEllipse(QPoint(x, y + press_offset_y), radius, radius)
                 offset_x, offset_y = self._gaze_offset
                 painter.setBrush(QColor("#111111"))
                 for x, y, radius in eyes:
                     painter.drawEllipse(
-                        QPoint(x + offset_x, y + offset_y), radius - 3, radius - 3
+                        QPoint(x + offset_x, y + press_offset_y + offset_y),
+                        radius - 3,
+                        radius - 3,
                     )
                 painter.end()
                 return rendered
@@ -714,8 +727,8 @@ class PetWindow:
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
-                if frame in {"left", "right", "left_alt", "right_alt"}:
-                    pressing = frame.removesuffix("_alt")
+                if frame.removesuffix("_press") in {"left", "right", "left_alt", "right_alt"}:
+                    pressing = frame.removesuffix("_press").removesuffix("_alt")
                     self._typing_pose = {
                         "pressing": pressing,
                         "lifted": "right" if pressing == "left" else "left",
@@ -750,23 +763,24 @@ class PetWindow:
                 else:
                     self._typing_hand = hand
                     self._typing_hand_press_count = 1
-                self._last_typing_frame = self._typing_hand
+                self._last_typing_frame = self._typing_frame_name()
                 self._last_global_key_code = code
                 self._typing_active = True
                 self._last_text_edit_at = time.monotonic()
                 self._typing_event_count += 1
 
             def _typing_frame_name(self) -> str:
-                """Keep the displayed paw tied to the physical keyboard side.
+                """Animate the same paw without switching keyboard sides.
 
                 The available ``*_alt`` artwork is a mirrored full-body pose,
                 not a second press frame for the same paw. Selecting it for a
                 repeated key therefore makes the cat appear to switch hands.
-                Until true same-paw press artwork exists, keep the stable base
-                frame so Korean IME repeats (for example ``ㅇ``/physical D)
-                cannot visually alternate between paws.
+                Use a generated press frame from the same base artwork instead,
+                so Korean IME repeats (for example ``ㅇ``/physical D) animate
+                while remaining on the left paw.
                 """
-                return self._typing_hand
+                suffix = "_press" if self._typing_hand_press_count % 2 == 0 else ""
+                return f"{self._typing_hand}{suffix}"
 
             def _read_global_key_states(self) -> dict[int, bool]:
                 """Read currently held keyboard keys without stealing focus."""

@@ -755,10 +755,16 @@ class PetWindow:
                 self._typing_event_count += 1
 
             def _typing_frame_name(self) -> str:
-                """Alternate a second pose when the same hand keeps typing."""
-                hand = self._typing_hand
-                suffix = "_alt" if self._typing_hand_press_count % 2 == 0 else ""
-                return f"{hand}{suffix}"
+                """Keep the displayed paw tied to the physical keyboard side.
+
+                The available ``*_alt`` artwork is a mirrored full-body pose,
+                not a second press frame for the same paw. Selecting it for a
+                repeated key therefore makes the cat appear to switch hands.
+                Until true same-paw press artwork exists, keep the stable base
+                frame so Korean IME repeats (for example ``ㅇ``/physical D)
+                cannot visually alternate between paws.
+                """
+                return self._typing_hand
 
             def _read_global_key_states(self) -> dict[int, bool]:
                 """Read currently held keyboard keys without stealing focus."""

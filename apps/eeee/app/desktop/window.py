@@ -277,6 +277,7 @@ class PetWindow:
                 self._typing_frame = 0
                 self._typing_hand = "left"
                 self._last_text_edit_at = 0.0
+                self._last_typing_frame: str | None = None
                 self._last_gaze_frame = "idle"
                 self._gaze_offset = (0, 0)
                 self._last_gaze_offset = (0, 0)
@@ -749,6 +750,7 @@ class PetWindow:
                 else:
                     self._typing_hand = hand
                     self._typing_hand_press_count = 1
+                self._last_typing_frame = self._typing_hand
                 self._last_global_key_code = code
                 self._typing_active = True
                 self._last_text_edit_at = time.monotonic()
@@ -851,7 +853,10 @@ class PetWindow:
                     return
 
                 self._typing_active = False
-                self._set_pet_frame(gaze_frame)
+                # Once the user has typed, keep the last hand pose instead of
+                # snapping back to the idle keyboard pose.  The eye overlay
+                # still follows the cursor through the current gaze offset.
+                self._set_pet_frame(self._last_typing_frame or gaze_frame)
 
             def _start_reply_typing(self, text: str) -> None:
                 self._typing_timer.stop()

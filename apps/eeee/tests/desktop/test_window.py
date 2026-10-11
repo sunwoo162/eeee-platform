@@ -286,6 +286,22 @@ def test_repeated_same_hand_input_keeps_the_same_typing_asset():
     window.close()
 
 
+def test_last_typing_pose_is_preserved_after_input_stops():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window._read_global_key_states = lambda: {}
+    window._gaze_for_cursor = lambda cursor: ("gaze_right", (6, 0))
+
+    window._apply_global_key_states({0x4C: True})  # L: right-hand pose
+    window._last_text_edit_at = 0.0
+    window._update_pet_motion()
+
+    assert window._typing_active is False
+    assert window._last_typing_frame == "right"
+    assert window._last_rendered_frame == "right"
+    window.close()
+
+
 def test_repeated_same_key_press_is_not_dropped_when_keyup_is_between_polls():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())

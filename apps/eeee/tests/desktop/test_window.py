@@ -181,11 +181,73 @@ def test_pet_motion_uses_fixed_size_and_interactive_keyboard_polling():
     assert window._typing_hand == "right"
     assert window._last_global_key_code == 0x4C
     window._update_pet_motion()
-    assert window._last_rendered_frame == "right_alt"
+    assert window._last_rendered_frame == "right"
     assert window._typing_pose == {"pressing": "right", "lifted": "left"}
 
     window._apply_global_key_states({})
     assert window._typing_active is False
+    window.close()
+
+
+@pytest.mark.parametrize(
+    ("key_code", "expected_hand"),
+    [
+        (0x54, "left"),   # T
+        (0x59, "right"),  # Y
+        (0x47, "left"),   # G
+        (0x48, "right"),  # H
+        (0x42, "left"),   # B
+        (0x4E, "right"),  # N
+        (0x31, "left"),   # 1
+        (0x36, "right"),  # 6
+        (0xBC, "right"),  # comma
+    ],
+)
+def test_keyboard_hand_map_follows_physical_qwerty_columns(key_code, expected_hand):
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    assert window._hand_for_key_code(key_code) == expected_hand
+    window.close()
+
+
+def test_consecutive_hand_rule_resets_pose_variant_when_switching_sides():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window._read_global_key_states = lambda: {}
+
+    window._apply_global_key_states({0x41: True})  # A: left, first pose
+    assert window._typing_frame_name() == "left"
+    window._apply_global_key_states({})
+    window._apply_global_key_states({0x53: True})  # S: same hand, alternate
+    assert window._typing_frame_name() == "left_alt"
+    window._apply_global_key_states({})
+    window._apply_global_key_states({0x4C: True})  # L: switch hand, primary pose
+    assert window._typing_frame_name() == "right"
+    window._apply_global_key_states({})
+    window._apply_global_key_states({0xBC: True})  # comma: same right hand, alternate
+    assert window._typing_frame_name() == "right_alt"
+    window.close()
+
+
+def test_gaze_tracks_cursor_during_typing_without_changing_keyboard_frame():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    center = window.character.mapToGlobal(window.character.rect().center())
+    left_frame, left_offset = window._gaze_for_cursor(center + QPoint(-900, -300))
+    right_frame, right_offset = window._gaze_for_cursor(center + QPoint(900, 300))
+    assert left_frame == "gaze_left"
+    assert right_frame == "gaze_right"
+    assert left_offset != right_offset
+
+    window._gaze_offset = left_offset
+    left = window._source_pixmap_for_frame("left").toImage()
+    window._gaze_offset = right_offset
+    right = window._source_pixmap_for_frame("left").toImage()
+    assert left.copy(0, 650, left.width(), left.height() - 650) == right.copy(
+        0, 650, right.width(), right.height() - 650
+    )
     window.close()
 
 

@@ -671,6 +671,17 @@ class PetWindow:
                 if not self.command_surface.isVisible():
                     self.detail.hide()
 
+            def _press_source_frame(self, frame: str) -> str:
+                """Return the sibling artwork for a same-paw press frame.
+
+                The logical frame names describe physical keyboard hands, but
+                the artwork filenames are mirrored relative to the viewer. The
+                alternate asset for ``left`` is therefore ``right_alt`` and
+                vice versa. These sibling assets keep the body and keyboard
+                anchored while changing only the paw's pose.
+                """
+                return {"left": "right_alt", "right": "left_alt"}.get(frame, frame)
+
             def _source_pixmap_for_frame(self, frame: str):
                 """Keep the keyboard fixed while changing only the eyes."""
                 base = self._pet_pixmaps.get("idle")
@@ -681,18 +692,14 @@ class PetWindow:
                 if not is_gaze and not is_typing:
                     return self._pet_pixmaps.get(frame)
                 if is_typing:
-                    base = self._pet_pixmaps.get(base_frame)
+                    source_frame = (
+                        self._press_source_frame(base_frame)
+                        if is_press
+                        else base_frame
+                    )
+                    base = self._pet_pixmaps.get(source_frame)
                 if base is None or base.isNull():
                     return base
-
-                press_offset_y = 12 if is_press else 0
-                if press_offset_y:
-                    pressed = QPixmap(base.size())
-                    pressed.fill(Qt.GlobalColor.transparent)
-                    press_painter = QPainter(pressed)
-                    press_painter.drawPixmap(0, press_offset_y, base)
-                    press_painter.end()
-                    base = pressed
 
                 rendered = base.copy()
                 painter = QPainter(rendered)
@@ -700,12 +707,12 @@ class PetWindow:
                 painter.setBrush(QColor("#ffffff"))
                 eyes = ((721, 455, 28), (1029, 545, 28))
                 for x, y, radius in eyes:
-                    painter.drawEllipse(QPoint(x, y + press_offset_y), radius, radius)
+                    painter.drawEllipse(QPoint(x, y), radius, radius)
                 offset_x, offset_y = self._gaze_offset
                 painter.setBrush(QColor("#111111"))
                 for x, y, radius in eyes:
                     painter.drawEllipse(
-                        QPoint(x + offset_x, y + press_offset_y + offset_y),
+                        QPoint(x + offset_x, y + offset_y),
                         radius - 3,
                         radius - 3,
                     )

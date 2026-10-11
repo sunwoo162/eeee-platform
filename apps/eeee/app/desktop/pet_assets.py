@@ -7,12 +7,37 @@ another full-canvas image swap.
 """
 
 PET_ASSET_TABLE = {
-    # ``left`` and ``right`` are physical keyboard hands.  The artwork is
-    # mirrored from the user's point of view, hence the intentionally crossed
-    # legacy names in the source files.
+    # ``left`` and ``right`` are physical keyboard hands.  The source assets
+    # use the same visual side as the physical keyboard, so keep the mapping
+    # direct: left input changes the left paw and right input changes the right
+    # paw.
     "left": {
         "body": "idle",
         "base": "left",
+        "press": "left_alt",
+        "paw_mask": {
+            "x_min": 417,
+            "x_max": 637,
+            "y_min": 570,
+            "y_max": 765,
+            "points": (
+                (512, 570),
+                (457, 595),
+                (422, 650),
+                (437, 705),
+                (477, 750),
+                (527, 765),
+                (582, 755),
+                (617, 725),
+                (632, 685),
+                (614, 640),
+                (572, 600),
+            ),
+        },
+    },
+    "right": {
+        "body": "idle",
+        "base": "right",
         "press": "right_alt",
         "paw_mask": {
             "x_min": 980,
@@ -32,30 +57,6 @@ PET_ASSET_TABLE = {
                 (980, 700),
                 (980, 600),
                 (1000, 520),
-            ),
-        },
-    },
-    "right": {
-        "body": "idle",
-        "base": "right",
-        "press": "left_alt",
-        "paw_mask": {
-            "x_min": 417,
-            "x_max": 637,
-            "y_min": 570,
-            "y_max": 765,
-            "points": (
-                (512, 570),
-                (457, 595),
-                (422, 650),
-                (437, 705),
-                (477, 750),
-                (527, 765),
-                (582, 755),
-                (617, 725),
-                (632, 685),
-                (614, 640),
-                (572, 600),
             ),
         },
     },

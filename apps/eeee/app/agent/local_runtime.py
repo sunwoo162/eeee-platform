@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -56,7 +57,13 @@ class OllamaBackend:
                 "model": self.model,
                 "stream": False,
                 "format": "json",
-                "messages": [{"role": "user", "content": prompt + "\nObservations:\n" + repr(context)}],
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are EEEE. Reply in natural Korean by default. Keep the requested JSON schema exactly.",
+                    },
+                    {"role": "user", "content": prompt + "\nObservations:\n" + repr(context)},
+                ],
             },
             timeout=self.timeout,
         )
@@ -66,7 +73,25 @@ class OllamaBackend:
         content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, str):
             raise ValueError("local model response did not contain message.content")
-        return LocalModelResponse.model_validate_json(content)
+        try:
+            decoded = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ValueError("local model response was not valid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise ValueError("local model response must be a JSON object")
+        # Conversational local models commonly emit a compact finish/response
+        # envelope even when asked for the tool-loop contract. Preserve that
+        # response verbatim while translating it into EEEE's typed envelope;
+        # project/tool responses still go through strict validation below.
+        if "summary" not in decoded and isinstance(decoded.get("response"), str):
+            if decoded.get("action") == "finish":
+                decoded = {
+                    "summary": decoded["response"],
+                    "actions": [{"kind": "finish"}],
+                    "done": True,
+                    "next_prompt": None,
+                }
+        return LocalModelResponse.model_validate(decoded)
 
 
 class LocalAgentRuntime:
@@ -171,7 +196,10 @@ class LocalAgentRuntime:
     @staticmethod
     def _initial_prompt(request: AgentRequest) -> str:
         return (
-            "Return JSON matching LocalModelResponse. Choose only read, write, run, or finish actions. "
+            "Return exactly one JSON object with this schema and no other keys: "
+            '{"summary":"short Korean answer","actions":[{"kind":"finish"}],"done":true,"next_prompt":null}. '
+            "For ordinary conversation, put the natural Korean reply in summary and finish immediately. "
+            "For work, choose only read, write, run, or finish actions. "
             "Never use shell strings, network, package installation, deletion, or paths outside the workspace.\n"
             f"Run ID: {request.run_id}\nTask: {request.prompt}"
         )
@@ -204,3 +232,33 @@ class LocalAgentRuntime:
     @staticmethod
     def _failed(error: str) -> AgentResult:
         return AgentResult(status="failed", summary="Local agent unavailable", events=[], changed_files=[], test_commands=[], error=error)
+
+
+class LocalConversationRuntime:
+    """Single-turn local chat lane with no workspace tools or side effects."""
+
+    def __init__(self, *, backend: LocalModelBackend) -> None:
+        self.backend = backend
+
+    def run(self, request: AgentRequest) -> AgentResult:
+        prompt = (
+            "You are EEEE, a natural Korean desktop assistant. This is ordinary conversation only. "
+            "Do not read or change files, run commands, plan a project, or call tools. "
+            "Answer the user's message directly and helpfully. If the user asks what you can do, "
+            "briefly explain EEEE's capabilities. Do not refuse ordinary safe questions. "
+            "Return exactly one JSON object with no extra keys: "
+            '{"summary":"your natural Korean reply","actions":[{"kind":"finish"}],"done":true,"next_prompt":null}. '
+            f"User message: {request.prompt}"
+        )
+        try:
+            response = self.backend.complete(prompt, workspace=request.workspace, context=[])
+        except Exception as exc:
+            return AgentResult(
+                status="unavailable", summary="Local conversation provider failed",
+                events=[], changed_files=[], test_commands=[], error=str(exc),
+            )
+        return AgentResult(
+            status="completed", summary=response.summary,
+            events=[{"type": "local.conversation", "provider": "ollama"}],
+            changed_files=[], test_commands=[], error=None,
+        )

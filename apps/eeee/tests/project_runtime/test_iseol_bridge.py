@@ -83,3 +83,15 @@ def test_bridge_process_boundary_is_utf8(monkeypatch) -> None:
     assert captured["encoding"] == "utf-8"
     assert captured["errors"] == "strict"
     assert json.loads(output)["projectId"] == "project-1"
+
+
+def test_frozen_desktop_uses_bundled_iseol_planner(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(bridge_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(bridge_module.sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    bridge = IseolPlanBridge()
+
+    assert bridge.command == [
+        "node",
+        str(tmp_path / "chatgpt-runtime" / "agent-organization" / "plan-cli.js"),
+    ]

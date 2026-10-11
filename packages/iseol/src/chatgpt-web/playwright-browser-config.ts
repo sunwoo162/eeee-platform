@@ -17,6 +17,7 @@ export type PlaywrightBrowserDriverConfig =
       profileRoot: string;
       executablePath?: string;
       headless: boolean;
+      cdpUrl?: string;
       lifecycleRoot?: string;
     };
 
@@ -61,5 +62,6 @@ export function resolvePlaywrightBrowserDriverConfig(
   assertSafeProfileRoot(profileRoot, roots);
   const executablePath = env.ISEOL_CHATGPT_BROWSER_EXECUTABLE?.trim() || undefined;
   const headless = strictBoolean(env.ISEOL_CHATGPT_BROWSER_HEADLESS, false, "ISEOL_CHATGPT_BROWSER_HEADLESS");
-  return { enabled: true, profileRoot, ...(executablePath ? { executablePath } : {}), headless, ...(roots.chatGptWebRoot ? { lifecycleRoot: roots.chatGptWebRoot } : {}) };
+  const cdpUrl = env.ISEOL_CHATGPT_BROWSER_CDP_URL?.trim() || undefined;
+  return { enabled: true, profileRoot, ...(executablePath ? { executablePath } : {}), headless, ...(cdpUrl ? { cdpUrl } : {}), ...(roots.chatGptWebRoot ? { lifecycleRoot: roots.chatGptWebRoot } : {}) };
 }

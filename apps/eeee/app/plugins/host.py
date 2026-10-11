@@ -1,5 +1,7 @@
 """Isolated local plugin lifecycle and subprocess transport."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 import subprocess
@@ -7,6 +9,7 @@ import sys
 from uuid import uuid4
 
 from app.contracts import ExecutionEnvelope, ExecutionError, ExecutionStatus
+from app.assistant.models import CapabilityDescriptor
 from app.plugins.manifest import discover_manifest
 from app.plugins.models import PluginHealth, PluginManifest
 from app.plugins.protocol import request, validate_response
@@ -112,6 +115,46 @@ class PluginHost:
 
     def list(self):
         return self.registrations.list()
+
+    def routing_capabilities(self) -> list[CapabilityDescriptor]:
+        """Return only capabilities safe for automatic EEEE routing right now."""
+        projected: list[CapabilityDescriptor] = []
+        for registration in self.registrations.list(status="connected"):
+            manifest = self._manifest(registration.plugin_id, registration.manifest)
+            health = self._health_probe(manifest)
+            if health.status != "healthy":
+                if registration.status == "connected":
+                    self.registrations.set_status(registration.plugin_id, "failed")
+                continue
+            for capability in manifest.capabilities:
+                projected.append(CapabilityDescriptor(
+                    id=f"plugin:{manifest.id}:{capability.id}",
+                    version=capability.version,
+                    display_name=capability.display_name,
+                    intents=capability.intents,
+                    trigger_phrases=capability.trigger_phrases,
+                    required_connectors=[f"plugin:{manifest.id}"],
+                    side_effect_level=capability.side_effect_level,
+                    approval_level=capability.approval_level,
+                    claim_latch_policy="claimlatch-v0.2.0",
+                    memory_writable=False,
+                ))
+        return projected
+
+    def invoke_capability(self, capability_id: str, value: dict[str, object]) -> tuple[str, ExecutionEnvelope]:
+        """Resolve a projected capability and invoke its declared plugin action."""
+        prefix = "plugin:"
+        if not capability_id.startswith(prefix):
+            raise KeyError(f"Not a plugin capability: {capability_id}")
+        _, plugin_id, manifest_capability_id = capability_id.split(":", 2)
+        registration = self.registrations.get(plugin_id)
+        manifest = self._manifest(plugin_id, registration.manifest)
+        capability = next((item for item in manifest.capabilities if item.id == manifest_capability_id), None)
+        if capability is None:
+            raise KeyError(f"Plugin capability not found: {capability_id}")
+        if not any(item.id == capability_id for item in self.routing_capabilities()):
+            raise PermissionError("plugin capability is not connected and healthy")
+        return plugin_id, self.invoke(plugin_id, capability.action_id, value)
 
     def _manifest(self, plugin_id: str, data: dict) -> PluginManifest:
         return self._manifests.get(plugin_id) or PluginManifest.model_validate(data)

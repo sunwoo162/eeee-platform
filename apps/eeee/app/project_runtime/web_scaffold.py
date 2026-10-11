@@ -29,6 +29,41 @@ python apps/api/server.py
 - `packages/db`: SQLite/production DB 교체 지점
 - `DEPLOYMENT.md`: 배포 전 설정과 검증 절차
 """,
+        "DESIGN.md": """# 웹앱 디자인·구조 결정
+
+- Stayfolio 계열의 카드와 넓은 여백을 사용하되, 작업 생성·완료·수정·삭제 상태를 우선한다.
+- 한국어를 기본으로 하고, 320px·390px·768px·1440px에서 정보 순서가 유지되도록 한다.
+- `apps/web/src`는 app/pages/entities/shared 경계를 유지하고, API 호출은 shared API 모듈을 통과한다.
+- Demo 로그인은 실제 OAuth 성공으로 표시하지 않으며 production credential이 없으면 `awaiting_configuration`으로 남긴다.
+""",
+        "PROJECT_LOG.md": """# 프로젝트 작업 기록
+
+## 결정
+
+- 로컬에서 외부 credential 없이 실행 가능한 demo auth와 SQLite를 기본으로 선택했다.
+- production OAuth·DB는 connector 설정과 독립 QA가 끝나기 전까지 완료로 표시하지 않는다.
+
+## 트러블슈팅
+
+- 인증과 데이터 연결이 없는 상태를 로그인 성공으로 위장하지 않도록 health/session 응답에 모드를 남긴다.
+- 사용자 입력은 API에서 검증하고 화면에서는 `textContent`로 렌더링한다.
+""",
+        "tests/e2e/web-flow.md": """# Web E2E 시나리오
+
+1. health와 demo session을 확인한다.
+2. Todo 생성·조회·완료·수정·삭제를 확인한다.
+3. 검색·필터·통계를 확인한다.
+4. 새로고침 후 SQLite 데이터가 유지되는지 확인한다.
+5. Google OAuth가 설정되지 않은 상태는 `awaiting_configuration`으로 표시되는지 확인한다.
+6. 320px, 390px, 768px, 1440px에서 읽기 순서와 키보드 포커스를 확인한다.
+""",
+        "tests/integration/api-contract.md": """# API 통합 계약
+
+- `GET /api/health`는 실행 모드와 인증 설정 상태를 반환한다.
+- 로그인 전 Todo API는 `401 login_required`를 반환한다.
+- 빈 제목은 `400 title_required`로 거부한다.
+- Todo CRUD 후 통계가 동일한 데이터로 갱신된다.
+""",
         ".env.example": """# Local mode is safe without provider credentials.
 APP_ENV=local
 API_HOST=127.0.0.1

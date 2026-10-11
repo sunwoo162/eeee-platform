@@ -17,6 +17,30 @@ build\desktop\GleaveDesktop.exe --self-test
 
 The widget is always-on-top, draggable, interactive, and can hide to or restore from the system tray. It talks only to the local EEEE API. Notion, Google Calendar, and GitHub CI/code review are optional provider adapters; ISEOL runs locally and Discord is not a required runtime dependency.
 
+## EEEE general conversation engine
+
+EEEE uses the ISEOL ChatGPT Web bridge for general conversation when
+`CHATGPT_WEB_ENABLED=true` and `CHATGPT_WEB_BRIDGE_URL` points to the loopback
+bridge. The bridge owns a dedicated persistent browser profile and the user
+logs into ChatGPT Web once in that profile; EEEE never receives the profile's
+cookies, passwords, or tokens. The browser adapter checks authentication,
+conversation identity, response extraction, and ChatGPT usage-limit states.
+
+This is browser-session usage, not an OpenAI API integration: it does not add
+API token billing, but it still consumes the user's ChatGPT plan allowance and
+can be blocked by that plan's limits. If the bridge is enabled but unavailable,
+EEEE returns a blocked connection state instead of pretending that a fixed
+fallback response came from GPT. When the bridge is disabled, the local
+deterministic fallback is only a development mode and is not a live GPT
+conversation.
+
+For automatic local startup, set `CHATGPT_WEB_ENABLED=true`,
+`CHATGPT_WEB_AUTOSTART=true`, and choose a dedicated profile directory in
+`CHATGPT_WEB_PROFILE_ROOT`. Set `CHATGPT_WEB_HEADLESS=false` for the first run;
+the opened ChatGPT Web window is where the user completes the normal login.
+After login, the same profile is reused on later launches. The profile must be
+dedicated to Gleave and must not be the user's active everyday Chrome profile.
+
 Desktop's companion exposes the quick EEEE command input and opens the existing
 browser workbench as the primary project surface. The browser UI calls
 `POST /api/assistant/route`; after a project is created, Desktop refreshes

@@ -1,4 +1,4 @@
-import { chromium, type BrowserContext, type Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { PlaywrightBrowserDriverConfig } from "./playwright-browser-config.js";
@@ -37,8 +37,8 @@ const TEMPORARY_RESTRICTION_TEXT = /(?:too many requests|sending requests too qu
 const CONVERSATION_LIMIT_TEXT = /(?:maximum length for this conversation|reached.{0,20}(?:maximum length|limit).{0,20}(?:for )?this conversation|this conversation.{0,30}(?:has )?reached.{0,20}(?:maximum length|limit)|conversation.{0,30}(?:maximum length|limit).{0,20}reached|이 대화.{0,30}(?:최대 길이|한도).{0,20}(?:도달|초과))/i;
 const USAGE_LIMIT_TEXT = /(?:you(?:\x27|’)ve reached (?:your )?.{0,40}(?:message|model|usage|plan|gpt-[a-z0-9._-]+)?.{0,20}limit|(?:message|model|usage|plan|gpt-[a-z0-9._-]+).{0,30}limit.{0,20}(?:reached|reset|try again)|(?:메시지|모델|사용|사용량|계정|gpt-[a-z0-9._-]+).{0,20}(?:한도|제한).{0,20}(?:도달|초과))/i;
 const TEMPORARY_DISMISS_TEXT = /^(?:알겠습니다|확인|got it|ok|okay)$/i;
-const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
-const COPY_SELECTOR = 'button[data-testid="copy-turn-action-button"]';
+const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"], [data-markdown-text-style="assistant-message"]';
+const COPY_SELECTOR = 'button[data-testid="copy-turn-action-button"], button[aria-label="메시지 복사"], button[aria-label="Copy"]';
 const ASSISTANT_CONTROL_SELECTOR = 'button, [role="button"], [role="toolbar"], [data-testid*="action"], [aria-hidden="true"]';
 const COPY_CAPTURE_TIMEOUT_MS = 2_000;
 const INSTALL_CLIPBOARD_CAPTURE_SCRIPT = `(() => {
@@ -89,7 +89,20 @@ const RESTORE_CLIPBOARD_CAPTURE_SCRIPT = `(() => {
   delete globalThis.__iseolClipboardCapture;
 })()`;
 
-const GENERATING_SELECTOR = 'button[data-testid="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop"]';
+// ChatGPT's current Korean UI exposes the active generation control as
+// aria-label="중지". Keep the older English/test-id variants because the
+// browser profile language can differ between installations. Missing this
+// control makes a freshly submitted response look stable too early and can
+// cause the structured-result reader to wait until its full timeout.
+const GENERATING_SELECTOR = 'button[data-testid="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop"], button[aria-label="중지"]';
+const PRIMARY_ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
+const FALLBACK_ASSISTANT_SELECTOR = '[data-markdown-text-style="assistant-message"]';
+
+async function assistantLocator(page: Page) {
+  const primary = page.locator(PRIMARY_ASSISTANT_SELECTOR);
+  if (await primary.count() > 0) return primary;
+  return page.locator(FALLBACK_ASSISTANT_SELECTOR);
+}
 
 export type AssistantTextReadCallPoint =
   | "assistant-locator-count"
@@ -141,11 +154,31 @@ export async function createPlaywrightBrowserBackend(
 ): Promise<PlaywrightBrowserBackend> {
   const launchPersistentContext = deps.launchPersistentContext
     ?? ((profileRoot, options) => chromium.launchPersistentContext(profileRoot, options));
-  const context = await launchPersistentContext(config.profileRoot, {
-    ...(config.executablePath ? { executablePath: config.executablePath } : {}),
-    headless: config.headless,
+  let connectedBrowser: Browser | null = null;
+  let ownsContext = true;
+  let context: BrowserContext;
+  if (config.cdpUrl) {
+    connectedBrowser = await chromium.connectOverCDP(config.cdpUrl);
+    context = connectedBrowser.contexts()[0] ?? await connectedBrowser.newContext();
+    ownsContext = false;
+  } else {
+    context = await launchPersistentContext(config.profileRoot, {
+      ...(config.executablePath ? { executablePath: config.executablePath } : {}),
+      headless: config.headless,
+    });
+  }
+  // Reuse the existing ChatGPT page in the persistent profile. Creating a
+  // fresh page on every Desktop restart used to leave duplicate ChatGPT tabs
+  // behind and made the active composer ambiguous.
+  const existingPages = typeof (context as any).pages === "function" ? context.pages() : [];
+  const chatGptPages = existingPages.filter((candidate) => {
+    try { return new URL(candidate.url()).origin === "https://chatgpt.com"; }
+    catch { return false; }
   });
-  let page: Page | null = await context.newPage();
+  let page: Page | null = chatGptPages[0] ?? await context.newPage();
+  await Promise.all(chatGptPages.slice(1).map(async (duplicate) => {
+    try { await duplicate.close(); } catch { /* stale tabs are harmless */ }
+  }));
   let disposed = false;
   const lifecycleFile = config.lifecycleRoot ? resolve(config.lifecycleRoot, "web-workers", "lifecycle.jsonl") : null;
   let lifecycleWrites = Promise.resolve();
@@ -207,13 +240,15 @@ export async function createPlaywrightBrowserBackend(
       const primaryCount = await primary.count();
       if (primaryCount > 1) throw new Error("send control ambiguous");
       if (primaryCount === 1) { await primary.click(); return; }
-      const semantic = owned.locator('button[aria-label="Send prompt"], button[aria-label="Send message"], button[aria-label="Send"]');
+      const semantic = owned.locator(
+        'button[aria-label="Send prompt"], button[aria-label="Send message"], button[aria-label="Send"], button[aria-label="보내기"], button[aria-label="전송"]'
+      );
       if (await semantic.count() !== 1) throw new Error("send control unavailable or ambiguous");
       await semantic.click();
     },
-    async assistantMessageCount() { return (await ownedPage()).locator(ASSISTANT_SELECTOR).count(); },
+    async assistantMessageCount() { return (await assistantLocator(await ownedPage())).count(); },
     async latestAssistantText() {
-      const assistant = (await ownedPage()).locator(ASSISTANT_SELECTOR);
+      const assistant = await assistantLocator(await ownedPage());
       let count: number;
       try {
         count = await assistant.count();
@@ -247,7 +282,7 @@ export async function createPlaywrightBrowserBackend(
       return typeof text === "string" && text.trim() ? text : null;
     },
     async latestAssistantDomText() {
-      const assistant = (await ownedPage()).locator(ASSISTANT_SELECTOR);
+      const assistant = await assistantLocator(await ownedPage());
       let count: number;
       try {
         count = await assistant.count();
@@ -282,11 +317,14 @@ export async function createPlaywrightBrowserBackend(
     },
     async latestAssistantRawText() {
       const owned = await ownedPage();
-      const assistant = owned.locator(ASSISTANT_SELECTOR);
+      const assistant = await assistantLocator(owned);
       if (await assistant.count() === 0) return null;
-      const turn = assistant.last().locator('xpath=ancestor::*[.//button[@data-testid="copy-turn-action-button"]][1]');
+      const turn = assistant.last().locator('xpath=ancestor::*[.//button[@data-testid="copy-turn-action-button" or @aria-label="메시지 복사" or @aria-label="Copy"]][1]');
       if (await turn.count() !== 1) throw new Error("assistant turn copy control unavailable or ambiguous");
-      const copy = turn.locator(COPY_SELECTOR);
+      const primaryCopy = turn.locator('button[data-testid="copy-turn-action-button"]');
+      const copy = await primaryCopy.count() > 0
+        ? primaryCopy
+        : turn.locator('button[aria-label="메시지 복사"], button[aria-label="Copy"]');
       if (await copy.count() !== 1) throw new Error("assistant copy control unavailable or ambiguous");
       await owned.evaluate(INSTALL_CLIPBOARD_CAPTURE_SCRIPT);
       let primaryError: unknown;
@@ -320,7 +358,8 @@ export async function createPlaywrightBrowserBackend(
       if (disposed) return;
       disposed = true;
       page = null;
-      await context.close();
+      if (ownsContext) await context.close();
+      else (connectedBrowser as (Browser & { disconnect?: () => void }) | null)?.disconnect?.();
       lifecycle("context-disposed");
       await lifecycleWrites;
     },

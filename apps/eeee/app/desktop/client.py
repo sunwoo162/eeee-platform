@@ -8,12 +8,21 @@ class ApiError(RuntimeError):
 
 
 class PetApiClient:
-    def __init__(self, base_url: str = "http://127.0.0.1:8000", project_id: str = "default"):
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8000",
+        project_id: str = "default",
+        *,
+        assistant_timeout_seconds: float = 180.0,
+    ):
         self.base_url = base_url.rstrip("/")
         self.project_id = project_id
+        self.assistant_timeout_seconds = assistant_timeout_seconds
 
-    def _request(self, method: str, path: str, **kwargs) -> dict[str, object]:
-        response = httpx.request(method, f"{self.base_url}{path}", timeout=5.0, **kwargs)
+    def _request(
+        self, method: str, path: str, *, timeout: float = 5.0, **kwargs
+    ) -> dict[str, object]:
+        response = httpx.request(method, f"{self.base_url}{path}", timeout=timeout, **kwargs)
         if response.is_error:
             try:
                 detail = response.json().get("detail", response.text)
@@ -45,13 +54,21 @@ class PetApiClient:
         payload: dict[str, object] = {"text": text}
         if workspace is not None:
             payload["workspace"] = workspace
-        return self._request("POST", "/api/assistant/route", json=payload)
+        return self._request(
+            "POST", "/api/assistant/route", json=payload,
+            timeout=self.assistant_timeout_seconds,
+        )
 
     def open_project(self, project_id: str) -> dict[str, object]:
         """Load the durable organization map for a project in the Desktop view."""
         if not project_id.strip():
             raise ValueError("project_id is required")
         return self._request("GET", f"/api/projects/{project_id}/map")
+
+    def get_assistant_job(self, job_id: str) -> dict[str, object]:
+        if not job_id.strip():
+            raise ValueError("job_id is required")
+        return self._request("GET", f"/api/assistant/jobs/{job_id}")
 
     def issue_pairing_code(self) -> dict[str, object]:
         return self._request("POST", "/api/desktop/pairing/code")

@@ -11,7 +11,8 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from app.assistant.models import AssistantContext, AssistantRequest, CapabilityDescriptor, CapabilityPlan
-from app.agent.protocol import AgentRuntime
+from app.agent.protocol import AgentRequest, AgentRuntime
+from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
 from app.config import Settings
 from app.contracts import ExecutionEnvelope, ExecutionError, ExecutionStatus, SideEffectLevel
 from app.coordinator.service import Coordinator
@@ -70,6 +71,103 @@ class LocalPlanningCapability:
             "plan": plan.model_dump(mode="json"),
             "context": envelope_context.assistant_context.model_dump(mode="json"),
         })
+
+
+class GeneralConversationCapability:
+    """Keep EEEE useful when no specialized capability is required."""
+
+    def __init__(self, descriptor: CapabilityDescriptor, *, runtime: AgentRuntime | None = None,
+                 workspace_root: Path | None = None,
+                 chatgpt_web_enabled: bool = False) -> None:
+        self.descriptor = descriptor
+        if runtime is None:
+            # A fresh installation must still be conversational immediately.
+            # This bounded offline lane handles common turns without pretending
+            # to be a full LLM; complex questions remain eligible for Web/local
+            # provider escalation when one is configured.
+            from app.agent.hybrid_runtime import FastLocalConversationRuntime
+
+            runtime = FastLocalConversationRuntime()
+        self.runtime = runtime
+        self.workspace_root = workspace_root or Path.cwd()
+        self.chatgpt_web_enabled = chatgpt_web_enabled
+
+    def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
+        return CapabilityPlan(
+            capability_id=self.descriptor.id,
+            summary=request.raw_text,
+            inputs={
+                "text": request.raw_text,
+                "workspace": request.context.get("workspace"),
+                "memoryIds": context.memory_ids,
+                "qaBaselineIds": context.qa_baseline_ids,
+                "userPreferences": context.user_preferences,
+                "memoryContext": context.memory_context,
+                "chatgptWebEnabled": self.chatgpt_web_enabled,
+            },
+            side_effect_level=self.descriptor.side_effect_level,
+            requires_approval=False,
+        )
+
+    def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
+        if self.runtime is not None:
+            workspace_value = plan.inputs.get("workspace")
+            workspace = Path(workspace_value) if isinstance(workspace_value, str) and workspace_value else (
+                self.workspace_root / "assistant"
+            )
+            # General conversation uses the same bounded local runtime as the
+            # project lane, but it does not have a provisioner step that would
+            # create the default workspace first. Create that private runtime
+            # directory at the capability boundary so a real local model can
+            # answer ordinary chat without being rejected by workspace safety.
+            workspace.mkdir(parents=True, exist_ok=True)
+            result = self.runtime.run(AgentRequest(
+                prompt=(
+                    f"사용자 요청: {plan.inputs['text']}\n"
+                    f"사용자 기억 식별자: {json.dumps({
+                        'memoryIds': plan.inputs.get('memoryIds', []),
+                        'qaBaselineIds': plan.inputs.get('qaBaselineIds', []),
+                        'userPreferences': plan.inputs.get('userPreferences', {}),
+                    }, ensure_ascii=False, sort_keys=True)}\n"
+                    f"관련 기억 내용: {plan.inputs.get('memoryContext', '{}')}"
+                ),
+                workspace=workspace,
+                allowed_actions=["read"], run_id=envelope_context.envelope.execution_id,
+            ))
+            if result.status == "completed":
+                return CapabilityOutcome({
+                    "status": "completed", "capabilityStatus": "completed",
+                    "message": result.summary,
+                    "runtimeStatus": result.status, "events": result.events,
+                })
+            status = ExecutionStatus.FAILED if result.status == "failed" else ExecutionStatus.BLOCKED
+            message = result.error or "실제 AI 응답을 사용할 수 없어."
+            if "no local or chatgpt web provider" in message.casefold():
+                message = "로컬 AI를 설치하거나 ChatGPT Web을 연결하면 EEEE가 대화할 수 있어."
+            return CapabilityOutcome({
+                "status": "blocked", "capabilityStatus": result.status,
+                "message": message,
+                "runtimeStatus": result.status,
+            }, status, ExecutionError(code="assistant_runtime_unavailable", message=result.error or result.status))
+        if plan.inputs.get("chatgptWebEnabled"):
+            return CapabilityOutcome({
+                "status": "blocked",
+                "capabilityStatus": "blocked",
+                "message": "ChatGPT Web 연결이 설정되지 않았어. 브라우저 연결을 먼저 완료해줘.",
+                "runtimeStatus": "unavailable",
+            }, ExecutionStatus.BLOCKED, ExecutionError(
+                code="chatgpt_web_bridge_unavailable",
+                message="ChatGPT Web bridge is not configured",
+            ))
+        return CapabilityOutcome({
+            "status": "blocked",
+            "capabilityStatus": "blocked",
+            "message": "로컬 AI를 설치하거나 ChatGPT Web을 연결하면 EEEE가 대화할 수 있어.",
+            "context": envelope_context.assistant_context.model_dump(mode="json"),
+        }, ExecutionStatus.BLOCKED, ExecutionError(
+            code="no_ai_provider_configured",
+            message="No local or ChatGPT Web provider is configured",
+        ))
 
 
 class UserPreferenceCapability:
@@ -193,7 +291,14 @@ class ProjectExecutionCapability:
                     runtime=self.agent_runtime,
                     trust_pipeline=self.coordinator.trust_pipeline,
                     workspace=Path(project.workspace),
+                    max_parallelism=getattr(self.agent_runtime, "max_parallelism", 3),
+                    checkpoint_path=Path(project.workspace) / ".gleave" / "iseol-checkpoint.json",
                 ).execute(AgentGraph.model_validate(agent_graph), _child)
+                _persist_agent_execution_report(
+                    Path(provisioned.execution_plan_path) if provisioned.execution_plan_path else None,
+                    Path(project.workspace) / "PROJECT_LOG.md",
+                    agent_execution_report.model_dump(mode="json", by_alias=True),
+                )
                 if agent_execution_report.status != "completed":
                     return CapabilityOutcome(
                         {
@@ -201,6 +306,10 @@ class ProjectExecutionCapability:
                             "message": "ISEOL specialist agent graph did not pass all handoff gates",
                             "projectId": project.id,
                             "projectRevision": project.revision,
+                            "projectProfile": provisioned.profile.model_dump(mode="json"),
+                            "executionPlanPath": provisioned.execution_plan_path,
+                            "planningSessionId": planning_handoff.planning_session_id,
+                            "planningHandoffId": planning_handoff.handoff_id,
                             "agentGraph": agent_graph,
                             "agentExecutionReport": agent_execution_report.model_dump(mode="json", by_alias=True),
                         },
@@ -380,3 +489,39 @@ def _read_agent_graph(path: str | None) -> dict[str, Any]:
     return graph if isinstance(graph, dict) and isinstance(graph.get("agents"), list) else {
         "schemaVersion": "iseol-agent-graph.v1", "agents": []
     }
+
+
+def _persist_agent_execution_report(
+    plan_path: Path | None,
+    log_path: Path,
+    report: dict[str, Any],
+) -> None:
+    """Persist specialist handoffs beside the plan and human-readable log."""
+    if plan_path is not None and plan_path.is_file():
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        if not isinstance(plan, dict):
+            raise ValueError("execution-plan.json must contain an object")
+        plan["agentExecutionReport"] = report
+        plan_path.write_text(
+            json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+    agents = report.get("agents", [])
+    lines = [
+        "",
+        "## ISEOL specialist execution",
+        f"- Graph: `{report.get('graphVersion', 'unknown')}`",
+        f"- Status: `{report.get('status', 'unknown')}`",
+    ]
+    for agent in agents if isinstance(agents, list) else []:
+        if not isinstance(agent, dict):
+            continue
+        evidence = ", ".join(str(item) for item in agent.get("evidenceIds", [])) or "none"
+        changed = ", ".join(str(item) for item in agent.get("changedFiles", [])) or "none"
+        lines.extend([
+            f"- {agent.get('agentId', 'unknown')}: {agent.get('status', 'unknown')} — {agent.get('reason', '')}",
+            f"  - evidence: {evidence}",
+            f"  - changed files: {changed}",
+        ])
+    with log_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write("\n".join(lines) + "\n")

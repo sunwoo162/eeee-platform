@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,12 @@ class IseolPlanBridge:
         timeout: float = 30.0,
         runner: Runner | None = None,
     ) -> None:
-        repo_root = Path(__file__).resolve().parents[4]
-        default_cli = repo_root / "packages" / "iseol" / "dist" / "agent-organization" / "plan-cli.js"
+        if getattr(sys, "frozen", False):
+            bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+            default_cli = bundle_root / "chatgpt-runtime" / "agent-organization" / "plan-cli.js"
+        else:
+            repo_root = Path(__file__).resolve().parents[4]
+            default_cli = repo_root / "packages" / "iseol" / "dist" / "agent-organization" / "plan-cli.js"
         self.command = list(command or ["node", str(default_cli)])
         self.timeout = timeout
         self.runner = runner or self._run

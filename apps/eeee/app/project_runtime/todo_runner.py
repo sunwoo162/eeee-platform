@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app.release.manifest import build_release_manifest
+from app.iseol.quality import ProductQualityProfile
 from app.project_runtime.git_workspace import GitWorkspaceError, record_workspace
 
 
@@ -56,6 +57,8 @@ class TodoProjectRunner:
         "src/shared/lib/storage.js",
         "src/shared/ui/styles.css",
         "tests/e2e/todo-flow.md",
+        "tests/unit/todo-model.test.mjs",
+        "tests/integration/storage-contract.md",
     )
     javascript_files = tuple(path for path in required_files if path.endswith(".js"))
 
@@ -105,6 +108,11 @@ class TodoProjectRunner:
         }
         qa_path = root / "QA_REPORT.json"
         qa_path.write_text(json.dumps(qa_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        quality = ProductQualityProfile.portfolio_grade().evaluate(root, require_release_evidence=False)
+        if quality.decision != "PASS":
+            raise ValueError("Portfolio quality profile failed: " + "; ".join(check.message for check in quality.checks if check.status == "BLOCK"))
+        qa_report["qualityProfile"] = quality.model_dump(mode="json")
+        qa_path.write_text(json.dumps(qa_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         artifacts = [
             {"id": "todo-source", "path": "src", "evidence_ids": evidence_ids},
             {"id": "todo-qa", "path": "QA_REPORT.json", "evidence_ids": evidence_ids},
@@ -140,6 +148,14 @@ class TodoProjectRunner:
             json.dumps(manifest.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        quality = ProductQualityProfile.portfolio_grade().evaluate(Path(workspace).resolve())
+        if quality.decision != "PASS":
+            return TodoRunResult(
+                status="BLOCKED",
+                reason="Portfolio quality profile did not PASS: " + "; ".join(check.message for check in quality.checks if check.status == "BLOCK"),
+                qa_report_path=prepared.qa_report_path,
+                release_manifest_path=str(manifest_path),
+            )
         try:
             git = record_workspace(
                 workspace, project_id=project_id,
@@ -180,6 +196,11 @@ class TodoProjectRunner:
             package.get("scripts", {}).get("start") == "python -m http.server 4173",
             package_path,
         ))
+        checks.append(self._check(
+            "package:test-script",
+            package.get("scripts", {}).get("test") == "node --test tests/unit/todo-model.test.mjs",
+            package_path,
+        ))
         main = root / "src/app/main.js"
         checks.append(self._check("todo:dom-mount", "renderTodoPage" in self._read(main), main))
         checks.append(self._check("todo:persistence", "localStorage" in self._read(root / "src/shared/lib/storage.js"), root / "src/shared/lib/storage.js"))
@@ -200,6 +221,13 @@ class TodoProjectRunner:
                     check=False,
                 )
                 checks.append(self._check("syntax:" + relative, completed.returncode == 0, path, completed.stderr.strip()))
+        unit_test = subprocess.run(
+            ["node", "--test", str(root / "tests/unit/todo-model.test.mjs")],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        checks.append(self._check("unit:todo-model", unit_test.returncode == 0, root / "tests/unit/todo-model.test.mjs", unit_test.stdout.strip() or unit_test.stderr.strip()))
         e2e = root / "tests/e2e/todo-flow.md"
         scenario = self._read(e2e).lower()
         checks.append(self._check("e2e:scenario", all(token in scenario for token in ("새로고침", "삭제", "수정", "반응형", "검색")), e2e))

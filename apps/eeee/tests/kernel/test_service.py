@@ -108,6 +108,21 @@ def test_non_project_and_explicit_capability_requests_do_not_allocate_project(tm
         assert connection.execute("SELECT COUNT(*) FROM execution_envelopes").fetchone()[0] == 2
 
 
+def test_general_conversation_is_handled_by_eeee_without_project_allocation(tmp_path):
+    kernel, store, _ = make_kernel(tmp_path)
+
+    result = kernel.route(
+        AssistantRequest(raw_text="안녕, 오늘 기분이 어때?"), AssistantContext()
+    )
+
+    assert result.capability_id == "general-conversation"
+    assert result.output["status"] == "completed"
+    assert result.output["capabilityStatus"] == "completed"
+    assert result.output["projectId"] is None if "projectId" in result.output else True
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+
+
 def test_explicit_user_preference_is_saved_and_reused_on_next_request(tmp_path):
     kernel, store, _ = make_kernel(tmp_path)
 
@@ -191,8 +206,10 @@ def test_create_app_wires_one_kernel_and_builtin_handlers_without_plugins(tmp_pa
 def test_english_trigger_inside_unrelated_word_does_not_create_project(tmp_path):
     kernel, store, _ = make_kernel(tmp_path)
     result = kernel.route(AssistantRequest(raw_text="I am happy"), AssistantContext())
-    assert result.status == ExecutionStatus.BLOCKED
-    assert result.output["status"] == "needs_clarification"
+    assert result.status == ExecutionStatus.COMPLETED
+    assert result.capability_id == "general-conversation"
+    assert result.capability_id == "general-conversation"
+    assert result.output["capabilityStatus"] == "completed"
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
     project = kernel.route(AssistantRequest(raw_text="Build a todo app"), AssistantContext())

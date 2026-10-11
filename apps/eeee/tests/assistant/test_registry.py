@@ -47,6 +47,7 @@ def test_default_registry_contains_the_initial_eeee_capabilities() -> None:
     registry = build_default_registry()
 
     assert {item.id for item in registry.list()} == {
+        "general-conversation",
         "personal-secretary",
         "project-execution",
         "knowledge-documents",
@@ -65,3 +66,19 @@ def test_registry_can_bind_a_runtime_handler_without_changing_descriptor() -> No
 
     assert registry.resolve("example").handler is handler
     assert registry.resolve("example").descriptor is metadata
+
+
+def test_registry_projects_dynamic_plugin_capabilities_without_plugin_imports() -> None:
+    from app.assistant.models import CapabilityDescriptor
+
+    registry = CapabilityRegistry()
+    registry.register(descriptor(), None)
+    plugin_descriptor = CapabilityDescriptor(
+        id="plugin:echo:search", version="1.0.0", display_name="Echo Search",
+        intents=["search"], trigger_phrases=["echo search"], required_connectors=["plugin:echo"],
+        side_effect_level="none", approval_level="none", claim_latch_policy="claimlatch-v0.2.0",
+    )
+    registry.set_dynamic_provider(lambda: [plugin_descriptor])
+
+    assert registry.resolve("plugin:echo:search").descriptor is plugin_descriptor
+    assert {item.id for item in registry.list()} == {"example", "plugin:echo:search"}

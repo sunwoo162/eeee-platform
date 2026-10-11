@@ -1,9 +1,37 @@
 """PySide6 desktop companion window."""
 
+from pathlib import Path
+import time
+
 from app.desktop.client import PetApiClient
 from app.desktop.presentation import PetPresentation
 from app.desktop.session import DesktopSession
 from app.desktop.worker import QtTaskRunner
+from app.assistant.profile import DEFAULT_PROFILE, load_profile, save_profile
+
+
+def _force_windows_topmost(widget) -> None:
+    """Reassert TOPMOST for the pet after another Windows app gains focus."""
+    import sys
+
+    if sys.platform != "win32" or not widget.isVisible():
+        return
+    try:
+        import ctypes
+
+        hwnd = int(widget.winId())
+        ctypes.windll.user32.SetWindowPos(
+            hwnd,
+            -1,  # HWND_TOPMOST
+            0,
+            0,
+            0,
+            0,
+            0x0001 | 0x0002 | 0x0040,  # NOSIZE | NOMOVE | SHOWWINDOW
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        # Qt's WindowStaysOnTopHint remains the portable fallback.
+        return
 
 
 _DESKTOP_TEXT = {
@@ -11,7 +39,7 @@ _DESKTOP_TEXT = {
         "window_title": "EEEE • Gleave",
         "language": "언어",
         "ready": "준비됨",
-        "start_hint": "무엇을 도와드릴까요?",
+        "start_hint": "",
         "project_none": "프로젝트: 선택되지 않음",
         "runtime_none": "실행 프로필: 선택되지 않음",
         "runtime_prefix": "실행 프로필",
@@ -28,7 +56,7 @@ _DESKTOP_TEXT = {
         "open_workspace": "Gleave 워크스페이스 열기",
         "hide": "트레이로 숨기기",
         "connecting": "로컬 EEEE 코디네이터에 연결 중…",
-        "assistant_busy": "EEEE가 가장 적합한 기능을 선택하는 중…",
+        "assistant_busy": "잠깐만, 생각하는 중이야…",
         "pairing_busy": "짧은 휴대폰 연결 코드를 발급하는 중…",
         "project_prefix": "프로젝트",
         "claim_prefix": "ClaimLatch",
@@ -52,7 +80,7 @@ _DESKTOP_TEXT = {
         "window_title": "EEEE • Gleave",
         "language": "Language",
         "ready": "Ready",
-        "start_hint": "What can I help with?",
+        "start_hint": "",
         "project_none": "Project: none selected",
         "runtime_none": "Runtime profile: none selected",
         "runtime_prefix": "Runtime profile",
@@ -69,7 +97,7 @@ _DESKTOP_TEXT = {
         "open_workspace": "Open Gleave workspace",
         "hide": "Hide to tray",
         "connecting": "Connecting to the local EEEE coordinator…",
-        "assistant_busy": "EEEE is selecting the best capability…",
+        "assistant_busy": "One moment, I’m thinking…",
         "pairing_busy": "Issuing a short-lived phone pairing code…",
         "project_prefix": "Project",
         "claim_prefix": "ClaimLatch",
@@ -95,13 +123,21 @@ _DESKTOP_TEXT = {
 class PetWindow:
     """Build the GUI lazily so importing the desktop package stays display-free."""
 
-    def __new__(cls, client: PetApiClient, *, initial_error: str | None = None):
+    def __new__(
+        cls,
+        client: PetApiClient,
+        *,
+        initial_error: str | None = None,
+        on_open_chatgpt=None,
+    ):
         try:
-            from PySide6.QtCore import QSettings, QTimer, Qt
-            from PySide6.QtGui import QAction, QFont
+            from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, QSize, QTimer, Qt
+            from PySide6.QtGui import QAction, QColor, QCursor, QFont, QPainter, QPixmap
             from PySide6.QtWidgets import (
                 QComboBox,
+                QFrame,
                 QHBoxLayout,
+                QInputDialog,
                 QLabel,
                 QLineEdit,
                 QMenu,
@@ -121,19 +157,28 @@ class PetWindow:
             def __init__(self):
                 super().__init__()
                 self.client = client
+                self._on_open_chatgpt = on_open_chatgpt
                 self.session = DesktopSession(client)
                 self.current_state: dict[str, object] = {}
                 self.desktop_snapshot: dict[str, object] = {}
                 self._drag_offset = None
+                self._pet_drag_origin = None
+                self._pet_window_origin = None
+                self._pet_is_dragging = False
                 self._busy = False
                 self._refreshing = False
+                self._auth_login_in_progress = False
                 self._closing = False
                 self._quit_requested = False
+                self._app = QApplication.instance()
                 self._tray = None
+                self._workspace = None
                 self._task_runner = QtTaskRunner(parent=self)
                 self._settings = QSettings("Gleave", "GleaveDesktop")
                 saved_language = self._settings.value("language", "ko")
                 self.language = saved_language if saved_language in _DESKTOP_TEXT else "ko"
+                self.profile_name = str(self._settings.value("profileName", "EEEE")) or "EEEE"
+                self.profile_avatar = str(self._settings.value("profileAvatar", "🐾")) or "🐾"
                 self.setObjectName("desktopCompanion")
                 self.setWindowTitle(self._text("window_title"))
                 self.setWindowFlags(
@@ -142,15 +187,20 @@ class PetWindow:
                     | Qt.WindowType.Tool
                 )
                 self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-                self.setAutoFillBackground(True)
-                self.setMinimumWidth(360)
-                self.setMaximumWidth(520)
+                # Pet mode is intentionally a transparent, compact overlay.
+                # The conversation surface owns the card background; the pet
+                # itself must never look like a large dark application window.
+                self.setAutoFillBackground(False)
+                self.setMinimumWidth(96)
+                self.setMaximumWidth(760)
 
                 root = QVBoxLayout(self)
-                root.setContentsMargins(18, 16, 18, 16)
-                root.setSpacing(10)
+                root.setContentsMargins(22, 18, 22, 20)
+                root.setSpacing(12)
 
-                language_row = QHBoxLayout()
+                language_row_widget = QWidget()
+                language_row = QHBoxLayout(language_row_widget)
+                language_row.setContentsMargins(0, 0, 0, 0)
                 self.language_label = QLabel()
                 self.language_select = QComboBox()
                 self.language_select.addItem("한국어", "ko")
@@ -160,11 +210,60 @@ class PetWindow:
                 language_row.addStretch(1)
                 language_row.addWidget(self.language_label)
                 language_row.addWidget(self.language_select)
-                root.addLayout(language_row)
+                root.addWidget(language_row_widget)
 
-                self.character = QLabel("🐾")
+                # Keep the always-on-top pet unobtrusive; the speech bubble and
+                # quick composer provide the readable surface around it.
+                # Keep the pet itself physically stable.  Speech bubbles and
+                # the detached composer may grow, but the character never
+                # changes size when a different frame is selected.
+                self._pet_display_size = QSize(180, 108)
+                asset_dir = Path(__file__).resolve().parent / "assets"
+                self._pet_pixmaps = {
+                    frame: QPixmap(str(asset_dir / filename))
+                    for frame, filename in {
+                        "idle": "cat-keyboard-idle.png",
+                        # The visual source files are named by their legacy
+                        # export direction; user input direction is the
+                        # opposite, so keep the mapping explicit here.
+                        "left": "cat-keyboard-right.png",
+                        "right": "cat-keyboard-left.png",
+                        "left_alt": "cat-keyboard-right-alt.png",
+                        "right_alt": "cat-keyboard-left-alt.png",
+                        "gaze_left": "cat-keyboard-gaze-left.png",
+                        "gaze_right": "cat-keyboard-gaze-right.png",
+                    }.items()
+                }
+                # Every generated frame has a different amount of transparent
+                # padding.  Scaling the raw files directly makes the cat jump
+                # in size whenever gaze/typing changes.  Use one shared alpha
+                # crop for every frame so the visible mascot keeps one stable
+                # footprint on screen.
+                # The bundled frames are exported on one 1672x941 canvas. A
+                # shared crop keeps the visible mascot stable without doing a
+                # slow per-pixel alpha scan during application startup.
+                self._pet_source_rect = QRect(144, 104, 1301, 837)
+                self._last_rendered_frame = "idle"
+                self._typing_pose = {"pressing": None, "lifted": None}
+                self._typing_active = False
+                self._typing_frame = 0
+                self._typing_hand = "left"
+                self._last_text_edit_at = 0.0
+                self._last_gaze_frame = "idle"
+                self._gaze_offset = (0, 0)
+                self._last_gaze_offset = (0, 0)
+                self._global_key_states: dict[int, bool] = {}
+                self._global_key_press_events: list[int] = []
+                self._typing_event_count = 0
+                self._last_global_key_code: int | None = None
+                self.character = QLabel()
+                self.character.setObjectName("assistantCharacter")
                 self.character.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.character.setFont(QFont("Segoe UI Emoji", 34))
+                self.character.installEventFilter(self)
+                self.character.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                self.character.customContextMenuRequested.connect(self._show_pet_menu)
+                self._set_pet_frame("idle")
                 root.addWidget(self.character)
 
                 self.headline = QLabel()
@@ -173,49 +272,124 @@ class PetWindow:
                 root.addWidget(self.headline)
 
                 self.detail = QLabel()
+                self.detail.setObjectName("assistantBubble")
                 self.detail.setWordWrap(True)
                 self.detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.detail.setMinimumWidth(240)
+                self.detail.setMaximumWidth(640)
                 root.addWidget(self.detail)
 
+                # Visual order: AI speech bubble -> pet -> composer below.
+                # The bubble must not sit underneath the pet or get separated
+                # from the composer by the window's invisible legacy widgets.
+                root.removeWidget(self.character)
+                root.removeWidget(self.detail)
+                root.insertWidget(0, self.detail)
+                root.insertWidget(1, self.character)
+
+                self.status_card = QFrame()
+                self.status_card.setObjectName("projectStatusCard")
+                status_layout = QVBoxLayout(self.status_card)
+                status_layout.setContentsMargins(14, 10, 14, 10)
+                status_layout.setSpacing(5)
                 self.project_status = QLabel()
                 self.project_status.setWordWrap(True)
-                root.addWidget(self.project_status)
+                self.project_status.setObjectName("projectStatus")
+                status_layout.addWidget(self.project_status)
                 self.runtime_status = QLabel()
                 self.runtime_status.setWordWrap(True)
-                root.addWidget(self.runtime_status)
+                self.runtime_status.setObjectName("runtimeStatus")
+                status_layout.addWidget(self.runtime_status)
                 self.trust_status = QLabel()
                 self.trust_status.setWordWrap(True)
-                root.addWidget(self.trust_status)
+                self.trust_status.setObjectName("trustStatus")
+                status_layout.addWidget(self.trust_status)
                 self.mobile_status = QLabel()
                 self.mobile_status.setWordWrap(True)
-                root.addWidget(self.mobile_status)
+                self.mobile_status.setObjectName("mobileStatus")
+                status_layout.addWidget(self.mobile_status)
+                root.addWidget(self.status_card)
 
+                self.command_surface = QFrame()
+                # Quick Chat is a separate lightweight tool window.  The pet
+                # remains the always-visible host; this surface owns only the
+                # conversation controls and can be hidden independently.
+                self.command_surface.setObjectName("quickChat")
+                self.command_surface.setWindowFlags(
+                    Qt.WindowType.FramelessWindowHint
+                    | Qt.WindowType.WindowStaysOnTopHint
+                    | Qt.WindowType.Tool
+                )
+                self.command_surface.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+                # Keep Quick Chat compact enough to feel attached to the pet.
+                # Without a width cap, Qt lets a long response expand the
+                # tool window and pushes it far away from the character.
+                self.command_surface.setFixedWidth(340)
+                command_layout = QVBoxLayout(self.command_surface)
+                command_layout.setContentsMargins(14, 14, 14, 14)
+                self.quick_status = QLabel()
+                self.quick_status.setObjectName("quickStatus")
+                self.quick_status.setWordWrap(True)
+                command_layout.addWidget(self.quick_status)
+                self.quick_reply = QLabel()
+                self.quick_reply.setObjectName("quickReply")
+                self.quick_reply.setWordWrap(True)
+                command_layout.addWidget(self.quick_reply)
                 assistant_row = QHBoxLayout()
                 self.assistant_input = QLineEdit()
+                self.assistant_input.setObjectName("assistantComposer")
+                self.assistant_input.setMinimumWidth(190)
+                self.assistant_input.setMaximumWidth(210)
+                self.assistant_input.installEventFilter(self)
                 self.assistant_button = QPushButton()
+                self.assistant_button.setObjectName("primaryAction")
+                self.assistant_button.setFixedWidth(108)
                 self.assistant_button.clicked.connect(self._route_assistant)
+                self.assistant_input.returnPressed.connect(self._route_assistant)
+                self.assistant_input.textEdited.connect(self._on_user_typing)
                 assistant_row.addWidget(self.assistant_input)
                 assistant_row.addWidget(self.assistant_button)
-                root.addLayout(assistant_row)
+                command_layout.addLayout(assistant_row)
+                self.command_surface.installEventFilter(self)
+                self._app.installEventFilter(self)
 
-                pairing_row = QHBoxLayout()
+                self._reply_hide_timer = QTimer(self)
+                self._reply_hide_timer.setSingleShot(True)
+                self._reply_hide_timer.setInterval(8000)
+                self._reply_hide_timer.timeout.connect(self._hide_reply_bubble)
+                self._typing_timer = QTimer(self)
+                self._typing_timer.setInterval(24)
+                self._typing_timer.timeout.connect(self._advance_reply_typing)
+                self._typing_text = ""
+                self._typing_index = 0
+                self._pet_motion_timer = QTimer(self)
+                # 16 ms keeps mouse gaze and key-down animation responsive
+                # without tying animation to the slower API refresh timer.
+                self._pet_motion_timer.setInterval(16)
+                self._pet_motion_timer.timeout.connect(self._update_pet_motion)
+                self._pet_motion_timer.start()
+
+                actions_row = QHBoxLayout()
                 self.pairing_button = QPushButton()
+                self.pairing_button.setObjectName("secondaryAction")
                 self.pairing_button.clicked.connect(self._issue_pairing_code)
                 self.pairing_status = QLabel()
                 self.pairing_status.setWordWrap(True)
-                pairing_row.addWidget(self.pairing_button)
-                pairing_row.addWidget(self.pairing_status)
-                root.addLayout(pairing_row)
+                actions_row.addWidget(self.pairing_button)
+                actions_row.addWidget(self.pairing_status, 1)
+                root.addLayout(actions_row)
 
                 self.events_view = QLabel()
                 self.events_view.setWordWrap(True)
                 root.addWidget(self.events_view)
 
                 self.workspace_button = QPushButton()
+                self.workspace_button.setObjectName("secondaryAction")
                 self.workspace_button.clicked.connect(self._open_workspace)
                 root.addWidget(self.workspace_button)
 
                 self.hide_button = QPushButton()
+                self.hide_button.setObjectName("secondaryAction")
                 self.hide_button.clicked.connect(self.hide_to_tray)
                 root.addWidget(self.hide_button)
 
@@ -249,24 +423,61 @@ class PetWindow:
                 self.legacy_panel.setVisible(False)
                 root.addWidget(self.legacy_panel)
 
+                language_row_widget.hide()
+                self.headline.hide()
+                self.status_card.hide()
+                self.command_surface.hide()
+                self.pairing_button.hide()
+                self.pairing_status.hide()
+                self.events_view.hide()
+                self.workspace_button.hide()
+                self.hide_button.hide()
+                self.quick_status.hide()
+                self.quick_reply.hide()
+
                 self.setStyleSheet(
-                    "#desktopCompanion { background: #20232b; border: 1px solid #4b5263; "
-                    "border-radius: 18px; color: #f3f5f8; }"
+                    "#desktopCompanion { background: transparent; border: none; "
+                    "color: #f4f3fb; }"
                     "#desktopCompanion QLabel { background: transparent; border: none; "
-                    "color: #f3f5f8; }"
+                    "color: #f4f3fb; }"
+                    "#assistantCharacter { padding: 4px; }"
+                    "#assistantBubble { background: #fff7ef; border: 2px solid #efc28f; "
+                    "border-radius: 24px; padding: 12px 18px; color: #33281f; }"
+                    "#projectStatusCard { background: #202332; border: 1px solid #373c53; "
+                    "border-radius: 14px; }"
+                    "#projectStatus { color: #ffffff; font-weight: 600; }"
+                    "#runtimeStatus, #trustStatus, #mobileStatus { color: #b9bdd0; font-size: 11px; }"
                     "#desktopCompanion QLineEdit, #desktopCompanion QComboBox { "
-                    "background: #2b303b; padding: 8px; border: 1px solid #596274; "
-                    "border-radius: 9px; color: #f3f5f8; }"
-                    "#desktopCompanion QPushButton { background: #8f7cff; padding: 8px 10px; "
-                    "border: none; border-radius: 9px; color: #ffffff; }"
-                    "#desktopCompanion QPushButton:hover { background: #a294ff; }"
+                    "background: #fffaf5; padding: 10px 13px; border: 2px solid #efc28f; "
+                    "border-radius: 20px; color: #33281f; selection-background-color: #f4c58e; }"
+                    "#desktopCompanion QPushButton { background: #8f7cff; padding: 10px 12px; "
+                    "border: none; border-radius: 11px; color: #ffffff; font-weight: 600; }"
+                    "#desktopCompanion QPushButton:hover { background: #a69aff; }"
+                    "#desktopCompanion QPushButton#secondaryAction { background: #2a2d3d; "
+                    "border: 1px solid #464b65; color: #d9d8e8; font-weight: 500; }"
+                    "#desktopCompanion QPushButton#secondaryAction:hover { background: #35394d; }"
                     "#desktopCompanion QPushButton:disabled { background: #3b414d; color: #8e96a5; }"
                     "#desktopCompanion QComboBox QAbstractItemView { background: #2b303b; "
                     "color: #f3f5f8; selection-background-color: #5147a5; }"
                 )
+                self.command_surface.setStyleSheet(
+                    "#quickChat { background: transparent; border: none; color: #33281f; }"
+                    "#quickChat QLabel { background: transparent; border: none; color: #f4f3fb; }"
+                    "#quickStatus { color: #b9bdd0; font-size: 11px; }"
+                    "#quickReply { background: #fff7ef; border: 2px solid #efc28f; "
+                    "border-radius: 24px; padding: 11px 15px; color: #33281f; }"
+                    "#quickChat QLineEdit { background: #fffaf5; padding: 10px 13px; "
+                    "border: 2px solid #efc28f; border-radius: 20px; color: #33281f; }"
+                    "#quickChat QPushButton { background: #f1a65a; padding: 10px 12px; "
+                    "border: 2px solid #efc28f; border-radius: 20px; color: #33281f; font-weight: 600; }"
+                )
                 self._apply_language()
                 self._timer = QTimer(self)
                 self._timer.timeout.connect(self._background_refresh)
+                self._topmost_timer = QTimer(self)
+                self._topmost_timer.setInterval(1000)
+                self._topmost_timer.timeout.connect(self._enforce_topmost)
+                self._topmost_timer.start()
                 self._setup_tray(QApplication, QStyle, QSystemTrayIcon, QAction, QMenu)
                 if initial_error:
                     self._render({"state": "blocked", "message": initial_error})
@@ -274,7 +485,361 @@ class PetWindow:
                     self._timer.start(5000)
                     self.refresh()
 
+            def eventFilter(self, watched, event):
+                assistant_input = getattr(self, "assistant_input", None)
+                command_surface = getattr(self, "command_surface", None)
+                if (
+                    event.type() == QEvent.Type.MouseButtonPress
+                    and command_surface is not None
+                    and command_surface.isVisible()
+                ):
+                    global_pos = event.globalPosition().toPoint()
+                    if self._handle_global_mouse_press(global_pos):
+                        return False
+                if (
+                    watched in (assistant_input, command_surface)
+                    and event.type() == QEvent.Type.KeyPress
+                    and event.key() == Qt.Key.Key_Escape
+                ):
+                    self.hide_command_surface()
+                    return True
+                if (
+                    watched is assistant_input
+                    and event.type() == QEvent.Type.KeyPress
+                    and event.key() not in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape)
+                ):
+                    key_code = int(event.nativeVirtualKey() or event.key())
+                    self._typing_hand = self._hand_for_key_code(key_code)
+                    self._typing_active = True
+                    self._last_text_edit_at = time.monotonic()
+                    self._typing_event_count += 1
+                if (
+                    watched is self.character
+                    and event.type() == QEvent.Type.MouseButtonPress
+                    and event.button() == Qt.MouseButton.LeftButton
+                ):
+                    if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                        self._open_workspace()
+                        return True
+                    self._pet_drag_origin = event.globalPosition().toPoint()
+                    self._pet_window_origin = self.pos()
+                    self._pet_is_dragging = False
+                    return True
+                if watched is self.character and event.type() == QEvent.Type.MouseMove:
+                    if self._pet_drag_origin is not None and event.buttons() & Qt.MouseButton.LeftButton:
+                        current = event.globalPosition().toPoint()
+                        if not self._pet_is_dragging:
+                            distance = (current - self._pet_drag_origin).manhattanLength()
+                            self._pet_is_dragging = distance >= QApplication.startDragDistance()
+                        if self._pet_is_dragging and self._pet_window_origin is not None:
+                            self.move(self._pet_window_origin + current - self._pet_drag_origin)
+                        return True
+                if (
+                    watched is self.character
+                    and event.type() == QEvent.Type.MouseButtonRelease
+                    and event.button() == Qt.MouseButton.LeftButton
+                ):
+                    was_dragging = self._pet_is_dragging
+                    self._pet_drag_origin = None
+                    self._pet_window_origin = None
+                    self._pet_is_dragging = False
+                    if not was_dragging:
+                        self.show_command_surface()
+                    return True
+                return super().eventFilter(watched, event)
+
+            def showEvent(self, event):
+                super().showEvent(event)
+                # WindowStaysOnTopHint is the policy; raising after the native
+                # window is shown makes that policy reliable on Windows when
+                # another app was focused immediately before the pet opened.
+                self.raise_()
+                QTimer.singleShot(0, self.raise_)
+                QTimer.singleShot(0, self._enforce_topmost)
+
+            def _enforce_topmost(self):
+                _force_windows_topmost(self)
+                if self.command_surface.isVisible():
+                    _force_windows_topmost(self.command_surface)
+
+            def show_command_surface(self):
+                # The pet bubble remains the only response surface. Quick
+                # Chat is only the composer anchored below the pet.
+                self.detail.show()
+                self._reply_hide_timer.stop()
+                self.command_surface.show()
+                self.command_surface.adjustSize()
+                self.command_surface.move(self._command_surface_position())
+                QTimer.singleShot(0, self._reposition_command_surface)
+                self.quick_reply.hide()
+                self.raise_()
+                self.command_surface.raise_()
+                self.command_surface.activateWindow()
+                self._enforce_topmost()
+                self.assistant_input.setFocus()
+
+            def _reposition_command_surface(self):
+                if self.command_surface.isVisible():
+                    self.command_surface.move(self._command_surface_position())
+                    self._enforce_topmost()
+
+            def resizeEvent(self, event):
+                super().resizeEvent(event)
+                self._reposition_command_surface()
+
+            def moveEvent(self, event):
+                super().moveEvent(event)
+                self._reposition_command_surface()
+
+            def hide_command_surface(self):
+                self.command_surface.hide()
+                self.quick_reply.hide()
+                self.detail.show()
+                self._schedule_reply_hide()
+                self.clearFocus()
+
+            def _pet_anchor_rect(self):
+                """Return the complete visible pet bounds in screen coordinates."""
+                return self.frameGeometry()
+
+            def _command_surface_position(self, screen_rect=None, surface_size=None):
+                """Place Quick Chat next to the pet, clamped to the usable screen."""
+                margin = 12
+                anchor = self._pet_anchor_rect()
+                if screen_rect is None:
+                    screen = self.screen()
+                    if screen is None:
+                        screen = QApplication.primaryScreen()
+                    screen_rect = screen.availableGeometry()
+                if surface_size is None:
+                    surface_size = self.command_surface.size()
+
+                min_x = screen_rect.left() + margin
+                max_x = screen_rect.right() - margin - surface_size.width() + 1
+                min_y = screen_rect.top() + margin
+                max_y = screen_rect.bottom() - margin - surface_size.height() + 1
+
+                centered_x = anchor.center().x() - surface_size.width() // 2
+                x = max(min_x, min(centered_x, max_x))
+                below_y = anchor.bottom() + margin
+                above_y = anchor.top() - margin - surface_size.height()
+                # The composer belongs below the pet. Only move it above when
+                # the current monitor has no room underneath.
+                y = below_y if below_y <= max_y else above_y
+                y = max(min_y, min(y, max_y))
+                return QPoint(x, y)
+
+            def _handle_global_mouse_press(self, global_pos):
+                if not self.command_surface.isVisible():
+                    return False
+                if (
+                    self.command_surface.frameGeometry().contains(global_pos)
+                    or self.frameGeometry().contains(global_pos)
+                ):
+                    return False
+                self.hide_command_surface()
+                return True
+
+            def _hide_reply_bubble(self):
+                if not self.command_surface.isVisible():
+                    self.detail.hide()
+
+            def _source_pixmap_for_frame(self, frame: str):
+                """Keep the keyboard fixed while changing only the eyes."""
+                base = self._pet_pixmaps.get("idle")
+                if base is None or base.isNull() or not frame.startswith("gaze_"):
+                    return self._pet_pixmaps.get(frame)
+
+                rendered = base.copy()
+                painter = QPainter(rendered)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#ffffff"))
+                eyes = ((721, 455, 28), (1029, 545, 28))
+                for x, y, radius in eyes:
+                    painter.drawEllipse(QPoint(x, y), radius, radius)
+                offset_x, offset_y = self._gaze_offset
+                painter.setBrush(QColor("#111111"))
+                for x, y, radius in eyes:
+                    painter.drawEllipse(
+                        QPoint(x + offset_x, y + offset_y), radius - 3, radius - 3
+                    )
+                painter.end()
+                return rendered
+
+            def _set_pet_frame(self, frame: str) -> None:
+                pixmap = self._source_pixmap_for_frame(frame)
+                if pixmap is None or pixmap.isNull():
+                    self.character.setText("🐱")
+                    self.character.setFixedSize(self._pet_display_size)
+                    return
+                # Crop the common transparent margin before scaling.  The
+                # QLabel remains fixed, while the artwork occupies the same
+                # visual area in idle, gaze, and typing frames.
+                visible = pixmap.copy(self._pet_source_rect)
+                rendered = visible.scaled(
+                    self._pet_display_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                if frame in {"left", "right", "left_alt", "right_alt"}:
+                    pressing = frame.removesuffix("_alt")
+                    self._typing_pose = {
+                        "pressing": pressing,
+                        "lifted": "right" if pressing == "left" else "left",
+                    }
+                else:
+                    self._typing_pose = {"pressing": None, "lifted": None}
+                self._last_rendered_frame = frame
+                self.character.setPixmap(rendered)
+                self.character.setFixedSize(self._pet_display_size)
+
+            def _on_user_typing(self, text: str) -> None:
+                self._typing_active = bool(text.strip())
+                self._last_text_edit_at = time.monotonic() if text else 0.0
+                if not self._typing_active:
+                    self._typing_frame = 0
+                self._update_pet_motion()
+
+            @staticmethod
+            def _hand_for_key_code(code: int) -> str:
+                """Map a physical keyboard key to the hand that normally presses it."""
+                left_hand = {
+                    0x51, 0x57, 0x45, 0x52, 0x54,
+                    0x41, 0x53, 0x44, 0x46, 0x47,
+                    0x5A, 0x58, 0x43, 0x56, 0x42,
+                }
+                return "left" if code in left_hand else "right"
+
+            def _typing_frame_name(self) -> str:
+                """Alternate a second pose when the same hand keeps typing."""
+                hand = self._typing_hand
+                suffix = "_alt" if self._typing_event_count and self._typing_event_count % 2 == 0 else ""
+                return f"{hand}{suffix}"
+
+            def _read_global_key_states(self) -> dict[int, bool]:
+                """Read currently held keyboard keys without stealing focus."""
+                import sys
+
+                if sys.platform != "win32":
+                    return {}
+                try:
+                    import ctypes
+
+                    user32 = ctypes.windll.user32
+                    key_codes = list(range(0x30, 0x5B)) + list(range(0x60, 0x70))
+                    key_codes += list(range(0xBA, 0xE3)) + [0x08, 0x09, 0x0D, 0x20]
+                    states = {}
+                    for code in key_codes:
+                        raw_state = int(user32.GetAsyncKeyState(code))
+                        # The low bit records a press transition since the
+                        # previous call.  It is essential for fast repeated
+                        # presses where key-up and key-down happen between
+                        # two timer polls and the high bit looks unchanged.
+                        if raw_state & 0x0001:
+                            self._global_key_press_events.append(code)
+                        states[code] = bool(raw_state & 0x8000)
+                    return states
+                except (AttributeError, OSError, TypeError):
+                    return {}
+
+            def _apply_global_key_states(self, states: dict[int, bool]) -> None:
+                """Apply only newly pressed global keys to the typing state."""
+                previous = self._global_key_states
+                edge_presses = [
+                    code
+                    for code, is_down in states.items()
+                    if is_down and not previous.get(code, False)
+                ]
+                transition_presses = list(self._global_key_press_events)
+                self._global_key_press_events.clear()
+                pressed = list(dict.fromkeys(transition_presses + edge_presses))
+                self._global_key_states = states
+                if pressed:
+                    code = pressed[-1]
+                    self._last_global_key_code = code
+                    self._typing_hand = self._hand_for_key_code(code)
+                    self._typing_active = True
+                    self._last_text_edit_at = time.monotonic()
+                    self._typing_event_count += len(pressed)
+                elif not any(states.values()):
+                    self._typing_active = False
+
+            def _update_pet_motion(self) -> None:
+                global_states = self._read_global_key_states()
+                self._apply_global_key_states(global_states)
+                if global_states and any(global_states.values()):
+                    self._set_pet_frame(self._typing_frame_name())
+                    return
+
+                recent_input = (
+                    self._last_text_edit_at
+                    and time.monotonic() - self._last_text_edit_at < 0.12
+                )
+                if recent_input:
+                    self._typing_active = True
+                    self._set_pet_frame(self._typing_frame_name())
+                    return
+
+                self._typing_active = False
+                pet_center = self.character.mapToGlobal(self.character.rect().center())
+                cursor = QCursor.pos()
+                delta_x = cursor.x() - pet_center.x()
+                delta_y = cursor.y() - pet_center.y()
+                self._gaze_offset = (
+                    max(-15, min(15, round(delta_x / 180))),
+                    max(-10, min(10, round(delta_y / 180))),
+                )
+                if delta_x < -24:
+                    frame = "gaze_left"
+                elif delta_x > 24:
+                    frame = "gaze_right"
+                else:
+                    frame = "gaze_center"
+                if frame != self._last_gaze_frame or self._gaze_offset != self._last_gaze_offset:
+                    self._last_gaze_frame = frame
+                    self._last_gaze_offset = self._gaze_offset
+                    self._set_pet_frame(frame)
+
+            def _start_reply_typing(self, text: str) -> None:
+                self._typing_timer.stop()
+                self._typing_text = text
+                self._typing_index = 0
+                self.detail.setText("")
+                self.quick_reply.setText("")
+                if not text:
+                    return
+                self._advance_reply_typing()
+                if self._typing_index < len(self._typing_text):
+                    self._typing_timer.start()
+
+            def _advance_reply_typing(self) -> None:
+                if self._typing_index >= len(self._typing_text):
+                    self._typing_timer.stop()
+                    self._schedule_reply_hide()
+                    return
+                self._typing_index += 1
+                visible_text = self._typing_text[: self._typing_index]
+                self.detail.setText(visible_text)
+                self.quick_reply.setText(visible_text)
+                if self._typing_index >= len(self._typing_text):
+                    self._typing_timer.stop()
+                    self._schedule_reply_hide()
+
+            def _schedule_reply_hide(self):
+                state = self.current_state.get("state")
+                if self.detail.text() and state in {"idle", "completed", "blocked", "failed"}:
+                    self._reply_hide_timer.start()
+                else:
+                    self._reply_hide_timer.stop()
+
             def mousePressEvent(self, event):
+                if (
+                    event.button() == Qt.MouseButton.LeftButton
+                    and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                ):
+                    self._open_workspace()
+                    event.accept()
+                    return
                 if event.button() == Qt.MouseButton.LeftButton:
                     self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 super().mousePressEvent(event)
@@ -295,7 +860,12 @@ class PetWindow:
                     return
                 self._closing = True
                 self._timer.stop()
+                self._reply_hide_timer.stop()
+                self._app.removeEventFilter(self)
                 self._task_runner.shutdown()
+                self.command_surface.close()
+                if self._workspace is not None:
+                    self._workspace.close()
                 if self._tray is not None:
                     self._tray.hide()
                 super().closeEvent(event)
@@ -351,8 +921,77 @@ class PetWindow:
                 self._apply_language()
                 self._render_desktop_status(self.desktop_snapshot)
 
+            def _load_profile(self):
+                profile_path = self._profile_path()
+                profile = load_profile(profile_path)
+                # Keep the pre-profile.json settings keys as a one-time
+                # migration path for existing desktop installations.
+                if not profile_path.exists():
+                    legacy = {
+                        **profile,
+                        "name": str(self._settings.value("profileName", profile["name"])) or profile["name"],
+                        "avatar": str(self._settings.value("profileAvatar", profile["avatar"])) or profile["avatar"],
+                    }
+                    profile = save_profile(profile_path, legacy)
+                self.profile_name = profile["name"]
+                self.profile_avatar = profile["avatar"]
+                self.setWindowTitle(f"{self.profile_name} • Gleave")
+                if self._tray is not None:
+                    self._tray.setToolTip(f"{self.profile_name} local assistant")
+
+            def _show_pet_menu(self, position):
+                menu = QMenu(self)
+                profile_action = menu.addAction("펫 프로필 설정" if self.language == "ko" else "Pet profile")
+                workspace_action = menu.addAction(self._text("open_workspace"))
+                menu.addSeparator()
+                quit_action = menu.addAction("종료" if self.language == "ko" else "Quit")
+                selected = menu.exec(self.character.mapToGlobal(position))
+                if selected is profile_action:
+                    self._edit_pet_profile(QInputDialog)
+                elif selected is workspace_action:
+                    self._open_workspace()
+                elif selected is quit_action:
+                    self.request_quit()
+
+            def _edit_pet_profile(self, QInputDialog):
+                name, accepted = QInputDialog.getText(
+                    self,
+                    "펫 프로필" if self.language == "ko" else "Pet profile",
+                    "이름" if self.language == "ko" else "Name",
+                    text=self.profile_name,
+                )
+                if not accepted or not name.strip():
+                    return
+                avatars = ["🐾", "🦊", "🐱", "🐶", "🦄", "🤖", "🌟"]
+                avatar, accepted = QInputDialog.getItem(
+                    self,
+                    "펫 프로필" if self.language == "ko" else "Pet profile",
+                    "아바타" if self.language == "ko" else "Avatar",
+                    avatars,
+                    max(0, avatars.index(self.profile_avatar)) if self.profile_avatar in avatars else 0,
+                    False,
+                )
+                if not accepted:
+                    return
+                self._settings.setValue("profileName", name.strip())
+                self._settings.setValue("profileAvatar", avatar)
+                save_profile(self._profile_path(), {
+                    **load_profile(self._profile_path()),
+                    "name": name.strip(),
+                    "avatar": avatar,
+                })
+                self._load_profile()
+                if self.current_state.get("state") in {"idle", "completed"}:
+                    self._update_pet_motion()
+
+            @staticmethod
+            def _profile_path():
+                from app.config import Settings
+
+                return Settings().assistant_profile_path
+
             def _apply_language(self):
-                self.setWindowTitle(self._text("window_title"))
+                self.setWindowTitle(f"{self.profile_name} • Gleave")
                 self.language_label.setText(self._text("language"))
                 self.assistant_input.setPlaceholderText(self._text("assistant_placeholder"))
                 self.assistant_button.setText(self._text("ask"))
@@ -414,6 +1053,7 @@ class PetWindow:
                 else:
                     self._busy = True
                     self.detail.setText(busy_message)
+                    self.quick_status.setText(busy_message)
                     self._update_controls()
 
                 def success(payload):
@@ -421,6 +1061,8 @@ class PetWindow:
                         return
                     if silent:
                         self._refreshing = False
+                        self._render_background(payload)
+                        return
                     else:
                         self._busy = False
                     if on_success is None:
@@ -435,6 +1077,9 @@ class PetWindow:
                         self._refreshing = False
                         return
                     self._busy = False
+                    if self._payload_requires_chatgpt_login(error):
+                        self._open_login_automatically()
+                        return
                     failed_payload = dict(self.current_state)
                     failed_payload.update({"state": "blocked", "message": str(error)})
                     self._render(failed_payload)
@@ -448,7 +1093,10 @@ class PetWindow:
                 self.desktop_snapshot = payload if "claimLatch" in payload else self.desktop_snapshot
                 project_state = payload.get("projectState")
                 view_payload = (
-                    {**payload, **project_state}
+                    # The assistant response is the most recent user-facing
+                    # event.  Project state is useful background data, but its
+                    # stale lifecycle message must never hide a new reply.
+                    {**project_state, **payload}
                     if isinstance(project_state, dict)
                     else payload
                 )
@@ -464,20 +1112,21 @@ class PetWindow:
                         }
                 self.current_state = view_payload
                 view = PetPresentation.from_view_model(view_payload)
-                self.character.setText({
-                    "sleepy": "😴",
-                    "curious": "🔎",
-                    "thinking": "🤔",
-                    "focused": "🛠️",
-                    "checking": "🧪",
-                    "happy": "🎉",
-                    "alert": "⚠️",
-                    "worried": "😟",
-                    "confused": "❔",
-                }[view.expression])
+                self._update_pet_motion()
                 headlines = _DESKTOP_TEXT[self.language]["headline"]
                 self.headline.setText(headlines.get(view.state, view.headline))
-                self.detail.setText(view.detail)
+                detail = view.detail
+                if view.state == "idle" and detail == "Ready for a development request":
+                    detail = self._text("start_hint")
+                self.quick_status.setText(headlines.get(view.state, view.headline))
+                self._reply_hide_timer.stop()
+                if self.command_surface.isVisible():
+                    self.detail.show()
+                    self.quick_reply.hide()
+                else:
+                    self.quick_reply.hide()
+                    self.detail.show()
+                self._start_reply_typing(detail)
                 self._render_desktop_status(payload)
                 candidates = payload.get("candidates", [])
                 self.candidate_select.clear()
@@ -487,6 +1136,20 @@ class PetWindow:
                         if isinstance(repository, dict) and isinstance(repository.get("full_name"), str):
                             self.candidate_select.addItem(repository["full_name"])
                 self._update_controls()
+
+            def _render_background(self, payload: dict[str, object]):
+                """Refresh status without overwriting an active conversation."""
+                if not isinstance(payload, dict):
+                    return
+                if "claimLatch" in payload:
+                    self.desktop_snapshot = payload
+                project_state = payload.get("projectState")
+                status_payload = (
+                    {**project_state, **payload}
+                    if isinstance(project_state, dict)
+                    else payload
+                )
+                self._render_desktop_status(status_payload)
 
             def _render_desktop_status(self, payload: dict[str, object]) -> None:
                 project_id = payload.get("projectId")
@@ -556,11 +1219,55 @@ class PetWindow:
 
                 def on_success(payload):
                     self.assistant_input.clear()
+                    if self._payload_requires_chatgpt_login(payload):
+                        self._open_login_automatically()
+                        return
                     self._render(payload)
 
                 self._submit(
                     lambda: self.session.route(text),
                     self._text("assistant_busy"),
+                    on_success=on_success,
+                )
+
+            def _open_chatgpt_login(self):
+                self._open_login_automatically()
+
+            @staticmethod
+            def _payload_requires_chatgpt_login(payload) -> bool:
+                text = str(payload).lower()
+                return any(marker in text for marker in (
+                    "authentication is required", "authenticated chatgpt",
+                    "chatgpt authentication", "401 unauthorized", "unauthorized",
+                    "로그인이 필요", "로그인 필요",
+                ))
+
+            def _open_login_automatically(self):
+                if self._on_open_chatgpt is None or self._auth_login_in_progress:
+                    return
+                self._auth_login_in_progress = True
+                notice = dict(self.current_state)
+                notice.update({
+                    "state": "blocked",
+                    "message": "ChatGPT 로그인이 필요해. 로그인 창을 자동으로 여는 중이야.",
+                })
+                self._render(notice)
+
+                def on_success(opened):
+                    self._auth_login_in_progress = False
+                    updated = dict(self.current_state)
+                    updated.update({
+                        "state": "idle" if opened else "blocked",
+                        "message": (
+                            "로그인 후 다시 말해줘. 로그인 창은 백그라운드 연결로 돌아갈 거야."
+                            if opened else "ChatGPT 로그인 창을 열지 못했어."
+                        ),
+                    })
+                    self._render(updated)
+
+                self._submit(
+                    self._on_open_chatgpt,
+                    "로그인 창을 여는 중…",
                     on_success=on_success,
                 )
 
@@ -629,9 +1336,13 @@ class PetWindow:
                     self._submit(lambda: self.client.retry(task_id), "Retrying the pet task...")
 
             def _open_workspace(self):
-                import webbrowser
+                from app.desktop.workspace import WorkspaceWindow
 
-                webbrowser.open(f"{self.client.base_url}/?lang={self.language}")
+                if self._workspace is None:
+                    self._workspace = WorkspaceWindow(self.client, language=self.language)
+                self._workspace.show()
+                self._workspace.raise_()
+                self._workspace.activateWindow()
 
         return _Window()
 

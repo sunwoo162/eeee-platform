@@ -11,21 +11,80 @@ class DesktopSession:
     def __init__(self, client: Any) -> None:
         self.client = client
         self.project_id: str | None = None
+        self.assistant_job_id: str | None = None
         self.snapshot: dict[str, object] = {}
 
     def refresh(self, project_id: str | None = None) -> dict[str, object]:
         if project_id is not None:
             self.project_id = project_id
         self.snapshot = self.client.get_desktop_state(self.project_id)
+        if self.assistant_job_id and hasattr(self.client, "get_assistant_job"):
+            job = self.client.get_assistant_job(self.assistant_job_id)
+            result = job.get("result") if isinstance(job, dict) else None
+            status = job.get("status") if isinstance(job, dict) else None
+            if status == "completed" and isinstance(result, dict):
+                project_id = result.get("project_id") or result.get("projectId")
+                if isinstance(project_id, str) and project_id:
+                    self.project_id = project_id
+                    self.snapshot = self.client.get_desktop_state(project_id)
+                self.snapshot.update({
+                    "state": "completed",
+                    "message": result.get("message", "EEEE 작업이 완료됐어."),
+                    "assistantJobId": self.assistant_job_id,
+                })
+                self.assistant_job_id = None
+            elif status == "failed":
+                self.snapshot.update({
+                    "state": "blocked",
+                    "message": f"EEEE 작업이 중단됐어: {job.get('error') or '알 수 없는 오류'}",
+                    "assistantJobId": self.assistant_job_id,
+                })
+            elif status == "scheduled":
+                self.snapshot.update({
+                    "state": "scheduled",
+                    "message": "EEEE가 작업을 예약해뒀어.",
+                    "assistantJobId": self.assistant_job_id,
+                })
+            elif status in {"queued", "running", "paused"}:
+                message = {
+                    "queued": "EEEE가 작업을 시작할 준비 중이야.",
+                    "running": "EEEE가 백그라운드에서 작업 진행 중이야.",
+                    "paused": "EEEE 작업이 잠시 멈춰 있어.",
+                }[status]
+                self.snapshot.update({
+                    "state": "working" if status != "paused" else "blocked",
+                    "message": message,
+                    "assistantJobId": self.assistant_job_id,
+                })
         return self.snapshot
 
     def route(self, text: str, workspace: str | None = None) -> dict[str, object]:
         result = self.client.route_assistant(text, workspace)
+        job_id = result.get("jobId")
+        if isinstance(job_id, str) and job_id:
+            self.assistant_job_id = job_id
         selected_project = result.get("project_id")
         if isinstance(selected_project, str) and selected_project:
             self.project_id = selected_project
         snapshot = self.refresh()
         snapshot["assistantRoute"] = result
+        if not isinstance(selected_project, str) or not selected_project:
+            # A direct EEEE/plugin response has no project snapshot to carry
+            # its state. Projectless responses must still be visible in the
+            # pet bubble instead of being overwritten by the default project.
+            route_status = result.get("status")
+            state = {
+                "completed": "completed",
+                "accepted": "working",
+                "blocked": "blocked",
+                "plugin_required": "blocked",
+                "needs_clarification": "idle",
+            }.get(route_status, "idle")
+            snapshot.update({
+                "state": state,
+                "message": result.get("message", "EEEE가 응답을 준비했어."),
+                "assistantJobId": result.get("jobId"),
+            })
         self.snapshot = snapshot
         return snapshot
 

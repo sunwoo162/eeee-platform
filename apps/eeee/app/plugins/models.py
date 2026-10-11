@@ -25,6 +25,22 @@ class PluginAction(BaseModel):
     input_schema: dict[str, object] = Field(default_factory=dict, alias="inputSchema")
 
 
+class PluginCapability(BaseModel):
+    """Routing metadata exported by an optional plugin, not its implementation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1, alias="displayName")
+    intents: list[str] = Field(min_length=1)
+    trigger_phrases: list[str] = Field(min_length=1, alias="triggerPhrases")
+    action_id: str = Field(min_length=1, alias="actionId")
+    permission_ids: list[str] = Field(default_factory=list, alias="permissionIds")
+    side_effect_level: SideEffectLevel = Field(alias="sideEffectLevel")
+    approval_level: Literal["none", "user", "always"] = Field(default="user", alias="approvalLevel")
+    version: str = Field(default="1.0.0", min_length=1)
+
+
 class PluginManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
@@ -35,6 +51,7 @@ class PluginManifest(BaseModel):
     command: list[str] = Field(min_length=1)
     permissions: list[PluginPermission] = Field(default_factory=list)
     actions: list[PluginAction] = Field(default_factory=list)
+    capabilities: list[PluginCapability] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_references(self) -> "PluginManifest":
@@ -52,6 +69,19 @@ class PluginManifest(BaseModel):
         }
         if missing:
             raise ValueError(f"plugin action references unknown permissions: {sorted(missing)}")
+        capability_ids = [capability.id for capability in self.capabilities]
+        if len(set(capability_ids)) != len(capability_ids):
+            raise ValueError("plugin manifest contains duplicate capability IDs")
+        action_ids_set = set(action_ids)
+        for capability in self.capabilities:
+            if capability.action_id not in action_ids_set:
+                raise ValueError(f"plugin capability references unknown action: {capability.action_id}")
+            missing_capability_permissions = set(capability.permission_ids) - set(permission_ids)
+            if missing_capability_permissions:
+                raise ValueError(
+                    "plugin capability references unknown permissions: "
+                    f"{sorted(missing_capability_permissions)}"
+                )
         return self
 
 

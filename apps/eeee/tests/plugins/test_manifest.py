@@ -28,6 +28,24 @@ def test_valid_manifest_is_strict_and_exposes_permissions():
     assert manifest.id == "echo"
     assert manifest.actions[0].permission_ids == ["local.read"]
     assert manifest.permissions[0].side_effect_level.value == "none"
+    assert manifest.capabilities == []
+
+
+def test_manifest_exposes_optional_routing_capabilities():
+    manifest = PluginManifest.model_validate(_manifest(capabilities=[{
+        "id": "echo-search",
+        "displayName": "Echo Search",
+        "intents": ["search"],
+        "triggerPhrases": ["echo search"],
+        "actionId": "echo",
+        "permissionIds": ["local.read"],
+        "sideEffectLevel": "none",
+    }]))
+
+    capability = manifest.capabilities[0]
+    assert capability.id == "echo-search"
+    assert capability.action_id == "echo"
+    assert capability.trigger_phrases == ["echo search"]
 
 
 def test_manifest_rejects_unknown_protocol_and_side_effect():

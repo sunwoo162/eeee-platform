@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import time
 
 from fastapi.testclient import TestClient
 
@@ -21,18 +22,28 @@ def test_project_request_survives_app_restart_with_truthful_connector_states(tmp
         )
 
         assert created.status_code == 200, created.text
-        payload = created.json()
+        accepted = created.json()
+        assert accepted["status"] == "accepted", accepted
+        deadline = time.monotonic() + 10
+        job = None
+        while time.monotonic() < deadline:
+            job = client.get(f"/api/assistant/jobs/{accepted['jobId']}").json()
+            if job["status"] in {"completed", "failed"}:
+                break
+            time.sleep(0.02)
+        assert job and job["status"] == "completed", job
+        payload = job["result"]
         project_id = payload["project_id"]
         profile = payload["project_profile"]
         assert payload["selection"]["capability_id"] == "project-execution"
-        assert payload["planningSessionId"], payload
-        assert payload["planningHandoffId"], payload
-        execution_plan = Path(payload["executionPlanPath"])
+        assert payload["planning_session_id"], payload
+        assert payload["planning_handoff_id"], payload
+        execution_plan = Path(payload["execution_plan_path"])
         assert execution_plan.is_file()
         assert json.loads(execution_plan.read_text(encoding="utf-8"))["planningHandoff"]["approval"]["status"] == "approved"
-        assert profile["projectId"] == project_id
+        assert profile["project_id"] == project_id
         assert profile["connectors"]
-        states = {item["connectorId"]: item["state"] for item in profile["connectors"]}
+        states = {item["connector_id"]: item["state"] for item in profile["connectors"]}
         assert states["iseol-runtime"] == "ready"
         assert states["desktop"] == "ready"
         assert states["mobile-bridge"] == "ready"
@@ -46,4 +57,6 @@ def test_project_request_survives_app_restart_with_truthful_connector_states(tmp
         restored = client.get(f"/api/projects/{project_id}/profile")
 
         assert restored.status_code == 200
-        assert restored.json() == profile
+        restored_profile = restored.json()
+        assert restored_profile["projectId"] == profile["project_id"]
+        assert {item["connectorId"]: item["state"] for item in restored_profile["connectors"]} == states

@@ -5,9 +5,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.agent.local_runtime import LocalAgentRuntime, OllamaBackend
+from app.agent.local_runtime import LocalAgentRuntime, LocalConversationRuntime, OllamaBackend
+from app.agent.local_model_discovery import discover_local_model
 from app.agent.openhands_runtime import OpenHandsRuntime
 from app.agent.protocol import AgentRuntime
+from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
+from app.agent.chatgpt_web_agent_runtime import ChatGptWebAgentRuntime
+from app.agent.hybrid_runtime import HybridAssistantRuntime
 from app.activity.store import ActivityLedger
 from app.api.service import ApiFlowService
 from app.api.routes import (
@@ -22,6 +26,7 @@ from app.api.routes import (
 )
 from app.assistant.registry import build_default_registry
 from app.assistant.router import CapabilityRouter
+from app.assistant.background import BackgroundExecutionSupervisor
 from app.assistant.service import AssistantService
 from app.config import Settings
 from app.contracts import LocalEventBus
@@ -61,6 +66,7 @@ def create_app(
     application = FastAPI(title=app_settings.app_name)
     store = SQLiteStore(app_settings.data_dir / "state.sqlite3")
     store.init()
+    assistant_supervisor = BackgroundExecutionSupervisor(store, max_workers=1)
     mobile_bridge = MobileBridge(
         store.path,
         enabled=app_settings.mobile_bridge_enabled,
@@ -166,11 +172,18 @@ def create_app(
         @application.on_event("shutdown")
         async def stop_claim_latch_plugin() -> None:
             claim_latch_process.stop()
+
+    @application.on_event("shutdown")
+    async def stop_assistant_supervisor() -> None:
+        assistant_supervisor.shutdown()
+    local_model_name = app_settings.local_model or discover_local_model(
+        app_settings.local_model_base_url, timeout_seconds=0.2
+    )
     runtime = agent_runtime
-    if runtime is None and app_settings.local_model:
+    if runtime is None and local_model_name:
         runtime = LocalAgentRuntime(
             backend=OllamaBackend(
-                model=app_settings.local_model,
+                model=local_model_name,
                 base_url=app_settings.local_model_base_url,
                 timeout=app_settings.local_model_timeout_seconds,
             ),
@@ -183,6 +196,44 @@ def create_app(
             model=app_settings.llm_model,
             base_url=app_settings.llm_base_url,
         )
+    web_runtime: AgentRuntime | None = None
+    if app_settings.chatgpt_web_enabled and app_settings.chatgpt_web_bridge_url:
+        web_runtime = ChatGptWebRuntime(
+            app_settings.chatgpt_web_bridge_url,
+            timeout_seconds=app_settings.chatgpt_web_timeout_seconds,
+            profile_path=app_settings.assistant_profile_path,
+            conversation_state_path=app_settings.data_dir / "chatgpt-assistant-conversation.json",
+        )
+    if agent_runtime is not None:
+        local_general_runtime = agent_runtime
+    elif local_model_name:
+        local_general_runtime = LocalConversationRuntime(backend=runtime.backend)
+    else:
+        # Do not present the canned emergency lane as a real AI provider. If
+        # the local model is absent, the hybrid runtime must either use the
+        # explicitly connected Web lane or report the provider as unavailable.
+        # This prevents every casual message from becoming the same fake reply.
+        local_general_runtime = None
+    # Keep the general assistant lane separate from the ISEOL project runtime.
+    # Even with no configured provider, use the hybrid facade so the user gets
+    # a truthful unavailable response instead of an OpenHands/API-key error.
+    general_runtime: AgentRuntime = HybridAssistantRuntime(
+        local=local_general_runtime, web=web_runtime
+    )
+    if agent_runtime is not None:
+        project_agent_runtime = agent_runtime
+    elif web_runtime is not None:
+        project_agent_runtime = ChatGptWebAgentRuntime(
+            web_runtime=web_runtime,
+            workspace_root=app_settings.workspace_root,
+        )
+    else:
+        # Do not route an unconfigured installation through OpenHands. That
+        # leaks an implementation-specific LLM_API_KEY error after a project
+        # job has already been accepted. The local model is intentionally
+        # reserved for ordinary conversation; projects belong to the
+        # GPT-Web/ISEOL lane and must fail closed when that lane is absent.
+        project_agent_runtime = HybridAssistantRuntime(web=web_runtime)
     api_flow = ApiFlowService(
         coordinator,
         store,
@@ -201,10 +252,16 @@ def create_app(
         settings=app_settings, provisioner=project_provisioner, memory=coordinator.memory,
         trust_gate=trust_gate, event_bus=event_bus, event_publisher=mobile_bridge.publish,
         document_service=project_documents, planning_service=planning_service,
-        agent_runtime=runtime if agent_runtime is not None or app_settings.llm_api_key or app_settings.local_model else None,
+        # Always pass the selected runtime into ISEOL.  A runtime without
+        # credentials reports a blocked execution; omitting it would let the
+        # project runner skip every specialist and falsely release a scaffold.
+        agent_runtime=project_agent_runtime,
+        general_runtime=general_runtime,
+        chatgpt_web_enabled=app_settings.chatgpt_web_enabled,
     )
     application.state.kernel = kernel
     application.state.execution_store = kernel.executions
+    application.state.assistant_supervisor = assistant_supervisor
     application.state.event_bus = event_bus
     project_view = ProjectViewService(store, activity_ledger)
     application.state.project_view = project_view
@@ -217,11 +274,15 @@ def create_app(
         event_publisher=mobile_bridge.publish,
         document_service=project_documents,
         kernel=kernel,
+        background_supervisor=assistant_supervisor,
     )
     application.state.assistant_service = assistant_service
+    assistant_service.resume_background_jobs()
     design_service = DesignService(store=store)
     application.state.design_service = design_service
     plugin_host = PluginHost(store, execution_store=kernel.executions)
+    kernel.plugin_host = plugin_host
+    capability_router.registry.set_dynamic_provider(plugin_host.routing_capabilities)
     application.state.plugin_host = plugin_host
 
     def mobile_snapshot(project_id: str | None) -> dict[str, object]:

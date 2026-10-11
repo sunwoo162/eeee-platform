@@ -1,5 +1,4 @@
 import os
-import webbrowser
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -39,14 +38,12 @@ def test_desktop_companion_is_an_interactive_always_on_top_widget():
         app.processEvents()
 
 
-def test_desktop_companion_is_a_calm_launcher_with_korean_default_and_english_option(monkeypatch):
+def test_desktop_companion_is_a_calm_launcher_with_korean_default_and_english_option():
     app = QApplication.instance() or QApplication([])
     settings = QSettings("Gleave", "GleaveDesktop")
     previous_language = settings.value("language", None)
     settings.setValue("language", "ko")
     window = PetWindow(PetApiClient("http://127.0.0.1:1"))
-    opened: list[str] = []
-    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
     try:
         assert window.objectName() == "desktopCompanion"
         assert "QWidget {" not in window.styleSheet()
@@ -60,14 +57,15 @@ def test_desktop_companion_is_a_calm_launcher_with_korean_default_and_english_op
         assert not window.legacy_panel.isVisible()
 
         window._open_workspace()
-        assert opened == ["http://127.0.0.1:1/?lang=ko"]
+        assert window._workspace is not None
+        assert window._workspace.windowTitle() == "EEEE Workspace"
 
         window.language_select.setCurrentIndex(1)
         app.processEvents()
         assert window.language_select.currentData() == "en"
         assert window.workspace_button.text() == "Open Gleave workspace"
         window._open_workspace()
-        assert opened[-1] == "http://127.0.0.1:1/?lang=en"
+        assert window._workspace is not None
     finally:
         window.request_quit()
         window.close()

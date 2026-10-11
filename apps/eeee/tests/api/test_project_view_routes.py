@@ -5,6 +5,7 @@ from app.config import Settings
 from app.contracts import EventEnvelope, ExecutionEnvelope, ExecutionStatus
 from app.harness.state import AgentTask
 from app.main import create_app
+from tests.api._helpers import wait_for_project_job
 
 
 @pytest.fixture
@@ -59,7 +60,7 @@ def test_events_route_uses_durable_cursor_and_validates_cursor(client):
 
 def test_project_creation_without_plugins_has_readable_map(client):
     response = client.post("/api/assistant/route", json={"text": "Todo 앱 만들어줘"})
-    project_id = response.json()["project_id"]
+    project_id = wait_for_project_job(client, response)["project_id"]
     result = client.get(f"/api/projects/{project_id}/map")
     assert result.status_code == 200
     assert result.json()["projectId"] == project_id

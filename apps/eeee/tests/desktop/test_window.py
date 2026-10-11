@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEventLoop, QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QEventLoop, QPoint, QPointF, QRect, QSize, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -297,9 +297,28 @@ def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
     base = window._source_pixmap_for_frame("left").toImage()
     pressed = window._source_pixmap_for_frame("left_press").toImage()
     opposite = window._source_pixmap_for_frame("right").toImage()
+    clip = window._same_paw_clip_path("left")
+    outside_diffs = sum(
+        base.pixelColor(x, y) != pressed.pixelColor(x, y)
+        for y in range(200, 400, 24)
+        for x in range(600, 1000, 24)
+        if not clip.contains(QPointF(x, y))
+    )
+    right_base = window._source_pixmap_for_frame("right").toImage()
+    right_pressed = window._source_pixmap_for_frame("right_press").toImage()
+    right_clip = window._same_paw_clip_path("right")
+    right_outside_diffs = sum(
+        right_base.pixelColor(x, y) != right_pressed.pixelColor(x, y)
+        for y in range(200, 400, 24)
+        for x in range(600, 1000, 24)
+        if not right_clip.contains(QPointF(x, y))
+    )
 
     assert pressed != base
     assert pressed != opposite
+    assert outside_diffs == 0
+    assert right_pressed != right_base
+    assert right_outside_diffs == 0
     window.close()
 
 

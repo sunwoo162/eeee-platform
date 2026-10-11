@@ -45,6 +45,7 @@ class AssistantContext(BaseModel):
     memory_ids: list[str] = Field(default_factory=list)
     qa_baseline_ids: list[str] = Field(default_factory=list)
     user_preferences: dict[str, Any] = Field(default_factory=dict)
+    memory_context: str = "{}"
 
 
 class ResponseVerification(BaseModel):

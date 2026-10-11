@@ -6,6 +6,7 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 spec_dir = Path(SPECPATH).resolve()
 eeee_root = spec_dir.parent / "eeee"
 static_dir = eeee_root / "app" / "static"
+pet_assets_dir = eeee_root / "app" / "desktop" / "assets"
 chatgpt_runtime_dir = spec_dir.parent / ".." / "packages" / "iseol" / "dist"
 chatgpt_playwright_core_dir = spec_dir.parent / ".." / "packages" / "iseol" / "node_modules" / "playwright-core"
 chatgpt_package_json = spec_dir.parent / ".." / "packages" / "iseol" / "package.json"
@@ -32,6 +33,7 @@ a = Analysis(
     binaries=binaries,
     datas=[
         (str(static_dir), "app/static"),
+        (str(pet_assets_dir), "app/desktop/assets"),
         (str(chatgpt_runtime_dir), "chatgpt-runtime"),
         (str(chatgpt_playwright_core_dir), "chatgpt-runtime/node_modules/playwright-core"),
         (str(chatgpt_package_json), "chatgpt-runtime"),

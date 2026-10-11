@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,6 +16,7 @@ from app.project_runtime.provisioner import ProjectProvisioner
 from app.storage.sqlite import SQLiteStore
 from app.kernel.service import KernelService
 from app.memory.preferences import extract_implicit_preference
+from app.assistant.background import BackgroundExecutionSupervisor
 
 
 class AssistantRouteResult(BaseModel):
@@ -22,7 +24,7 @@ class AssistantRouteResult(BaseModel):
 
     status: Literal[
         "selected", "needs_clarification", "ready", "awaiting_configuration",
-        "completed", "blocked", "plugin_required",
+        "completed", "blocked", "plugin_required", "accepted",
     ]
     selection: CapabilitySelection
     message: str = Field(min_length=1)
@@ -45,6 +47,7 @@ class AssistantRouteResult(BaseModel):
     suggested_action: str | None = None
     plugin_id: str | None = None
     plugin_execution_id: str | None = None
+    job_id: str | None = Field(default=None, alias="jobId")
 
 
 class AssistantService:
@@ -61,12 +64,14 @@ class AssistantService:
         event_publisher: Callable[[str, dict[str, object]], object] | None = None,
         document_service: ProjectDocumentService | None = None,
         kernel: KernelService | None = None, agent_runtime=None,
+        background_supervisor: BackgroundExecutionSupervisor | None = None,
     ) -> None:
         self.router = router
         self.coordinator = coordinator
         self.store = store
         self.settings = settings
         self.provisioner = provisioner
+        self.background_supervisor = background_supervisor
         self.event_publisher = event_publisher
         self.document_service = document_service
         self.kernel = kernel or KernelService(
@@ -77,6 +82,43 @@ class AssistantService:
         )
 
     def route(
+        self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
+    ) -> AssistantRouteResult:
+        request = AssistantRequest(
+            raw_text=text,
+            context={"workspace": workspace},
+            requested_capability=requested_capability,
+        )
+        if self.background_supervisor is not None:
+            selection = self.router.select(request)
+            if selection.status == "selected" and selection.capability_id == "project-execution":
+                request_id = f"assistant-request-{uuid4().hex}"
+                job_id = self.background_supervisor.submit(
+                    request_id,
+                    lambda: self._route_sync(
+                        text, workspace, requested_capability=requested_capability,
+                    ).model_dump(mode="json"),
+                    input_data={
+                        "text": text,
+                        "workspace": workspace,
+                        "requestedCapability": requested_capability,
+                    },
+                )
+                return AssistantRouteResult(
+                    status="accepted",
+                    selection=selection,
+                    message="프로젝트 작업을 백그라운드에서 시작했어. 진행 상황에서 확인할 수 있어.",
+                    job_id=job_id,
+                    response_verification=ResponseVerification(
+                        decision="WARN",
+                        reason="Project execution was accepted and is awaiting background verification",
+                        profile_version=self.settings.claim_latch_profile_version,
+                        subject_id=job_id,
+                    ),
+                )
+        return self._route_sync(text, workspace, requested_capability=requested_capability)
+
+    def _route_sync(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
     ) -> AssistantRouteResult:
         implicit_preference = extract_implicit_preference(text)
@@ -146,4 +188,29 @@ class AssistantService:
 
     def get_project_profile(self, project_id: str) -> ProjectProfile:
         return self.store.get_project_profile(project_id)
+
+    def get_background_job(self, job_id: str) -> dict[str, object]:
+        if self.background_supervisor is None:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return self.background_supervisor.get(job_id)
+
+    def resume_background_jobs(self) -> list[str]:
+        if self.background_supervisor is None:
+            return []
+
+        def operation_factory(job: dict[str, object]):
+            input_data = job.get("input", {})
+            input_data = input_data if isinstance(input_data, dict) else {}
+            text = input_data.get("text")
+            workspace = input_data.get("workspace")
+            requested_capability = input_data.get("requestedCapability")
+            if not isinstance(text, str) or not text.strip():
+                return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
+            return lambda: self._route_sync(
+                text,
+                workspace if isinstance(workspace, str) else None,
+                requested_capability=requested_capability if isinstance(requested_capability, str) else None,
+            ).model_dump(mode="json")
+
+        return self.background_supervisor.resume_pending(operation_factory)
 

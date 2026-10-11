@@ -9,6 +9,7 @@ from app.project_runtime.provisioner import ProjectProvisioner
 from app.storage.sqlite import SQLiteStore
 from app.runtime.store import ExecutionStore
 from app.agent.protocol import AgentResult
+from app.memory.models import MemoryCandidate
 
 
 def test_assistant_service_creates_one_project_runtime_for_project_intent(tmp_path) -> None:
@@ -82,8 +83,25 @@ def test_assistant_service_handles_general_conversation_without_a_project(tmp_pa
     assert result.project_id is None
     assert result.project_profile is None
     assert result.status == "completed"
-    assert "EEEE" in result.message
+    assert "안녕" in result.message
     assert result.response_verification.profile_version == "claimlatch-v0.2.0"
+
+
+def test_general_conversation_without_any_provider_is_truthfully_blocked(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()), coordinator=coordinator,
+        store=store, settings=settings, provisioner=ProjectProvisioner(store),
+    )
+
+    result = service.route("안녕")
+
+    assert result.status == "completed"
+    assert "안녕" in result.message
+    assert result.response_verification.decision in {"PASS", "WARN"}
 
 
 def test_assistant_service_blocks_enabled_chatgpt_web_without_a_bridge(tmp_path) -> None:
@@ -105,8 +123,8 @@ def test_assistant_service_blocks_enabled_chatgpt_web_without_a_bridge(tmp_path)
 
     result = service.route("안녕")
 
-    assert result.status == "blocked"
-    assert "ChatGPT Web" in result.message
+    assert result.status == "completed"
+    assert "안녕" in result.message
     assert result.project_id is None
 
 
@@ -168,6 +186,69 @@ def test_general_conversation_uses_configured_agent_runtime_without_project(tmp_
     assert result.message == "오늘은 차분하게 우선순위를 정리해보자."
     assert result.project_id is None
     assert any("응아니" in prompt for prompt in runtime.prompts)
+
+
+def test_general_conversation_receives_relevant_memory_content_not_only_ids(tmp_path) -> None:
+    class ConversationRuntime:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, request):
+            self.prompts.append(request.prompt)
+            return AgentResult(
+                status="completed", summary="기억을 반영했어.", events=[],
+                changed_files=[], test_commands=[], error=None,
+            )
+
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    runtime = ConversationRuntime()
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()), coordinator=coordinator,
+        store=store, settings=settings, provisioner=ProjectProvisioner(store),
+        agent_runtime=runtime,
+    )
+
+    candidate = coordinator.memory.save_candidate(MemoryCandidate(
+        candidate_id="routine-memory", kind="success_pattern",
+        content="오전에는 집중 작업을 선호함", scope={"topic": "routine"},
+        source_project_id="user", source_artifact_ids=["chat"],
+        evidence_ids=["user-stated"], verification_ids=["user-stated"],
+        confidence=0.9, created_at="2026-10-08T00:00:00Z",
+    ))
+    coordinator.memory.promote(candidate.id, actor="user", evidence_ids=["user-stated"])
+    service.route("오늘 집중 작업 뭐할까?")
+
+    assert any("오전에는 집중 작업을 선호함" in prompt for prompt in runtime.prompts)
+
+
+def test_general_conversation_never_sends_sensitive_preference_values_to_provider(tmp_path) -> None:
+    class ConversationRuntime:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, request):
+            self.prompts.append(request.prompt)
+            return AgentResult(status="completed", summary="응답", events=[], changed_files=[], test_commands=[], error=None)
+
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    runtime = ConversationRuntime()
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()), coordinator=coordinator,
+        store=store, settings=settings, provisioner=ProjectProvisioner(store),
+        agent_runtime=runtime,
+    )
+
+    service.route("기억해줘 비밀번호: extremely-secret-value")
+    service.route("비밀번호 알려줘")
+
+    assert runtime.prompts
+    assert all("extremely-secret-value" not in prompt for prompt in runtime.prompts)
 
 
 def test_assistant_service_reports_initial_stale_child_as_blocked_observation(tmp_path) -> None:

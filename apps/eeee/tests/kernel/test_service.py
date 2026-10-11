@@ -208,6 +208,7 @@ def test_english_trigger_inside_unrelated_word_does_not_create_project(tmp_path)
     result = kernel.route(AssistantRequest(raw_text="I am happy"), AssistantContext())
     assert result.status == ExecutionStatus.COMPLETED
     assert result.capability_id == "general-conversation"
+    assert result.capability_id == "general-conversation"
     assert result.output["capabilityStatus"] == "completed"
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0

@@ -67,6 +67,13 @@ def test_executor_runs_only_ready_nodes_and_verifies_every_handoff(tmp_path):
     assert all(item.status == "passed" for item in report.agents)
 
 
+def test_requirements_and_research_agents_can_leave_evidence_documents():
+    graph = AgentTeamFactory.default_graph("Todo 앱")
+
+    assert "workspace.write" in graph.by_id("requirements").allowed_tools
+    assert "workspace.write" in graph.by_id("research").allowed_tools
+
+
 def test_executor_includes_verified_memory_context_in_agent_prompt(tmp_path):
     runtime = RecordingRuntime()
     trust = PassingTrust()
@@ -135,3 +142,27 @@ def test_executor_blocks_before_claimlatch_when_quality_gate_finds_secret(tmp_pa
     assert "secret" in frontend.reason.lower()
     assert "frontend" not in trust.calls
     assert report.by_id("test").status == "blocked"
+
+
+def test_executor_resumes_from_checkpoint_without_rerunning_verified_agents(tmp_path):
+    runtime = RecordingRuntime()
+    trust = PassingTrust()
+    checkpoint = Path(tmp_path) / "iseol-checkpoint.json"
+    graph = AgentTeamFactory.default_graph("Todo 앱").model_copy(update={
+        "agents": AgentTeamFactory.default_graph("Todo 앱").agents[:2],
+    })
+
+    first = AgentGraphExecutor(
+        runtime=runtime, trust_pipeline=trust, workspace=Path(tmp_path),
+        checkpoint_path=checkpoint,
+    ).execute(graph, _envelope())
+    assert first.status == "completed"
+    first_calls = list(runtime.calls)
+
+    second = AgentGraphExecutor(
+        runtime=runtime, trust_pipeline=trust, workspace=Path(tmp_path),
+        checkpoint_path=checkpoint,
+    ).execute(graph, _envelope())
+
+    assert second.status == "completed"
+    assert runtime.calls == first_calls

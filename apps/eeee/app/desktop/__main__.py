@@ -43,7 +43,11 @@ def connect_desktop_api(
         )
     runtime = EmbeddedApiRuntime(settings=desktop_settings)
     try:
-        return PetApiClient(runtime.start(), project_id), runtime
+        return PetApiClient(
+            runtime.start(),
+            project_id,
+            assistant_timeout_seconds=desktop_settings.command_timeout_seconds + 60.0,
+        ), runtime
     except Exception:
         runtime.stop()
         raise
@@ -98,6 +102,7 @@ def run_gui_self_test() -> int:
         while (
             client.routed_text != "GUI self-test"
             or window.current_state.get("state") != "completed"
+            or window.detail.text() != "GUI self-test response"
         ) and datetime.now().timestamp() < deadline:
             application.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
         passed = (

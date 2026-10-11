@@ -45,6 +45,18 @@ class CapabilityRouter:
             )
 
         normalized = _normalize(request.raw_text)
+        if _is_informational_capability_question(normalized):
+            fallback = self.registry.resolve("general-conversation")
+            return CapabilitySelection(
+                status="selected",
+                capability_id=fallback.descriptor.id,
+                candidates=[CapabilityCandidate(
+                    capability_id=fallback.descriptor.id,
+                    score=0,
+                    reasons=["informational capability question"],
+                )],
+                reasons=["informational capability question"],
+            )
         candidates: list[CapabilityCandidate] = []
         for descriptor in self.registry.list():
             matched = [phrase for phrase in descriptor.trigger_phrases if _contains(normalized, phrase)]
@@ -149,3 +161,20 @@ def _contains(normalized_text: str, phrase: str) -> bool:
         # English triggers are words, not substrings ("app" is not "happy").
         return re.search(r"(?<![a-z0-9_])" + re.escape(normalized_phrase) + r"(?![a-z0-9_])", normalized_text) is not None
     return normalized_phrase in normalized_text
+
+
+def _is_informational_capability_question(normalized: str) -> bool:
+    """Keep capability/about-me questions out of side-effectful work routes."""
+    question_markers = (
+        "할 수 있어", "할수 있어", "어느 정도", "어느정도", "가능해", "가능하",
+        "뭐 할 수", "무엇을 할 수", "어떤 걸 할 수", "어떤 작업", "도와줄 수",
+        "지원해", "뭐가 가능", "can you", "what can you", "how capable",
+        "what do you support", "are you able",
+    )
+    if not any(marker in normalized for marker in question_markers):
+        return False
+    action_markers = (
+        "만들어", "만들어줘", "구현", "생성", "작성", "개발해줘", "해줘",
+        "build", "create", "implement", "develop", "generate",
+    )
+    return not any(marker in normalized for marker in action_markers)

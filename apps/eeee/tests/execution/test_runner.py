@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import os
 
 import pytest
 
@@ -33,6 +34,17 @@ def test_runner_executes_fixed_argv_without_shell_and_captures_success(tmp_path,
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["capture_output"] is True
     assert calls[0][1]["text"] is True
+
+
+def test_runner_resolves_windows_node_when_path_is_not_available(tmp_path, monkeypatch):
+    runner = WorkspaceCommandRunner(tmp_path)
+    monkeypatch.setattr("app.execution.runner.shutil.which", lambda _name: None)
+    if os.name != "nt":
+        pytest.skip("Windows executable resolution is platform-specific")
+
+    resolved = runner._resolve_argv(["node", "--check", "src/app.js"])
+
+    assert resolved[0].lower().endswith("node.exe")
 
 
 def test_runner_rejects_workspace_outside_allowed_root_before_starting_process(

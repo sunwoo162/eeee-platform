@@ -89,7 +89,20 @@ const RESTORE_CLIPBOARD_CAPTURE_SCRIPT = `(() => {
   delete globalThis.__iseolClipboardCapture;
 })()`;
 
-const GENERATING_SELECTOR = 'button[data-testid="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop"]';
+// ChatGPT's current Korean UI exposes the active generation control as
+// aria-label="중지". Keep the older English/test-id variants because the
+// browser profile language can differ between installations. Missing this
+// control makes a freshly submitted response look stable too early and can
+// cause the structured-result reader to wait until its full timeout.
+const GENERATING_SELECTOR = 'button[data-testid="stop-button"], button[aria-label="Stop generating"], button[aria-label="Stop"], button[aria-label="중지"]';
+const PRIMARY_ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
+const FALLBACK_ASSISTANT_SELECTOR = '[data-markdown-text-style="assistant-message"]';
+
+async function assistantLocator(page: Page) {
+  const primary = page.locator(PRIMARY_ASSISTANT_SELECTOR);
+  if (await primary.count() > 0) return primary;
+  return page.locator(FALLBACK_ASSISTANT_SELECTOR);
+}
 
 export type AssistantTextReadCallPoint =
   | "assistant-locator-count"
@@ -154,7 +167,18 @@ export async function createPlaywrightBrowserBackend(
       headless: config.headless,
     });
   }
-  let page: Page | null = await context.newPage();
+  // Reuse the existing ChatGPT page in the persistent profile. Creating a
+  // fresh page on every Desktop restart used to leave duplicate ChatGPT tabs
+  // behind and made the active composer ambiguous.
+  const existingPages = typeof (context as any).pages === "function" ? context.pages() : [];
+  const chatGptPages = existingPages.filter((candidate) => {
+    try { return new URL(candidate.url()).origin === "https://chatgpt.com"; }
+    catch { return false; }
+  });
+  let page: Page | null = chatGptPages[0] ?? await context.newPage();
+  await Promise.all(chatGptPages.slice(1).map(async (duplicate) => {
+    try { await duplicate.close(); } catch { /* stale tabs are harmless */ }
+  }));
   let disposed = false;
   const lifecycleFile = config.lifecycleRoot ? resolve(config.lifecycleRoot, "web-workers", "lifecycle.jsonl") : null;
   let lifecycleWrites = Promise.resolve();
@@ -222,9 +246,9 @@ export async function createPlaywrightBrowserBackend(
       if (await semantic.count() !== 1) throw new Error("send control unavailable or ambiguous");
       await semantic.click();
     },
-    async assistantMessageCount() { return (await ownedPage()).locator(ASSISTANT_SELECTOR).count(); },
+    async assistantMessageCount() { return (await assistantLocator(await ownedPage())).count(); },
     async latestAssistantText() {
-      const assistant = (await ownedPage()).locator(ASSISTANT_SELECTOR);
+      const assistant = await assistantLocator(await ownedPage());
       let count: number;
       try {
         count = await assistant.count();
@@ -258,7 +282,7 @@ export async function createPlaywrightBrowserBackend(
       return typeof text === "string" && text.trim() ? text : null;
     },
     async latestAssistantDomText() {
-      const assistant = (await ownedPage()).locator(ASSISTANT_SELECTOR);
+      const assistant = await assistantLocator(await ownedPage());
       let count: number;
       try {
         count = await assistant.count();
@@ -293,11 +317,14 @@ export async function createPlaywrightBrowserBackend(
     },
     async latestAssistantRawText() {
       const owned = await ownedPage();
-      const assistant = owned.locator(ASSISTANT_SELECTOR);
+      const assistant = await assistantLocator(owned);
       if (await assistant.count() === 0) return null;
       const turn = assistant.last().locator('xpath=ancestor::*[.//button[@data-testid="copy-turn-action-button" or @aria-label="메시지 복사" or @aria-label="Copy"]][1]');
       if (await turn.count() !== 1) throw new Error("assistant turn copy control unavailable or ambiguous");
-      const copy = turn.locator(COPY_SELECTOR);
+      const primaryCopy = turn.locator('button[data-testid="copy-turn-action-button"]');
+      const copy = await primaryCopy.count() > 0
+        ? primaryCopy
+        : turn.locator('button[aria-label="메시지 복사"], button[aria-label="Copy"]');
       if (await copy.count() !== 1) throw new Error("assistant copy control unavailable or ambiguous");
       await owned.evaluate(INSTALL_CLIPBOARD_CAPTURE_SCRIPT);
       let primaryError: unknown;

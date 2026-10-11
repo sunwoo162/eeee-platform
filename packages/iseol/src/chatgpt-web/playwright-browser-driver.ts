@@ -446,7 +446,15 @@ export async function createPlaywrightChatGptBrowserDriver(
     while (true) {
       const url = await backend.currentUrl();
       const composerCount = await authenticatedComposerCount(url);
-      if (composerCount === 1) return url;
+      if (composerCount === 1) {
+        // ChatGPT can expose the composer on `/` for a brief moment while
+        // redirecting to the last canonical `/c/<conversation>` URL. Do not
+        // hand the page to submitPrompt until that identity has settled.
+        await sleep(POLL_MS);
+        const stableUrl = await backend.currentUrl();
+        if (stableUrl === url) return stableUrl;
+        continue;
+      }
       if (composerCount > 1) lost("Authenticated ChatGPT composer is missing or ambiguous");
       if (now() - startedAt >= COMPOSER_READY_TIMEOUT_MS) {
         lost("Authenticated ChatGPT composer is missing or ambiguous");
@@ -504,10 +512,17 @@ export async function createPlaywrightChatGptBrowserDriver(
 
     const operation = (async (): Promise<{ conversationRef?: string }> => {
       try {
-        const beforeUrl = await backend.currentUrl();
+        let beforeUrl = await backend.currentUrl();
         if (input.conversationRef) {
           if (!REF.test(input.conversationRef) || conversationFrom(beforeUrl) !== input.conversationRef) {
-            lost("ChatGPT conversation identity changed before prompt submission");
+            // The ChatGPT SPA may move the owned page to another route while
+            // hydrating a response. Reacquire the exact persisted conversation
+            // once before failing closed; never submit into an unknown route.
+            await backend.navigate(`${ROOT}c/${input.conversationRef}`);
+            beforeUrl = await waitForAuthenticatedComposer();
+            if (conversationFrom(beforeUrl) !== input.conversationRef) {
+              lost("ChatGPT conversation identity changed before prompt submission");
+            }
           }
         } else if (!isCanonicalNewPage(beforeUrl)) {
           lost("ChatGPT new conversation identity is unavailable before prompt submission");
@@ -552,13 +567,21 @@ export async function createPlaywrightChatGptBrowserDriver(
         throw error;
       }
       diagnostic?.start("pending-submission");
-      const pending = pendingByConversation.get(input.conversationRef);
+      let pending = pendingByConversation.get(input.conversationRef);
+      // A very fast SPA turn can finish between submitPrompt and the first
+      // read, while the in-memory pending marker is being replaced. Give the
+      // marker one short event-loop grace period before failing closed.
+      if (!pending) {
+        await sleep(50);
+        pending = pendingByConversation.get(input.conversationRef);
+      }
       if (!pending) {
         const error = new ChatGptWebSessionLostError("No pending ChatGPT submission is available for structured result reading", "pending-submission-missing");
         diagnosticFailure("pending-submission", error);
         throw error;
+      } else {
+        diagnostic?.complete("pending-submission");
       }
-      diagnostic?.complete("pending-submission");
       const baseline = pending.baselineAssistantCount;
       let stableText: string | null = null;
       let stableSince = startedAt;

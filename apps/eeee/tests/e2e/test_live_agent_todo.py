@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import time
 
 from fastapi.testclient import TestClient
 
@@ -58,7 +59,17 @@ def test_user_todo_request_executes_specialist_graph_and_renders_it(tmp_path):
         response = client.post("/api/assistant/route", json={"text": "Todo 앱 만들어줘"})
 
         assert response.status_code == 200, response.text
-        payload = response.json()
+        accepted = response.json()
+        assert accepted["status"] == "accepted", accepted
+        deadline = time.monotonic() + 10
+        job = None
+        while time.monotonic() < deadline:
+            job = client.get(f"/api/assistant/jobs/{accepted['jobId']}").json()
+            if job["status"] in {"completed", "failed"}:
+                break
+            time.sleep(0.02)
+        assert job and job["status"] == "completed", job
+        payload = job["result"]
         project_id = payload["project_id"]
         assert payload["project_profile"], payload
         workspace = Path(payload["project_profile"]["workspace"])
@@ -74,3 +85,33 @@ def test_user_todo_request_executes_specialist_graph_and_renders_it(tmp_path):
         assert len(agents) == 13
         assert all(node["status"] == "completed" for node in agents.values())
         assert all(node["claimLatchStatus"] == "PASS" for node in agents.values())
+
+
+def test_user_todo_request_does_not_claim_release_without_specialist_runtime(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+        claim_latch_mode="required",
+    )
+    application = create_app(settings)
+    application.state.trust_gate.client = FakeClaimLatchClient()
+
+    with TestClient(application) as client:
+        response = client.post("/api/assistant/route", json={"text": "Todo 앱 만들어줘"})
+
+        assert response.status_code == 200, response.text
+        accepted = response.json()
+        assert accepted["status"] == "accepted", accepted
+        deadline = time.monotonic() + 10
+        job = None
+        while time.monotonic() < deadline:
+            job = client.get(f"/api/assistant/jobs/{accepted['jobId']}").json()
+            if job["status"] in {"completed", "failed"}:
+                break
+            time.sleep(0.02)
+        assert job and job["status"] == "completed", job
+        payload = job["result"]
+        assert payload["status"] in {"blocked", "failed"}
+        assert "agent" in payload["message"].lower()
+        assert payload.get("quality_status") != "PASS"

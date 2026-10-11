@@ -19,6 +19,7 @@ def test_todo_scaffold_is_runnable_fsd_and_utf8(tmp_path) -> None:
     assert (root / "tests/e2e/todo-flow.md").is_file()
     assert (root / "DESIGN.md").read_text(encoding="utf-8").startswith("# Todo 프로젝트 디자인")
     manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    assert manifest["type"] == "module"
     assert manifest["scripts"]["start"] == "python -m http.server 4173"
     assert len(result) >= 10
 

@@ -82,6 +82,7 @@ class AgentGraphExecutor:
         max_retries: int = 1,
         acceptance_evaluator: AcceptanceEvaluator | None = None,
         quality_gate: QualityGate | None = None,
+        checkpoint_path: Path | None = None,
     ) -> None:
         self.runtime = runtime
         self.trust_pipeline = trust_pipeline
@@ -95,6 +96,7 @@ class AgentGraphExecutor:
         self.max_retries = max_retries
         self.acceptance_evaluator = acceptance_evaluator or AcceptanceEvaluator()
         self.quality_gate = quality_gate or QualityGate(workspace)
+        self.checkpoint_path = checkpoint_path
 
     def execute(self, graph: AgentGraph, envelope: ExecutionEnvelope) -> AgentExecutionReport:
         records: dict[str, AgentExecutionRecord] = {}
@@ -104,6 +106,15 @@ class AgentGraphExecutor:
         remaining = {node.id: node for node in graph.agents}
         handoffs: dict[str, AgentExecutionRecord] = {}
         attempts: dict[str, int] = {}
+
+        if self.checkpoint_path is not None:
+            restored = self._load_checkpoint(graph)
+            for record in restored:
+                records[record.agent_id] = record
+                if record.status == "passed":
+                    completed_ids.add(record.agent_id)
+                    handoffs[record.agent_id] = record
+                    remaining.pop(record.agent_id, None)
 
         while remaining:
             to_block = [
@@ -155,6 +166,7 @@ class AgentGraphExecutor:
                     else:
                         blocked_ids.add(node.id)
                     remaining.pop(node.id)
+                    self._write_checkpoint(graph, records)
 
         status: RunStatus = "failed" if failed_ids else (
             "completed" if len(completed_ids) == len(graph.agents) else "blocked"
@@ -163,6 +175,42 @@ class AgentGraphExecutor:
             graphVersion=graph.schema_version, status=status,
             agents=[records[node.id] for node in graph.agents],
         )
+
+    def _load_checkpoint(self, graph: AgentGraph) -> list[AgentExecutionRecord]:
+        if self.checkpoint_path is None or not self.checkpoint_path.is_file():
+            return []
+        try:
+            payload = json.loads(self.checkpoint_path.read_text(encoding="utf-8"))
+            if payload.get("graphVersion") != graph.schema_version:
+                return []
+            expected = {node.id for node in graph.agents}
+            records = [
+                AgentExecutionRecord.model_validate(item)
+                for item in payload.get("agents", [])
+                if isinstance(item, dict) and item.get("agentId") in expected
+            ]
+            return [record for record in records if record.status == "passed"]
+        except (OSError, ValueError, TypeError):
+            return []
+
+    def _write_checkpoint(self, graph: AgentGraph, records: dict[str, AgentExecutionRecord]) -> None:
+        if self.checkpoint_path is None:
+            return
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        status = "completed" if len(records) == len(graph.agents) and all(
+            record.status == "passed" for record in records.values()
+        ) else "blocked"
+        payload = {
+            "graphVersion": graph.schema_version,
+            "status": status,
+            "agents": [
+                records[node.id].model_dump(mode="json", by_alias=True)
+                for node in graph.agents if node.id in records
+            ],
+        }
+        temporary = self.checkpoint_path.with_suffix(self.checkpoint_path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.checkpoint_path)
 
     def _run_node(self, node: AgentNode, envelope: ExecutionEnvelope,
                   handoffs: dict[str, AgentExecutionRecord], shared_context: dict[str, object], *,

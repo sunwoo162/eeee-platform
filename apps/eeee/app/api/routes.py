@@ -349,6 +349,10 @@ def build_assistant_router(
     def get_project_profile(project_id: str) -> ProjectProfile:
         return service.get_project_profile(project_id)
 
+    @router.get("/assistant/jobs/{job_id}")
+    def get_assistant_job(job_id: str) -> dict[str, object]:
+        return service.get_background_job(job_id)
+
     @router.post(
         "/projects/{project_id}/documents/sync",
         response_model=ProjectDocumentSyncResult,

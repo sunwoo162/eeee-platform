@@ -5,10 +5,13 @@ from __future__ import annotations
 import threading
 import time
 import os
+import json
+import re
 import shutil
 import socket
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import uvicorn
@@ -59,6 +62,56 @@ def _wait_for_tcp_port(host: str, port: int, timeout: float = 10.0) -> bool:
         except OSError:
             time.sleep(0.1)
     return False
+
+
+def _chatgpt_bridge_is_healthy(port: int) -> bool:
+    """Detect a bridge left by a previous desktop process before spawning another."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.5) as response:
+            return response.status == 200 and b"connected" in response.read(4096)
+    except (OSError, ValueError):
+        return False
+
+
+def _chatgpt_bridge_is_stale(port: int) -> bool:
+    """Detect an orphaned bridge whose browser session is no longer connected."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.5) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read(4096).decode("utf-8"))
+            return (
+                isinstance(payload, dict)
+                and payload.get("service") == "chatgpt-web-bridge"
+                and payload.get("connected") is False
+            )
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+        return False
+
+
+def _terminate_port_owner(port: int) -> bool:
+    """Terminate a process tree that owns one of EEEE's private loopback ports."""
+    if os.name != "nt":
+        return False
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        pattern = re.compile(rf"127\.0\.0\.1:{port}\s+\S+\s+LISTENING\s+(\d+)", re.IGNORECASE)
+        pids = {match.group(1) for match in pattern.finditer(result.stdout)}
+        for pid in pids:
+            subprocess.run(
+                ["taskkill", "/PID", pid, "/T", "/F"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        return bool(pids)
+    except OSError:
+        return False
 
 
 def _runtime_debug(message: str) -> None:
@@ -112,7 +165,7 @@ class EmbeddedApiRuntime:
             raise RuntimeError("Embedded API is already running")
 
         self._error = None
-        self._start_chatgpt_web_bridge()
+        self._start_chatgpt_web_bridge(visible=False)
         self._server = uvicorn.Server(
             uvicorn.Config(
                 create_app(self.settings),
@@ -166,7 +219,7 @@ class EmbeddedApiRuntime:
                 self._chatgpt_browser.kill()
             self._chatgpt_browser = None
 
-    def _start_chatgpt_web_bridge(self) -> None:
+    def _start_chatgpt_web_bridge(self, *, visible: bool | None = None) -> None:
         _runtime_debug(
             "start "
             f"enabled={self.settings.chatgpt_web_enabled} "
@@ -180,6 +233,17 @@ class EmbeddedApiRuntime:
         if not self.settings.chatgpt_web_profile_root:
             _runtime_debug("skip no profile")
             return
+        if _chatgpt_bridge_is_healthy(self.settings.chatgpt_web_bridge_port):
+            self.settings.chatgpt_web_bridge_url = (
+                f"http://127.0.0.1:{self.settings.chatgpt_web_bridge_port}"
+            )
+            _runtime_debug("reuse healthy existing bridge")
+            return
+        if _chatgpt_bridge_is_stale(self.settings.chatgpt_web_bridge_port):
+            _runtime_debug("remove stale existing bridge and browser")
+            _terminate_port_owner(self.settings.chatgpt_web_bridge_port)
+            _terminate_port_owner(self.settings.chatgpt_web_bridge_port + 1)
+            time.sleep(0.2)
         if getattr(sys, "frozen", False):
             root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
             script = root / "chatgpt-runtime" / "chatgpt-web" / "eeee-bridge.js"
@@ -201,7 +265,7 @@ class EmbeddedApiRuntime:
         })
         if self.settings.chatgpt_web_browser_executable:
             env["ISEOL_CHATGPT_BROWSER_EXECUTABLE"] = self.settings.chatgpt_web_browser_executable
-        self._launch_chatgpt_browser()
+        self._launch_chatgpt_browser(visible=visible)
         cdp_ready = _wait_for_tcp_port("127.0.0.1", self.settings.chatgpt_web_bridge_port + 1)
         _runtime_debug(f"cdp_ready={cdp_ready}")
         if not cdp_ready:
@@ -242,17 +306,23 @@ class EmbeddedApiRuntime:
 
         if not self.settings.chatgpt_web_profile_root:
             return False
-        if self._chatgpt_browser is not None and self._chatgpt_browser.poll() is None:
-            return True
         try:
-            self._launch_chatgpt_browser()
+            # Normal operation owns a hidden browser. Replace that session
+            # with a visible one only for the explicit one-time login action.
+            if self._chatgpt_browser is not None and self._chatgpt_browser.poll() is None:
+                if not self.settings.chatgpt_web_headless:
+                    return True
+                self._stop_chatgpt_session()
+            self._start_chatgpt_web_bridge(visible=True)
             return True
         except OSError:
             return False
 
-    def _launch_chatgpt_browser(self) -> None:
+    def _launch_chatgpt_browser(self, *, visible: bool | None = None) -> None:
         chrome = _resolve_browser_executable(self.settings.chatgpt_web_browser_executable)
-        self._chatgpt_browser = subprocess.Popen([
+        if visible is None:
+            visible = not self.settings.chatgpt_web_headless
+        command = [
             chrome,
             f"--user-data-dir={self.settings.chatgpt_web_profile_root}",
             f"--remote-debugging-port={self.settings.chatgpt_web_bridge_port + 1}",
@@ -261,7 +331,32 @@ class EmbeddedApiRuntime:
             "--no-first-run",
             "--no-default-browser-check",
             "https://chatgpt.com/",
-        ])
+        ]
+        if not visible:
+            # ChatGPT Web does not expose a stable authenticated composer in
+            # Chromium headless mode. Keep one real browser session, but keep
+            # its window out of the user's way during normal operation.
+            command.insert(1, "--start-minimized")
+        self._chatgpt_browser = subprocess.Popen(command)
+
+    def _stop_chatgpt_session(self) -> None:
+        if self._chatgpt_bridge is not None:
+            self._chatgpt_bridge.terminate()
+            try:
+                self._chatgpt_bridge.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self._chatgpt_bridge.kill()
+            self._chatgpt_bridge = None
+        if self._chatgpt_bridge_log is not None:
+            self._chatgpt_bridge_log.close()
+            self._chatgpt_bridge_log = None
+        if self._chatgpt_browser is not None:
+            self._chatgpt_browser.terminate()
+            try:
+                self._chatgpt_browser.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self._chatgpt_browser.kill()
+            self._chatgpt_browser = None
 
     def _run_server(self) -> None:
         assert self._server is not None

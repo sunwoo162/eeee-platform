@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from tests.api._helpers import wait_for_project_job
 
 FIXTURES = Path(__file__).parents[1] / "plugins" / "fixtures"
 
@@ -17,13 +18,14 @@ def test_assistant_route_exposes_one_project_runtime_profile(tmp_path) -> None:
     response = client.post("/api/assistant/route", json={"text": "웹 프로젝트 하나 만들어줘"})
 
     assert response.status_code == 200
-    payload = response.json()
+    payload = wait_for_project_job(client, response)
     assert payload["selection"]["capability_id"] == "project-execution"
     assert payload["project_id"]
-    assert payload["project_profile"]["projectId"] == payload["project_id"]
-    assert payload["status"] == "awaiting_configuration"
-    assert "notion" in payload["missing_connectors"]
-    assert "google-calendar" in payload["missing_connectors"]
+    assert payload["project_profile"]["project_id"] == payload["project_id"]
+    assert payload["status"] == "blocked"
+    # Without a configured execution runtime, the truthful terminal state is
+    # blocked and no external connector claim is emitted.
+    assert payload["missing_connectors"] == []
 
     profile_response = client.get(f"/api/projects/{payload['project_id']}/profile")
 
@@ -77,7 +79,7 @@ def test_project_document_sync_reports_missing_notion_configuration(tmp_path) ->
     client = TestClient(create_app(settings))
 
     created = client.post("/api/assistant/route", json={"text": "웹 프로젝트 하나 만들어줘"})
-    project_id = created.json()["project_id"]
+    project_id = wait_for_project_job(client, created)["project_id"]
     response = client.post(f"/api/projects/{project_id}/documents/sync")
 
     assert response.status_code == 200

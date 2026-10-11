@@ -41,10 +41,13 @@ class Settings(BaseSettings):
     chatgpt_web_autostart: bool = False
     chatgpt_web_profile_root: Path | None = None
     chatgpt_web_browser_executable: str | None = None
-    chatgpt_web_headless: bool = False
+    # The Web session is an implementation detail. Only the explicit login
+    # action opens Chrome; normal assistant requests use a background browser.
+    chatgpt_web_headless: bool = True
     chatgpt_web_bridge_port: int = 47831
     chatgpt_web_node_path: str = "node"
     chatgpt_web_timeout_seconds: float = 120.0
+    assistant_profile_path: Path = Field(default_factory=lambda: _user_data_root() / "profile.json")
     local_model_base_url: str = "http://127.0.0.1:11434/api/chat"
     local_model: str | None = None
     local_model_timeout_seconds: float = 120.0

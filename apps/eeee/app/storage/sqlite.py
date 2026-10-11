@@ -316,6 +316,11 @@ class SQLiteStore:
                     request_id TEXT NOT NULL, project_id TEXT, project_revision TEXT,
                     event_type TEXT NOT NULL, event_json TEXT NOT NULL, published_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS assistant_jobs (
+                    job_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, status TEXT NOT NULL,
+                    input_json TEXT NOT NULL DEFAULT '{}', result_json TEXT, error TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS project_activity_events (
                     cursor INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL,
                     project_revision TEXT NOT NULL, event_json TEXT NOT NULL,
@@ -336,6 +341,11 @@ class SQLiteStore:
             run_columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(runs)").fetchall()
             }
+            assistant_job_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(assistant_jobs)").fetchall()
+            }
+            if "input_json" not in assistant_job_columns:
+                connection.execute("ALTER TABLE assistant_jobs ADD COLUMN input_json TEXT NOT NULL DEFAULT '{}'")
             if "error" not in run_columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN error TEXT")
             if "created_at" not in run_columns:

@@ -20,6 +20,65 @@ def test_resolves_chrome_from_common_windows_install_path(monkeypatch, tmp_path)
     assert _resolve_browser_executable(None) == str(chrome)
 
 
+def test_chatgpt_browser_is_minimized_for_normal_runtime(monkeypatch, tmp_path):
+    launched = []
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.desktop.runtime._resolve_browser_executable",
+        lambda _: "chrome.exe",
+    )
+    monkeypatch.setattr(
+        "app.desktop.runtime.subprocess.Popen",
+        lambda args, **kwargs: (launched.append(args) or FakeProcess()),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+            chatgpt_web_headless=True,
+            chatgpt_web_profile_root=tmp_path / "profile",
+        )
+    )
+
+    runtime._launch_chatgpt_browser()
+
+    assert "--start-minimized" in launched[0]
+    assert "--headless=new" not in launched[0]
+
+
+def test_chatgpt_login_browser_is_visible(monkeypatch, tmp_path):
+    launched = []
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.desktop.runtime._resolve_browser_executable",
+        lambda _: "chrome.exe",
+    )
+    monkeypatch.setattr(
+        "app.desktop.runtime.subprocess.Popen",
+        lambda args, **kwargs: (launched.append(args) or FakeProcess()),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+            chatgpt_web_headless=True,
+            chatgpt_web_profile_root=tmp_path / "profile",
+        )
+    )
+
+    runtime._launch_chatgpt_browser(visible=True)
+
+    assert "--start-minimized" not in launched[0]
+
+
 def test_embedded_runtime_serves_health_and_stops(tmp_path):
     runtime = EmbeddedApiRuntime(
         settings=Settings(

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.agent.local_runtime import LocalAction, LocalAgentRuntime, LocalModelResponse, OllamaBackend
+from app.agent.local_runtime import LocalAction, LocalAgentRuntime, LocalConversationRuntime, LocalModelResponse, OllamaBackend
 from app.agent.protocol import AgentRequest
 
 
@@ -77,3 +77,42 @@ def test_ollama_backend_converts_local_json_response(monkeypatch, tmp_path):
     assert result.done is True
     assert calls[0][1]["json"]["model"] == "qwen2.5-coder:7b"
     assert calls[0][1]["json"]["stream"] is False
+
+
+def test_ollama_backend_adapts_conversational_finish_response(monkeypatch, tmp_path):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": '{"action":"finish","response":"안녕하세요! 무엇을 도와드릴까요?"}'}}
+
+    monkeypatch.setattr("app.agent.local_runtime.httpx.post", lambda *args, **kwargs: Response())
+
+    result = OllamaBackend(model="qwen3:4b").complete(
+        "안녕", workspace=tmp_path, context=[]
+    )
+
+    assert result.summary == "안녕하세요! 무엇을 도와드릴까요?"
+    assert result.done is True
+    assert result.actions[0].kind == "finish"
+
+
+def test_local_conversation_lane_returns_text_without_executing_actions(tmp_path):
+    class ConversationBackend:
+        def complete(self, prompt, *, workspace, context):
+            assert "ordinary conversation only" in prompt
+            return LocalModelResponse(
+                summary="도와줄 수 있는 일을 함께 정리해볼게.",
+                actions=[LocalAction(kind="run", argv=["not-used"])],
+                done=True,
+            )
+
+    result = LocalConversationRuntime(backend=ConversationBackend()).run(
+        AgentRequest("무엇을 도와줄 수 있어?", tmp_path, [], "conversation-1")
+    )
+
+    assert result.status == "completed"
+    assert result.summary == "도와줄 수 있는 일을 함께 정리해볼게."
+    assert result.changed_files == []
+    assert result.test_commands == []

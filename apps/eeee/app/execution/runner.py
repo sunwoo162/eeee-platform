@@ -1,7 +1,10 @@
 """Run fixed-argv commands inside a bounded project workspace."""
 
 from pathlib import Path
+import os
+import shutil
 import subprocess
+import sys
 import time
 
 from app.execution.models import CommandResult, CommandSpec
@@ -41,9 +44,10 @@ class WorkspaceCommandRunner:
             raise ValueError("command timeout must be positive")
 
         started = time.perf_counter()
+        argv = self._resolve_argv(list(spec.argv))
         try:
             completed = subprocess.run(
-                list(spec.argv),
+                argv,
                 cwd=str(resolved_workspace),
                 shell=False,
                 capture_output=True,
@@ -56,7 +60,7 @@ class WorkspaceCommandRunner:
             stderr, stderr_truncated = self._truncate(exc.stderr)
             return CommandResult(
                 name=spec.name,
-                argv=spec.argv,
+                argv=tuple(argv),
                 status="timeout",
                 exit_code=None,
                 duration_ms=self._duration_ms(started),
@@ -69,7 +73,7 @@ class WorkspaceCommandRunner:
         stderr, stderr_truncated = self._truncate(completed.stderr)
         return CommandResult(
             name=spec.name,
-            argv=spec.argv,
+            argv=tuple(argv),
             status="passed" if completed.returncode == 0 else "failed",
             exit_code=completed.returncode,
             duration_ms=self._duration_ms(started),
@@ -77,6 +81,31 @@ class WorkspaceCommandRunner:
             stderr=stderr,
             truncated=stdout_truncated or stderr_truncated,
         )
+
+    @staticmethod
+    def _resolve_argv(argv: list[str]) -> list[str]:
+        """Resolve tool names for packaged Windows processes without a shell."""
+        if not argv or not argv[0] or Path(argv[0]).name != argv[0]:
+            return argv
+        executable = argv[0]
+        resolved = shutil.which(executable)
+        if resolved:
+            argv[0] = resolved
+            return argv
+        if os.name == "nt":
+            program_files = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
+            candidates = {
+                "node": program_files / "nodejs" / "node.exe",
+                "node.exe": program_files / "nodejs" / "node.exe",
+                "npm": program_files / "nodejs" / "npm.cmd",
+                "npm.cmd": program_files / "nodejs" / "npm.cmd",
+                "python": Path(sys.executable),
+                "python.exe": Path(sys.executable),
+            }
+            candidate = candidates.get(executable.casefold())
+            if candidate is not None and candidate.exists():
+                argv[0] = str(candidate)
+        return argv
 
     def _validate_workspace(self, workspace: str | Path) -> Path:
         resolved_workspace = Path(workspace).resolve()

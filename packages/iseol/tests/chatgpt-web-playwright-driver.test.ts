@@ -306,6 +306,25 @@ test("new conversation waits boundedly for authenticated composer readiness", as
   assert.equal(composerChecks, 3);
   assert.ok(now >= 200);
 });
+test("new conversation waits for ChatGPT to finish redirecting to its canonical conversation", async () => {
+  let urlChecks = 0;
+  const item = fakeBackend({
+    currentUrl: async () => {
+      urlChecks += 1;
+      return urlChecks === 1 ? "https://chatgpt.com/" : "https://chatgpt.com/c/redirected-conversation";
+    },
+  });
+  const driver = await createPlaywrightChatGptBrowserDriver(config, {
+    backend: item.backend,
+    sleep: async () => undefined,
+  } as any);
+
+  assert.deepEqual(
+    await driver.openOrResumeConversation({ prompt: "x", promptSha256: "sha-redirect" }),
+    { conversationRef: "redirected-conversation" },
+  );
+  assert.ok(urlChecks >= 2, `expected URL stability checks, got ${urlChecks}`);
+});
 test("resume navigates to and proves the exact requested conversation", async () => {
   const { backend, urls } = fakeBackend();
   const driver = await createPlaywrightChatGptBrowserDriver(config, { backend });
@@ -395,12 +414,27 @@ test("submit revalidates the exact conversation URL before browser mutation", as
   const driver = await createPlaywrightChatGptBrowserDriver(config, { backend: item.backend } as any);
   await driver.openOrResumeConversation({ conversationRef: "conv-1", prompt: "payload", promptSha256: "sha-2" });
   item.setUrl("https://chatgpt.com/c/other");
+  item.backend.navigate = async () => undefined;
   await assert.rejects(
     () => driver.submitPrompt({ conversationRef: "conv-1", prompt: "payload", promptSha256: "sha-2" }),
     ChatGptWebSessionLostError,
   );
   assert.equal(item.sends(), 0);
   assert.equal(item.filled(), "");
+});
+
+test("submit reacquires the requested conversation after a transient SPA identity drift", async () => {
+  const item = fakeBackend();
+  const driver = await createPlaywrightChatGptBrowserDriver(config, { backend: item.backend } as any);
+  await driver.openOrResumeConversation({ conversationRef: "conv-1", prompt: "payload", promptSha256: "sha-reacquire" });
+  item.setUrl("https://chatgpt.com/c/other");
+
+  assert.deepEqual(
+    await driver.submitPrompt({ conversationRef: "conv-1", prompt: "payload", promptSha256: "sha-reacquire" }),
+    { conversationRef: "conv-1" },
+  );
+  assert.equal(item.sends(), 1);
+  assert.equal(item.filled(), "payload");
 });
 
 

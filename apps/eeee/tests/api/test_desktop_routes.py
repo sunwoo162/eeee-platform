@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from tests.api._helpers import wait_for_project_job
 
 
 def test_desktop_state_exposes_redacted_local_health_and_claim_latch(tmp_path):
@@ -41,7 +42,7 @@ def test_desktop_state_includes_selected_project_profile_and_state(tmp_path):
 
     route = client.post("/api/assistant/route", json={"text": "웹 프로젝트 하나 만들어줘"})
     assert route.status_code == 200
-    project_id = route.json()["project_id"]
+    project_id = wait_for_project_job(client, route)["project_id"]
 
     response = client.get("/api/desktop/state", params={"projectId": project_id})
 
@@ -59,7 +60,8 @@ def test_desktop_events_return_durable_cursor_and_redacted_lifecycle_events(tmp_
         )
     )
 
-    client.post("/api/assistant/route", json={"text": "웹 프로젝트 하나 만들어줘"})
+    route = client.post("/api/assistant/route", json={"text": "웹 프로젝트 하나 만들어줘"})
+    wait_for_project_job(client, route)
 
     response = client.get("/api/desktop/events", params={"cursor": 0})
 

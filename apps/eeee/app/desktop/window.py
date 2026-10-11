@@ -8,6 +8,7 @@ from app.desktop.presentation import PetPresentation
 from app.desktop.session import DesktopSession
 from app.desktop.worker import QtTaskRunner
 from app.assistant.profile import DEFAULT_PROFILE, load_profile, save_profile
+from app.desktop.pet_assets import PET_ASSET_TABLE
 
 
 def _force_windows_topmost(widget) -> None:
@@ -688,25 +689,19 @@ class PetWindow:
                 vice versa. These sibling assets keep the body and keyboard
                 anchored while changing only the paw's pose.
                 """
-                return {"left": "right_alt", "right": "left_alt"}.get(frame, frame)
+                spec = PET_ASSET_TABLE.get(frame)
+                return spec["press"] if spec else frame
 
             def _same_paw_clip_path(self, frame: str) -> QPainterPath:
                 """Limit a press-frame swap to the active front paw."""
                 path = QPainterPath()
-                if frame == "left":
-                    # Physical left is the viewer-right paw in the artwork.
-                    path.moveTo(970, 515)
-                    path.cubicTo(1050, 485, 1180, 490, 1250, 585)
-                    path.cubicTo(1280, 650, 1260, 735, 1200, 785)
-                    path.cubicTo(1120, 815, 1025, 780, 985, 715)
-                    path.cubicTo(950, 650, 940, 555, 970, 515)
-                else:
-                    # Physical right is the viewer-left paw in the artwork.
-                    path.moveTo(365, 515)
-                    path.cubicTo(445, 485, 575, 490, 650, 585)
-                    path.cubicTo(680, 650, 660, 735, 600, 785)
-                    path.cubicTo(520, 815, 425, 780, 385, 715)
-                    path.cubicTo(350, 650, 335, 555, 365, 515)
+                spec = PET_ASSET_TABLE.get(frame)
+                if spec is None:
+                    return path
+                points = spec["paw_mask"]["points"]
+                path.moveTo(*points[0])
+                for point in points[1:]:
+                    path.lineTo(*point)
                 path.closeSubpath()
                 return path
 
@@ -720,20 +715,19 @@ class PetWindow:
                 if not is_gaze and not is_typing:
                     return self._pet_pixmaps.get(frame)
                 if is_typing:
-                    base = self._pet_pixmaps.get(base_frame)
-                    if is_press:
-                        press_source = self._pet_pixmaps.get(
-                            self._press_source_frame(base_frame)
-                        )
-                        if press_source is not None and not press_source.isNull():
-                            pressed = base.copy()
-                            press_painter = QPainter(pressed)
-                            press_painter.setClipPath(
-                                self._same_paw_clip_path(base_frame)
-                            )
-                            press_painter.drawPixmap(0, 0, press_source)
-                            press_painter.end()
-                            base = pressed
+                    asset_spec = PET_ASSET_TABLE.get(base_frame)
+                    if asset_spec is None:
+                        return self._pet_pixmaps.get(base_frame)
+                    base = self._pet_pixmaps.get(asset_spec["body"])
+                    paw_key = asset_spec["press"] if is_press else asset_spec["base"]
+                    paw_source = self._pet_pixmaps.get(paw_key)
+                    if base is not None and paw_source is not None:
+                        composed = base.copy()
+                        paw_painter = QPainter(composed)
+                        paw_painter.setClipPath(self._same_paw_clip_path(base_frame))
+                        paw_painter.drawPixmap(0, 0, paw_source)
+                        paw_painter.end()
+                        base = composed
                 if base is None or base.isNull():
                     return base
 

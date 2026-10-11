@@ -12,6 +12,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from app.desktop.window import PetWindow
+from app.desktop.pet_assets import PET_ASSET_TABLE
 
 
 class SlowClient:
@@ -319,6 +320,35 @@ def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
     assert outside_diffs == 0
     assert right_pressed != right_base
     assert right_outside_diffs == 0
+    window.close()
+
+
+def test_pet_asset_table_keeps_press_motion_modular_and_tight():
+    left = PET_ASSET_TABLE["left"]
+    right = PET_ASSET_TABLE["right"]
+
+    assert left["body"] == "idle"
+    assert left["base"] == "left"
+    assert left["press"] == "right_alt"
+    assert right["body"] == "idle"
+    assert right["base"] == "right"
+    assert right["press"] == "left_alt"
+    assert left["paw_mask"]["x_max"] - left["paw_mask"]["x_min"] < 300
+    assert right["paw_mask"]["x_max"] - right["paw_mask"]["x_min"] < 300
+    assert left["paw_mask"]["y_min"] > 400
+    assert right["paw_mask"]["y_min"] > 520
+
+    # Stable body/keyboard anchors must never be inside the press layer.  If
+    # they are, swapping a repeated-key pose visibly shakes the mascot.
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    left_mask = window._same_paw_clip_path("left")
+    assert left_mask.contains(QPointF(1160, 540))
+    assert not left_mask.contains(QPointF(900, 460))
+    assert not left_mask.contains(QPointF(1100, 800))
+    right_mask = window._same_paw_clip_path("right")
+    assert not right_mask.contains(QPointF(570, 535))
+    assert not right_mask.contains(QPointF(570, 800))
     window.close()
 
 

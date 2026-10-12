@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from app.assistant.models import (
     AssistantRequest,
@@ -25,8 +26,13 @@ class CapabilityRouter:
         ("슬랙", "Slack", ["messages.read", "messages.write"]),
     )
 
-    def __init__(self, registry: CapabilityRegistry) -> None:
+    def __init__(
+        self,
+        registry: CapabilityRegistry,
+        plugin_status_provider: Callable[[str], str] | None = None,
+    ) -> None:
         self.registry = registry
+        self.plugin_status_provider = plugin_status_provider
 
     def select(self, request: AssistantRequest) -> CapabilitySelection:
         if request.requested_capability is not None:
@@ -82,7 +88,7 @@ class CapabilityRouter:
                 required_plugin_id=plugin_id,
                 required_plugin_name=plugin_name,
                 required_plugin_permissions=permissions,
-                suggested_action=f"{plugin_name} 플러그인을 설치하고 연결해줘",
+                suggested_action=self._plugin_suggested_action(plugin_id, plugin_name),
             )
         if not candidates:
             if any(
@@ -137,6 +143,17 @@ class CapabilityRouter:
             candidates=candidates,
             reasons=winner.reasons,
         )
+
+    def _plugin_suggested_action(self, plugin_id: str, plugin_name: str) -> str:
+        status = "not_installed"
+        if self.plugin_status_provider is not None:
+            try:
+                status = self.plugin_status_provider(plugin_id)
+            except (KeyError, RuntimeError):
+                status = "not_installed"
+        if status == "not_installed":
+            return f"{plugin_name} 플러그인을 설치해줘"
+        return f"{plugin_name} 플러그인 계정을 연결해줘"
 
     def _optional_plugin_hint(self, normalized: str) -> tuple[str, str, list[str]] | None:
         for phrase, plugin_name, permissions in self.OPTIONAL_PLUGIN_HINTS:

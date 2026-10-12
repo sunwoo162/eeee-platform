@@ -118,9 +118,14 @@ class WorkspaceWindow:
                     )
                     active_count = memory.get("activeCount", 0) if isinstance(memory, dict) else 0
                     candidate_count = memory.get("candidateCount", 0) if isinstance(memory, dict) else 0
+                    plugin_labels = [
+                        f"{item.get('pluginId', 'plugin')}: {item.get('status', 'unknown')}"
+                        for item in plugins if isinstance(item, dict)
+                    ]
                     self.control_center.setText(
                         f"활성 작업 {active_jobs}개 · 활성 기억 {active_count}개 · "
                         f"검토 대기 기억 {candidate_count}개 · 플러그인 {len(plugins)}개"
+                        + (f"\n{' · '.join(plugin_labels)}" if plugin_labels else "")
                     )
                 else:
                     self.control_center.setText("EEEE 제어 센터 정보를 불러오는 중이야.")

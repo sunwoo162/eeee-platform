@@ -149,6 +149,25 @@ def test_assistant_service_automatically_remembers_durable_design_decisions(tmp_
     )
 
 
+def test_assistant_service_automatically_remembers_safe_routine_fact(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()),
+        coordinator=coordinator,
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+    )
+
+    service.route("나는 아침에 집중 작업을 선호해")
+
+    preferences = coordinator.memory.search_user_preferences()
+    assert preferences["routine.focus_time"].content == "아침"
+
+
 def test_general_conversation_uses_configured_agent_runtime_without_project(tmp_path) -> None:
     class ConversationRuntime:
         def __init__(self):
@@ -156,7 +175,7 @@ def test_general_conversation_uses_configured_agent_runtime_without_project(tmp_
 
         def run(self, request):
             assert request.allowed_actions == ["read"]
-            assert "사용자 기억" in request.prompt
+            assert "현재 사용자 요청" in request.prompt
             self.prompts.append(request.prompt)
             return AgentResult(
                 status="completed", summary="오늘은 차분하게 우선순위를 정리해보자.",

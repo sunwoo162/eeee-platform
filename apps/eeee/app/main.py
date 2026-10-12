@@ -50,6 +50,8 @@ from app.project_runtime.documents import ProjectDocumentService
 from app.project_runtime.evidence import ProjectEvidenceService
 from app.project_view.service import ProjectViewService
 from app.plugins.host import PluginHost
+from app.plugins.notion_connector import NotionConnector
+from app.plugins.platform import PluginPlatformService
 from app.storage.sqlite import SQLiteStore
 from app.trust.gate import TrustGate
 from app.trust.pipeline import TrustPipeline
@@ -90,7 +92,23 @@ def create_app(
     coordinator = Coordinator(store, researcher=configured_researcher, verifier=verifier)
     activity_ledger = ActivityLedger(store)
     planning_service = PlanningService(store, activity_ledger)
-    capability_router = CapabilityRouter(build_default_registry())
+    plugin_platform = PluginPlatformService(
+        store,
+        connectors={
+            "notion": NotionConnector(
+                client_factory=lambda credential: NotionClient(
+                    credential["token"],
+                    parent_page_id=credential["parentPageId"],
+                    base_url=app_settings.notion_api_base,
+                    api_version=app_settings.notion_api_version,
+                )
+            )
+        },
+    )
+    capability_router = CapabilityRouter(
+        build_default_registry(),
+        plugin_status_provider=plugin_platform.status,
+    )
     configured_connectors = {
         connector_id
         for connector_id, configured in {
@@ -274,6 +292,7 @@ def create_app(
         agent_runtime=project_agent_runtime,
         general_runtime=general_runtime,
         chatgpt_web_enabled=app_settings.chatgpt_web_enabled,
+        plugin_platform=plugin_platform,
     )
     application.state.kernel = kernel
     application.state.execution_store = kernel.executions
@@ -298,8 +317,11 @@ def create_app(
     application.state.design_service = design_service
     plugin_host = PluginHost(store, execution_store=kernel.executions)
     kernel.plugin_host = plugin_host
-    capability_router.registry.set_dynamic_provider(plugin_host.routing_capabilities)
+    capability_router.registry.set_dynamic_provider(
+        lambda: [*plugin_host.routing_capabilities(), *plugin_platform.capabilities()]
+    )
     application.state.plugin_host = plugin_host
+    application.state.plugin_platform = plugin_platform
 
     def mobile_snapshot(project_id: str | None) -> dict[str, object]:
         snapshot: dict[str, object] = {
@@ -338,6 +360,7 @@ def create_app(
             trust_gate,
             assistant_service=assistant_service,
             plugin_host=plugin_host,
+            plugin_platform=plugin_platform,
         )
     )
     application.include_router(
@@ -348,7 +371,7 @@ def create_app(
         )
     )
     application.include_router(build_design_router(design_service))
-    application.include_router(build_plugin_router(plugin_host))
+    application.include_router(build_plugin_router(plugin_host, plugin_platform))
     static_dir = Path(__file__).parent / "static"
     application.mount("/static", StaticFiles(directory=static_dir), name="static")
 

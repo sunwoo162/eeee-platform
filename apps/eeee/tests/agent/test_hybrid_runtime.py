@@ -75,5 +75,6 @@ def test_builtin_local_conversation_does_not_fall_back_to_web_for_unknown_chat()
     ).run(request("사용자 요청: 오늘 뭐 하지?"))
 
     assert response.status == "completed"
-    assert "바로 대화할게" in response.summary
+    assert "듣고 있어" in response.summary
+    assert "편하게 말해줘" not in response.summary
     assert web.calls == 0

@@ -336,6 +336,16 @@ class SQLiteStore:
                     action TEXT NOT NULL, status TEXT NOT NULL, manifest_version TEXT NOT NULL,
                     event_json TEXT NOT NULL, occurred_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS plugin_installations (
+                    plugin_id TEXT PRIMARY KEY, version TEXT NOT NULL,
+                    installed_at TEXT NOT NULL, updated_at TEXT NOT NULL, removed_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS plugin_connections (
+                    user_id TEXT NOT NULL, plugin_id TEXT NOT NULL, status TEXT NOT NULL,
+                    approved_permissions_json TEXT NOT NULL, credential_ref TEXT,
+                    account_label TEXT, last_health TEXT, last_error TEXT,
+                    updated_at TEXT NOT NULL, PRIMARY KEY (user_id, plugin_id)
+                );
                 """
             )
             run_columns = {
@@ -368,6 +378,10 @@ class SQLiteStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_plugin_audit_events_plugin "
                 "ON plugin_audit_events (plugin_id, id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_plugin_connections_user "
+                "ON plugin_connections (user_id, plugin_id)"
             )
         # EEEE memory intentionally shares the durable state database so a
         # restart cannot separate project state from the evidence-backed memory.

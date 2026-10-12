@@ -12,6 +12,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.contracts import EventEnvelope, ExecutionEnvelope, ExecutionStatus
+from app.plugins.connections import PluginConnection
 from app.storage.sqlite import SQLiteStore
 
 
@@ -245,7 +246,7 @@ class PluginRegistration:
 
 
 _PLUGIN_STATUSES = frozenset(
-        {"available", "not_installed", "awaiting_authentication", "connected", "paused", "disabled", "failed"}
+        {"available", "not_installed", "awaiting_authentication", "connecting", "connected", "paused", "disabled", "failed"}
 )
 
 
@@ -385,3 +386,137 @@ class PluginRegistrationStore:
                 "WHERE plugin_id = ?", (timestamp, timestamp, plugin_id),
             )
             self._audit(connection, plugin_id, "removed", "removed", row["manifest_version"], timestamp)
+
+
+@dataclass(frozen=True)
+class PluginInstallation:
+    plugin_id: str
+    version: str
+    installed_at: str
+    updated_at: str
+    removed_at: str | None = None
+
+
+def _installation_from_row(row: sqlite3.Row) -> PluginInstallation:
+    return PluginInstallation(
+        plugin_id=row["plugin_id"], version=row["version"],
+        installed_at=row["installed_at"], updated_at=row["updated_at"],
+        removed_at=row["removed_at"],
+    )
+
+
+class PluginInstallationStore:
+    """Persist optional catalog installation state independently of local manifests."""
+
+    def __init__(self, store: SQLiteStore):
+        self.store = store
+
+    def install(self, plugin_id: str, version: str) -> PluginInstallation:
+        if not plugin_id.strip() or not version.strip():
+            raise ValueError("plugin id and version are required")
+        timestamp = _now()
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT INTO plugin_installations (plugin_id, version, installed_at, updated_at, removed_at) "
+                "VALUES (?, ?, ?, ?, NULL) ON CONFLICT(plugin_id) DO UPDATE SET version = excluded.version, "
+                "updated_at = excluded.updated_at, removed_at = NULL",
+                (plugin_id, version, timestamp, timestamp),
+            )
+            row = connection.execute(
+                "SELECT * FROM plugin_installations WHERE plugin_id = ?", (plugin_id,)
+            ).fetchone()
+        return _installation_from_row(row)
+
+    def get(self, plugin_id: str) -> PluginInstallation:
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM plugin_installations WHERE plugin_id = ? AND removed_at IS NULL",
+                (plugin_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Plugin installation not found: {plugin_id}")
+        return _installation_from_row(row)
+
+    def is_installed(self, plugin_id: str) -> bool:
+        try:
+            self.get(plugin_id)
+        except KeyError:
+            return False
+        return True
+
+    def list(self) -> list[PluginInstallation]:
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM plugin_installations WHERE removed_at IS NULL ORDER BY plugin_id"
+            ).fetchall()
+        return [_installation_from_row(row) for row in rows]
+
+    def remove(self, plugin_id: str) -> None:
+        timestamp = _now()
+        with self.store._connect() as connection:
+            connection.execute(
+                "UPDATE plugin_installations SET removed_at = ?, updated_at = ? "
+                "WHERE plugin_id = ? AND removed_at IS NULL",
+                (timestamp, timestamp, plugin_id),
+            )
+
+
+class PluginConnectionStore:
+    """Persist only redacted user-scoped connection projections."""
+
+    def __init__(self, store: SQLiteStore):
+        self.store = store
+
+    def save(self, connection: PluginConnection) -> PluginConnection:
+        with self.store._connect() as database:
+            database.execute(
+                "INSERT INTO plugin_connections (user_id, plugin_id, status, approved_permissions_json, "
+                "credential_ref, account_label, last_health, last_error, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id, plugin_id) DO UPDATE SET status = excluded.status, "
+                "approved_permissions_json = excluded.approved_permissions_json, credential_ref = excluded.credential_ref, "
+                "account_label = excluded.account_label, last_health = excluded.last_health, "
+                "last_error = excluded.last_error, updated_at = excluded.updated_at",
+                (
+                    connection.user_id, connection.plugin_id, connection.status,
+                    json.dumps(connection.approved_permissions, ensure_ascii=False),
+                    connection.credential_ref, connection.account_label,
+                    connection.last_health, connection.last_error, connection.updated_at,
+                ),
+            )
+        return connection
+
+    def get(self, user_id: str, plugin_id: str) -> PluginConnection:
+        with self.store._connect() as database:
+            row = database.execute(
+                "SELECT * FROM plugin_connections WHERE user_id = ? AND plugin_id = ?",
+                (user_id, plugin_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Plugin connection not found: {plugin_id}")
+        return PluginConnection(
+            userId=row["user_id"], pluginId=row["plugin_id"], status=row["status"],
+            approvedPermissions=json.loads(row["approved_permissions_json"]),
+            credentialRef=row["credential_ref"], accountLabel=row["account_label"],
+            lastHealth=row["last_health"], lastError=row["last_error"], updatedAt=row["updated_at"],
+        )
+
+    def list(self, user_id: str) -> list[PluginConnection]:
+        with self.store._connect() as database:
+            rows = database.execute(
+                "SELECT * FROM plugin_connections WHERE user_id = ? ORDER BY plugin_id", (user_id,)
+            ).fetchall()
+        return [self.get(user_id, row["plugin_id"]) for row in rows]
+
+    def list_all(self) -> list[PluginConnection]:
+        with self.store._connect() as database:
+            rows = database.execute(
+                "SELECT user_id, plugin_id FROM plugin_connections ORDER BY user_id, plugin_id"
+            ).fetchall()
+        return [self.get(row["user_id"], row["plugin_id"]) for row in rows]
+
+    def remove(self, user_id: str, plugin_id: str) -> None:
+        with self.store._connect() as database:
+            database.execute(
+                "DELETE FROM plugin_connections WHERE user_id = ? AND plugin_id = ?",
+                (user_id, plugin_id),
+            )

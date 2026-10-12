@@ -30,6 +30,7 @@ type BridgeState = {
 
 const MAX_BODY_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 120_000;
+const AGENT_TIMEOUT_MS = 45_000;
 
 function json(response: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
@@ -167,7 +168,8 @@ async function chat(state: BridgeState, input: ChatRequest): Promise<Record<stri
   let resultSession = withTurn;
   for (let correctionAttempt = 0; ; correctionAttempt += 1) {
     try {
-      result = await state.adapter.awaitStructuredResult(resultSession, DEFAULT_TIMEOUT_MS, "structured-json");
+      const timeoutMs = mode === "agent" ? AGENT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+      result = await state.adapter.awaitStructuredResult(resultSession, timeoutMs, "structured-json");
       break;
     } catch (error) {
       // Agent output is intentionally strict, but a Web model can emit a
@@ -268,14 +270,22 @@ export async function startEeeeChatGptWebBridge(options: { host?: string; port?:
   const server = createServer(async (request, response) => {
     try {
       const pathname = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`).pathname;
-      if (request.method === "GET" && pathname === "/health") return json(response, 200, { status: "ok", service: "chatgpt-web-bridge", connected: Boolean(state.conversationRef) });
+      if (request.method === "GET" && pathname === "/health") return json(response, 200, {
+        status: "ok",
+        service: "chatgpt-web-bridge",
+        // The bridge is healthy as soon as its adapter is initialized. A
+        // conversation reference is created only after the first turn and is
+        // therefore not a transport-health signal.
+        connected: true,
+        conversationActive: Boolean(state.conversationRef),
+      });
       if (request.method !== "POST" || pathname !== "/chat") return json(response, 404, { error: "not found" });
       const input = JSON.parse(await readBody(request)) as ChatRequest;
       return json(response, 200, await queuedChat(input));
     } catch (error) {
-      // Do not advertise a stale conversation as connected. The Desktop
-      // runtime uses this health bit to discard an orphaned bridge/browser
-      // pair before the next start, instead of reusing it indefinitely.
+      // Discard the stale conversation identity after any failed turn. The
+      // bridge itself remains reachable so the next request can establish a
+      // fresh session instead of being mistaken for an idle dead process.
       state.conversationRef = undefined;
       const message = error instanceof Error ? error.message : "ChatGPT Web bridge failed";
       const failureClass = typeof error === "object" && error !== null && "failureClass" in error

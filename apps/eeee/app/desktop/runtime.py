@@ -68,8 +68,15 @@ def _chatgpt_bridge_is_healthy(port: int) -> bool:
     """Detect a bridge left by a previous desktop process before spawning another."""
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.5) as response:
-            return response.status == 200 and b"connected" in response.read(4096)
-    except (OSError, ValueError):
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read(4096).decode("utf-8"))
+            return (
+                isinstance(payload, dict)
+                and payload.get("service") == "chatgpt-web-bridge"
+                and payload.get("connected") is True
+            )
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
         return False
 
 

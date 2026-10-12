@@ -58,10 +58,18 @@ class ChatGptWebAgentRuntime:
     # is submitting, so Web-backed execution must be serialized.
     max_parallelism = 1
 
-    def __init__(self, *, web_runtime: ChatGptWebRuntime, workspace_root: Path, max_steps: int = 4) -> None:
+    def __init__(
+        self,
+        *,
+        web_runtime: ChatGptWebRuntime,
+        workspace_root: Path,
+        max_steps: int = 4,
+        timeout_seconds: float | None = None,
+    ) -> None:
         self.web_runtime = web_runtime
         self.workspace_root = workspace_root.resolve()
         self.max_steps = max_steps
+        self.timeout_seconds = timeout_seconds or getattr(web_runtime, "timeout_seconds", 120.0)
 
     def run(self, request: AgentRequest) -> AgentResult:
         last_result: AgentResult | None = None
@@ -74,7 +82,7 @@ class ChatGptWebAgentRuntime:
                 # verified handoffs remain the shared context between roles.
                 web_runtime = ChatGptWebRuntime(
                     self.web_runtime.base_url,
-                    timeout_seconds=self.web_runtime.timeout_seconds,
+                    timeout_seconds=self.timeout_seconds,
                     fresh_conversation=True,
                     mode="agent",
                 )

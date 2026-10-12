@@ -50,7 +50,6 @@ _DESKTOP_TEXT = {
         "claim_checking": "ClaimLatch: 확인 중",
         "mobile_available": "모바일 브리지: 데스크톱에서 연결 가능",
         "assistant_placeholder": "무엇을 해볼까요?",
-        "ask": "🐾",
         "pairing": "휴대폰 연결 코드",
         "pairing_none": "연결 코드 없음",
         "events_none": "최근 EEEE 이벤트 없음",
@@ -91,7 +90,6 @@ _DESKTOP_TEXT = {
         "claim_checking": "ClaimLatch: checking",
         "mobile_available": "Mobile bridge: available from Desktop",
         "assistant_placeholder": "What shall we do?",
-        "ask": "🐾",
         "pairing": "Pair phone",
         "pairing_none": "No pairing code issued",
         "events_none": "No recent EEEE events",
@@ -160,7 +158,7 @@ class PetWindow:
         on_open_chatgpt=None,
     ):
         try:
-            from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSettings, QSize, QTimer, Qt
+            from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, QSize, QTimer, Qt
             from PySide6.QtGui import (
                 QAction,
                 QColor,
@@ -225,40 +223,6 @@ class PetWindow:
                     painter.end()
                 super().paintEvent(event)
 
-        class _PawSendButton(QPushButton):
-            """A compact pink paw control that keeps the send affordance visible."""
-
-            def __init__(self, parent=None):
-                super().__init__("🐾", parent)
-                self.paw_color = QColor("#ef7f9d")
-                self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-                self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                self.setAccessibleName("보내기")
-
-            def paintEvent(self, event):
-                painter = QPainter(self)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                painter.setPen(Qt.PenStyle.NoPen)
-                color = self.paw_color if self.isEnabled() else QColor("#b77b8c")
-                painter.setBrush(color)
-                center = self.rect().center()
-                scale = min(self.width(), self.height()) / 42.0
-                cx = center.x()
-                cy = center.y() + 5 * scale
-                pad_w = 17 * scale
-                pad_h = 13 * scale
-                painter.drawEllipse(
-                    QRectF(cx - pad_w / 2, cy - pad_h / 2, pad_w, pad_h)
-                )
-                toe_radius = 4 * scale
-                for dx, dy in ((-9, -9), (-3, -13), (4, -13), (10, -8)):
-                    painter.drawEllipse(
-                        QPointF(cx + dx * scale, cy + dy * scale),
-                        toe_radius,
-                        toe_radius,
-                    )
-                painter.end()
-
         class _Window(QWidget):
             def __init__(self):
                 super().__init__()
@@ -273,6 +237,7 @@ class PetWindow:
                 self._pet_is_dragging = False
                 self._busy = False
                 self._refreshing = False
+                self._conversation_active = False
                 self._auth_login_in_progress = False
                 self._closing = False
                 self._quit_requested = False
@@ -448,7 +413,8 @@ class PetWindow:
                 # tool window and pushes it far away from the character.
                 self.command_surface.setFixedWidth(360)
                 command_layout = QVBoxLayout(self.command_surface)
-                command_layout.setContentsMargins(30, 20, 30, 36)
+                command_layout.setContentsMargins(30, 8, 30, 40)
+                command_layout.setSpacing(6)
                 self.quick_status = QLabel()
                 self.quick_status.setObjectName("quickStatus")
                 self.quick_status.setWordWrap(True)
@@ -456,33 +422,25 @@ class PetWindow:
                 self.quick_reply = QLabel()
                 self.quick_reply.setObjectName("quickReply")
                 self.quick_reply.setWordWrap(True)
+                self.quick_reply.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 command_layout.addWidget(self.quick_reply)
                 self.assistant_row = QHBoxLayout()
                 self.assistant_row.setContentsMargins(0, 0, 0, 0)
-                self.assistant_row.setSpacing(8)
+                self.assistant_row.setSpacing(0)
                 self.assistant_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.assistant_input = QLineEdit()
                 self.assistant_input.setObjectName("assistantComposer")
                 self.assistant_input.setMinimumWidth(0)
-                self.assistant_input.setMaximumWidth(200)
+                self.assistant_input.setMaximumWidth(260)
+                self.assistant_input.setFixedHeight(42)
                 self.assistant_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.assistant_input.installEventFilter(self)
-                self.assistant_paw_left = _PawSendButton()
-                self.assistant_paw_left.setObjectName("sendPawLeft")
-                self.assistant_paw_left.setFixedSize(40, 40)
-                self.assistant_paw_left.clicked.connect(self._route_assistant)
-                self.assistant_paw_right = _PawSendButton()
-                self.assistant_paw_right.setObjectName("sendPawRight")
-                self.assistant_paw_right.setFixedSize(40, 40)
-                self.assistant_paw_right.clicked.connect(self._route_assistant)
-                # Keep the historical attribute for callers/tests; the
-                # visible control is now a paw send button, not a text button.
-                self.assistant_button = self.assistant_paw_right
+                # Enter is the only send action; retain the old attribute as
+                # a compatibility alias without rendering another button.
+                self.assistant_button = self.assistant_input
                 self.assistant_input.returnPressed.connect(self._route_assistant)
                 self.assistant_input.textEdited.connect(self._on_user_typing)
-                self.assistant_row.addWidget(self.assistant_paw_left)
                 self.assistant_row.addWidget(self.assistant_input)
-                self.assistant_row.addWidget(self.assistant_paw_right)
                 command_layout.addLayout(self.assistant_row)
                 self.command_surface.installEventFilter(self)
                 self._app.installEventFilter(self)
@@ -601,10 +559,6 @@ class PetWindow:
                     "padding: 0 4px; color: #33281f; }"
                     "#quickChat QLineEdit { background: transparent; padding: 6px 8px; "
                     "border: none; color: #33281f; selection-background-color: #f4c58e; }"
-                    "#quickChat QPushButton { background: transparent; padding: 0px; "
-                    "border: none; color: #33281f; }"
-                    "#quickChat QPushButton:hover { background: transparent; }"
-                    "#quickChat QPushButton:pressed { background: transparent; }"
                 )
                 self._apply_language()
                 self._timer = QTimer(self)
@@ -1238,9 +1192,6 @@ class PetWindow:
                 self.setWindowTitle(f"{self.profile_name} • Gleave")
                 self.language_label.setText(self._text("language"))
                 self.assistant_input.setPlaceholderText(self._text("assistant_placeholder"))
-                for paw_button in (self.assistant_paw_left, self.assistant_paw_right):
-                    paw_button.setText(self._text("ask"))
-                    paw_button.setToolTip("보내기" if self.language == "ko" else "Send")
                 self.pairing_button.setText(self._text("pairing"))
                 self.pairing_status.setText(self._text("pairing_none"))
                 self.workspace_button.setText(self._text("open_workspace"))
@@ -1276,8 +1227,6 @@ class PetWindow:
                 self.request_input.setEnabled(not self._busy)
                 self.request_button.setEnabled(not self._busy)
                 self.assistant_input.setEnabled(not self._busy)
-                self.assistant_paw_left.setEnabled(not self._busy)
-                self.assistant_paw_right.setEnabled(not self._busy)
                 self.candidate_select.setEnabled(not self._busy)
                 self.approve_button.setEnabled(
                     not self._busy and view.show_approval and self.candidate_select.count() > 0
@@ -1366,7 +1315,7 @@ class PetWindow:
                 headlines = _DESKTOP_TEXT[self.language]["headline"]
                 self.headline.setText(headlines.get(view.state, view.headline))
                 detail = view.detail
-                if view.state == "idle":
+                if view.state == "idle" and not self._conversation_active:
                     detail = self._text("start_hint")
                 self.quick_status.setText(headlines.get(view.state, view.headline))
                 self._reply_hide_timer.stop()
@@ -1469,6 +1418,7 @@ class PetWindow:
                 text = self.assistant_input.text().strip()
                 if not text:
                     return
+                self._conversation_active = True
 
                 def on_success(payload):
                     self.assistant_input.clear()

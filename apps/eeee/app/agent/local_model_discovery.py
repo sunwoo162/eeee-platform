@@ -7,6 +7,28 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 
+def _model_score(name: str, index: int) -> tuple[int, int]:
+    """Prefer a capable general chat model while keeping discovery stable.
+
+    An explicit ``local_model`` setting still wins in ``main.py``. This score
+    only applies when EEEE discovers an already-installed model. Small legacy
+    models can answer greetings, but they become unreliable once EEEE adds
+    memory context; newer general-purpose models are a safer default.
+    """
+
+    normalized = name.casefold()
+    score = 0
+    if normalized.startswith("qwen3"):
+        score += 30
+    elif normalized.startswith("qwen2.5"):
+        score += 20
+    elif normalized.startswith("llama3") or normalized.startswith("mistral"):
+        score += 15
+    if "coder" in normalized or "code" in normalized:
+        score -= 20
+    return score, -index
+
+
 def _tags_url(chat_url: str) -> str:
     parsed = urlsplit(chat_url.rstrip("/"))
     path = parsed.path
@@ -37,10 +59,13 @@ def discover_local_model(chat_url: str, *, timeout_seconds: float = 0.5) -> str 
     models = payload.get("models") if isinstance(payload, dict) else None
     if not isinstance(models, list):
         return None
-    for model in models:
+    candidates: list[tuple[str, int]] = []
+    for index, model in enumerate(models):
         if not isinstance(model, dict):
             continue
         name = model.get("name")
         if isinstance(name, str) and name.strip():
-            return name.strip()
+            candidates.append((name.strip(), index))
+    if candidates:
+        return max(candidates, key=lambda item: _model_score(item[0], item[1]))[0]
     return None

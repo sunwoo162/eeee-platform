@@ -66,6 +66,12 @@ class SlowInitialRefreshClient(RouteClient):
         return super().get_state()
 
 
+class ClarificationClient(RouteClient):
+    def route_assistant(self, text, workspace=None):
+        self.routed_text = text
+        return {"status": "needs_clarification", "message": "어떤 작업부터 시작할까?"}
+
+
 def _wait_for(app: QApplication, predicate) -> None:
     deadline = time.monotonic() + 3
     while not predicate() and time.monotonic() < deadline:
@@ -157,7 +163,7 @@ def test_quick_chat_uses_the_same_speech_bubble_asset_without_legacy_pills():
     window.close()
 
 
-def test_quick_chat_sends_from_both_paw_controls_and_greets_user():
+def test_quick_chat_sends_with_enter_and_greets_user():
     app = QApplication.instance() or QApplication([])
     client = RouteClient()
     window = PetWindow(client)
@@ -165,37 +171,53 @@ def test_quick_chat_sends_from_both_paw_controls_and_greets_user():
     window.show_command_surface()
 
     assert window.assistant_input.placeholderText() == "무엇을 해볼까요?"
-    assert window.assistant_paw_left.text() == "🐾"
-    assert window.assistant_paw_right.text() == "🐾"
     _wait_for(app, lambda: window.quick_reply.text() == "안녕하세요! 오늘은 무엇을 해볼까요?")
     assert window.quick_reply.text() == "안녕하세요! 오늘은 무엇을 해볼까요?"
 
     window.assistant_input.setText("안녕")
-    window.assistant_paw_left.click()
+    window.assistant_input.returnPressed.emit()
     _wait_for(app, lambda: client.routed_text == "안녕")
     assert client.routed_text == "안녕"
+    _wait_for(app, lambda: not window._busy)
 
     window.assistant_input.setText("다시 보내기")
-    window.assistant_paw_right.click()
+    window.assistant_input.returnPressed.emit()
     _wait_for(app, lambda: client.routed_text == "다시 보내기")
     assert client.routed_text == "다시 보내기"
     window.close()
 
 
-def test_paw_send_controls_are_pink_centered_and_not_blocked_by_initial_refresh():
+def test_quick_chat_input_is_centered_and_not_blocked_by_initial_refresh():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowInitialRefreshClient())
     window.show_command_surface()
     app.processEvents()
 
-    assert window.assistant_paw_left.paw_color.name() == "#ef7f9d"
-    assert window.assistant_paw_right.paw_color.name() == "#ef7f9d"
+    assert not hasattr(window, "assistant_paw_left")
+    assert not hasattr(window, "assistant_paw_right")
     assert window.assistant_input.alignment() == Qt.AlignmentFlag.AlignCenter
-    assert window.assistant_paw_left.geometry().center().x() < window.assistant_input.geometry().center().x()
-    assert window.assistant_input.geometry().center().x() < window.assistant_paw_right.geometry().center().x()
+    assert abs(
+        window.assistant_input.geometry().center().x()
+        - window.command_surface.rect().center().x()
+    ) <= 8
+    assert window.assistant_input.height() == 42
     assert window.assistant_input.isEnabled()
-    assert window.assistant_paw_left.isEnabled()
-    assert window.assistant_paw_right.isEnabled()
+    window.close()
+
+
+def test_idle_assistant_reply_is_not_replaced_by_greeting():
+    app = QApplication.instance() or QApplication([])
+    client = ClarificationClient()
+    window = PetWindow(client)
+    window.show_command_surface()
+    _wait_for(app, lambda: not window._busy)
+
+    window.assistant_input.setText("도와줘")
+    window.assistant_input.returnPressed.emit()
+    _wait_for(app, lambda: window.current_state.get("state") == "idle")
+    _wait_for(app, lambda: window.quick_reply.text() == "어떤 작업부터 시작할까?")
+
+    assert window.quick_reply.text() == "어떤 작업부터 시작할까?"
     window.close()
 
 

@@ -109,8 +109,8 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert window.assistant_input.objectName() == "assistantComposer"
     assert window.detail.objectName() == "assistantBubble"
     _wait_for(app, lambda: window.current_state.get("state") == "idle")
-    _wait_for(app, lambda: window.detail.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?")
-    assert window.detail.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?"
+    _wait_for(app, lambda: window.detail.text() == "")
+    assert window.detail.text() == ""
     assert window.headline.isHidden()
     assert window.status_card.isHidden()
     assert window.command_surface.isHidden()
@@ -120,8 +120,8 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert not window.command_surface.isHidden()
     assert window.detail.isHidden()
     assert window.quick_status.isHidden()
-    assert window.quick_reply.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?"
-    assert window.quick_reply.isVisible()
+    assert window.quick_reply.text() == ""
+    assert not window.quick_reply.isVisible()
     window.hide_command_surface()
     assert not window.detail.isHidden()
     window.close()
@@ -163,7 +163,7 @@ def test_quick_chat_uses_the_same_speech_bubble_asset_without_legacy_pills():
     window.close()
 
 
-def test_quick_chat_sends_with_enter_and_greets_user():
+def test_quick_chat_sends_with_enter_without_inserting_a_greeting():
     app = QApplication.instance() or QApplication([])
     client = RouteClient()
     window = PetWindow(client)
@@ -171,8 +171,8 @@ def test_quick_chat_sends_with_enter_and_greets_user():
     window.show_command_surface()
 
     assert window.assistant_input.placeholderText() == ""
-    _wait_for(app, lambda: window.quick_reply.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?")
-    assert window.quick_reply.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?"
+    _wait_for(app, lambda: window.quick_reply.text() == "")
+    assert window.quick_reply.text() == ""
 
     window.assistant_input.setText("안녕")
     window.assistant_input.returnPressed.emit()
@@ -205,6 +205,19 @@ def test_quick_chat_input_is_centered_and_not_blocked_by_initial_refresh():
     window.close()
 
 
+def test_bubble_text_is_black_and_centered_without_a_height_cap():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    assert window.detail.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert window.quick_reply.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert "color: #000000" in window.styleSheet()
+    assert "color: #000000" in window.command_surface.styleSheet()
+    assert window.detail.maximumHeight() == 16777215
+    assert window.quick_reply.maximumHeight() == 16777215
+    window.close()
+
+
 def test_idle_assistant_reply_is_not_replaced_by_greeting():
     app = QApplication.instance() or QApplication([])
     client = ClarificationClient()
@@ -234,9 +247,26 @@ def test_quick_chat_above_pet_contains_input_and_latest_reply():
     window._reposition_command_surface()
 
     assert window.command_surface.frameGeometry().bottom() < window.frameGeometry().top()
+    assert window.frameGeometry().top() - window.command_surface.frameGeometry().bottom() <= 1
     assert window.detail.isHidden()
     assert window.quick_reply.isVisible()
     assert window.quick_reply.text()
+    window.close()
+
+
+def test_quick_chat_starts_with_only_a_centered_composer():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    app.processEvents()
+
+    assert window.quick_reply.text() == ""
+    assert not window.quick_reply.isVisible()
+    assert window.assistant_input.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert abs(
+        window.assistant_input.geometry().center().y()
+        - window.command_surface.rect().center().y()
+    ) <= 8
     window.close()
 
 
@@ -725,8 +755,8 @@ def test_quick_chat_is_anchored_to_the_pet_and_clamped_to_screen_edges():
     assert position.x() >= screen.left() + 12
     assert position.x() + surface_size.width() <= screen.right() - 11
     assert (
-        position.y() >= anchor.bottom() + 4
-        or position.y() + surface_size.height() <= anchor.top() - 4
+        position.y() >= anchor.bottom()
+        or position.y() + surface_size.height() <= anchor.top()
     )
     window.close()
 
@@ -742,7 +772,7 @@ def test_quick_chat_prefers_above_the_pet_when_space_is_available():
     anchor = window._pet_anchor_rect()
     position = window._command_surface_position(screen, surface_size)
 
-    assert position.y() + surface_size.height() <= anchor.top() - 4
+    assert position.y() + surface_size.height() <= anchor.top()
     assert abs(
         position.x() + surface_size.width() // 2 - anchor.center().x()
     ) <= 12

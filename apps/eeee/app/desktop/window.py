@@ -40,7 +40,9 @@ _DESKTOP_TEXT = {
         "window_title": "EEEE • Gleave",
         "language": "언어",
         "ready": "준비됨",
-        "start_hint": "안녕하세요! 오늘은 어떤 일을 도와드릴까요?",
+        # Quick Chat opens with an empty composer. A greeting here would be
+        # rendered as a second line above the user's text.
+        "start_hint": "",
         "project_none": "프로젝트: 선택되지 않음",
         "runtime_none": "실행 프로필: 선택되지 않음",
         "runtime_prefix": "실행 프로필",
@@ -80,7 +82,7 @@ _DESKTOP_TEXT = {
         "window_title": "EEEE • Gleave",
         "language": "Language",
         "ready": "Ready",
-        "start_hint": "Hello! What can I help with today?",
+        "start_hint": "",
         "project_none": "Project: none selected",
         "runtime_none": "Runtime profile: none selected",
         "runtime_prefix": "Runtime profile",
@@ -196,8 +198,11 @@ class PetWindow:
                 self.bubble_pixmap = bubble_pixmap
                 self.setWordWrap(True)
                 self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.setContentsMargins(30, 18, 30, 34)
-                self.setMinimumHeight(78)
+                # Keep the text centered in the drawable body of the bubble;
+                # the old bottom-heavy margins made short replies appear
+                # above the bubble and visually detached from the cat.
+                self.setContentsMargins(30, 26, 30, 26)
+                self.setMinimumHeight(96)
                 self.setTextFormat(Qt.TextFormat.PlainText)
 
             def paintEvent(self, event):
@@ -268,7 +273,7 @@ class PetWindow:
                 root = QVBoxLayout(self)
                 root.setContentsMargins(22, 18, 22, 20)
                 # Keep the speech bubble visually attached to the pet.
-                root.setSpacing(4)
+                root.setSpacing(0)
 
                 language_row_widget = QWidget()
                 language_row = QHBoxLayout(language_row_widget)
@@ -414,8 +419,12 @@ class PetWindow:
                 # tool window and pushes it far away from the character.
                 self.command_surface.setFixedWidth(360)
                 command_layout = QVBoxLayout(self.command_surface)
-                command_layout.setContentsMargins(30, 8, 30, 40)
-                command_layout.setSpacing(6)
+                # The input and the latest reply share one bubble. Equal
+                # vertical margins keep both controls centered instead of
+                # pinning the text to the top edge or the tail.
+                command_layout.setContentsMargins(34, 22, 34, 22)
+                command_layout.setSpacing(8)
+                command_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.quick_status = QLabel()
                 self.quick_status.setObjectName("quickStatus")
                 self.quick_status.setWordWrap(True)
@@ -432,7 +441,7 @@ class PetWindow:
                 self.assistant_input = QLineEdit()
                 self.assistant_input.setObjectName("assistantComposer")
                 self.assistant_input.setMinimumWidth(0)
-                self.assistant_input.setMaximumWidth(260)
+                self.assistant_input.setMaximumWidth(300)
                 self.assistant_input.setFixedHeight(42)
                 self.assistant_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.assistant_input.installEventFilter(self)
@@ -534,7 +543,8 @@ class PetWindow:
                     "#desktopCompanion QLabel { background: transparent; border: none; "
                     "color: #f4f3fb; }"
                     "#assistantCharacter { padding: 4px; }"
-                    "#assistantBubble { background: transparent; border: none; color: #33281f; }"
+                     "QLabel#assistantBubble { background: transparent; border: none; color: #000000; "
+                     "qproperty-alignment: AlignCenter; }"
                     "#projectStatusCard { background: #202332; border: 1px solid #373c53; "
                     "border-radius: 14px; }"
                     "#projectStatus { color: #ffffff; font-weight: 600; }"
@@ -554,12 +564,12 @@ class PetWindow:
                 )
                 self.command_surface.setStyleSheet(
                     "#quickChat { background: transparent; border: none; color: #33281f; }"
-                    "#quickChat QLabel { background: transparent; border: none; color: #f4f3fb; }"
+                     "#quickChat QLabel { background: transparent; border: none; color: #000000; }"
                     "#quickStatus { color: #b9bdd0; font-size: 11px; }"
-                    "#quickReply { background: transparent; border: none; "
-                    "padding: 0 4px; color: #33281f; }"
+                     "QLabel#quickReply { background: transparent; border: none; "
+                     "padding: 0 4px; color: #000000; qproperty-alignment: AlignCenter; }"
                     "#quickChat QLineEdit { background: transparent; padding: 6px 8px; "
-                    "border: none; color: #33281f; selection-background-color: #f4c58e; }"
+                     "border: none; color: #000000; selection-background-color: #f4c58e; }"
                 )
                 self._apply_language()
                 self._timer = QTimer(self)
@@ -661,7 +671,7 @@ class PetWindow:
                     self._text("assistant_busy"),
                 }:
                     latest_reply = ""
-                self.quick_reply.setText(latest_reply or self._text("start_hint"))
+                self.quick_reply.setText(latest_reply)
                 self.detail.hide()
                 self._reply_hide_timer.stop()
                 self.command_surface.show()
@@ -701,7 +711,9 @@ class PetWindow:
 
             def _command_surface_position(self, screen_rect=None, surface_size=None):
                 """Place Quick Chat next to the pet, clamped to the usable screen."""
-                margin = 4
+                # The bubble tail should nearly touch the cat. The old
+                # gap plus transparent asset padding made them feel detached.
+                margin = 0
                 anchor = self._pet_anchor_rect()
                 if screen_rect is None:
                     screen = self.screen()
@@ -1232,7 +1244,7 @@ class PetWindow:
                 self.hide_button.setText(self._text("hide"))
                 if not self.current_state:
                     self.headline.setText(self._text("ready"))
-                    self.detail.setText(self._text("start_hint"))
+                    self.detail.setText("")
                     self.project_status.setText(self._text("project_none"))
                     self.runtime_status.setText(self._text("runtime_none"))
                     self.trust_status.setText(self._text("claim_checking"))
@@ -1350,7 +1362,7 @@ class PetWindow:
                 self.headline.setText(headlines.get(view.state, view.headline))
                 detail = view.detail
                 if view.state == "idle" and not self._conversation_active:
-                    detail = self._text("start_hint")
+                    detail = ""
                 self.quick_status.setText(headlines.get(view.state, view.headline))
                 self._reply_hide_timer.stop()
                 if self.command_surface.isVisible():

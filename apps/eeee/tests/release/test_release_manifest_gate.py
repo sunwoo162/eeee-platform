@@ -3,14 +3,31 @@ import pytest
 from app.release.manifest import build_release_manifest
 
 
+def _artifact(
+    artifact_id: str,
+    path: str,
+    evidence_ids: list[str],
+    *,
+    project_id: str = "project-1",
+    revision: str = "rev-1",
+) -> dict[str, object]:
+    return {
+        "id": artifact_id,
+        "path": path,
+        "evidence_ids": evidence_ids,
+        "evidence_project_id": project_id,
+        "evidence_project_revision": revision,
+    }
+
+
 def _input(**overrides):
     value = {
         "project_id": "project-1",
         "project_revision": "rev-1",
         "workspace": "C:/workspace/project-1",
         "artifacts": [
-            {"id": "source", "path": "src", "evidence_ids": ["evidence-source"]},
-            {"id": "qa", "path": "QA_REPORT.md", "evidence_ids": ["evidence-qa"]},
+            _artifact("source", "src", ["evidence-source"]),
+            _artifact("qa", "QA_REPORT.md", ["evidence-qa"]),
         ],
         "qa_report": {
             "projectId": "project-1",
@@ -36,8 +53,8 @@ def test_release_manifest_passes_only_with_current_qa_claimlatch_and_artifacts(t
         **_input(
             workspace=str(tmp_path),
             artifacts=[
-                {"id": "source", "path": "src", "evidence_ids": ["evidence-source"]},
-                {"id": "qa", "path": "QA_REPORT.md", "evidence_ids": ["evidence-qa"]},
+                _artifact("source", "src", ["evidence-source"]),
+                _artifact("qa", "QA_REPORT.md", ["evidence-qa"]),
             ],
         )
     )
@@ -53,8 +70,8 @@ def test_release_manifest_blocks_stale_or_unverified_results(tmp_path) -> None:
     values = _input(
         workspace=str(tmp_path),
         artifacts=[
-            {"id": "source", "path": "src", "evidence_ids": ["evidence-source"]},
-            {"id": "qa", "path": "QA_REPORT.md", "evidence_ids": ["evidence-qa"]},
+            _artifact("source", "src", ["evidence-source"]),
+            _artifact("qa", "QA_REPORT.md", ["evidence-qa"]),
         ],
     )
     with pytest.raises(ValueError, match="release blocked"):
@@ -76,7 +93,7 @@ def test_release_manifest_blocks_stale_or_unverified_results(tmp_path) -> None:
 
 def test_release_manifest_blocks_artifact_without_evidence() -> None:
     with pytest.raises(ValueError, match="release blocked"):
-        build_release_manifest(**_input(artifacts=[{"id": "source", "path": "src", "evidence_ids": []}]))
+        build_release_manifest(**_input(artifacts=[_artifact("source", "src", [])]))
 
 
 def test_release_manifest_blocks_missing_artifact_path(tmp_path) -> None:
@@ -91,8 +108,8 @@ def test_release_manifest_blocks_artifact_path_escape(tmp_path) -> None:
             **_input(
                 workspace=str(tmp_path),
                 artifacts=[
-                    {"id": "escape", "path": "../outside.txt", "evidence_ids": ["evidence-source"]},
-                    {"id": "qa", "path": "QA_REPORT.md", "evidence_ids": ["evidence-qa"]},
+                    _artifact("escape", "../outside.txt", ["evidence-source"]),
+                    _artifact("qa", "QA_REPORT.md", ["evidence-qa"]),
                 ],
             )
         )
@@ -106,8 +123,8 @@ def test_release_manifest_blocks_invalid_utf8_text_artifact(tmp_path) -> None:
             **_input(
                 workspace=str(tmp_path),
                 artifacts=[
-                    {"id": "broken", "path": "broken.txt", "evidence_ids": ["evidence-source"]},
-                    {"id": "qa", "path": "QA_REPORT.md", "evidence_ids": ["evidence-qa"]},
+                    _artifact("broken", "broken.txt", ["evidence-source"]),
+                    _artifact("qa", "QA_REPORT.md", ["evidence-qa"]),
                 ],
             )
         )
@@ -128,7 +145,7 @@ def test_release_manifest_blocks_artifact_evidence_from_stale_revision(tmp_path)
                         "evidence_project_id": "project-1",
                         "evidence_project_revision": "old-rev",
                     },
-                    {"id": "qa", "path": "QA_REPORT.md", "evidence_ids": ["evidence-qa"]},
+                    _artifact("qa", "QA_REPORT.md", ["evidence-qa"]),
                 ],
             )
         )

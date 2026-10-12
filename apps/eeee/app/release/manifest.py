@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ReleaseArtifact(BaseModel):
@@ -13,8 +13,15 @@ class ReleaseArtifact(BaseModel):
     id: str = Field(min_length=1)
     path: str = Field(min_length=1)
     evidence_ids: list[str] = Field(min_length=1)
-    evidence_project_id: str | None = None
-    evidence_project_revision: str | None = None
+    evidence_project_id: str = Field(min_length=1)
+    evidence_project_revision: str = Field(min_length=1)
+
+    @field_validator("evidence_ids")
+    @classmethod
+    def evidence_ids_must_be_non_empty(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise ValueError("evidence_ids must not contain empty values")
+        return value
 
 
 class ReleaseManifest(BaseModel):
@@ -68,12 +75,11 @@ def build_release_manifest(
         if not artifact_path.exists():
             reasons.append(f"artifact path does not exist: {artifact.path}")
             continue
-        if artifact.evidence_project_id or artifact.evidence_project_revision:
-            if (
-                artifact.evidence_project_id != project_id
-                or artifact.evidence_project_revision != project_revision
-            ):
-                reasons.append(f"artifact evidence is stale: {artifact.id}")
+        if (
+            artifact.evidence_project_id != project_id
+            or artifact.evidence_project_revision != project_revision
+        ):
+            reasons.append(f"artifact evidence is stale: {artifact.id}")
         for file_path in _text_files(artifact_path):
             try:
                 file_path.read_bytes().decode("utf-8")

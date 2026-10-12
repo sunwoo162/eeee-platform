@@ -27,9 +27,15 @@ class DesktopSession:
                 if isinstance(project_id, str) and project_id:
                     self.project_id = project_id
                     self.snapshot = self.client.get_desktop_state(project_id)
+                result_status = result.get("status")
+                blocked = result_status in {"blocked", "failed", "awaiting_configuration"}
                 self.snapshot.update({
-                    "state": "completed",
-                    "message": result.get("message", "EEEE 작업이 완료됐어."),
+                    "state": "blocked" if blocked else "completed",
+                    "message": result.get(
+                        "message",
+                        "EEEE 작업이 완료됐지만 추가 설정이 필요해."
+                        if blocked else "EEEE 작업이 완료됐어.",
+                    ),
                     "assistantJobId": self.assistant_job_id,
                 })
                 self.assistant_job_id = None

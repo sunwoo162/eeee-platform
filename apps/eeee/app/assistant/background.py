@@ -122,7 +122,7 @@ class BackgroundExecutionSupervisor:
         with self.store._connect() as connection:
             rows = connection.execute(
                 "SELECT job_id, request_id, input_json FROM assistant_jobs "
-                "WHERE status IN ('queued', 'running', 'paused') ORDER BY created_at"
+                "WHERE status IN ('queued', 'running') ORDER BY created_at"
             ).fetchall()
         resumed: list[str] = []
         for row in rows:

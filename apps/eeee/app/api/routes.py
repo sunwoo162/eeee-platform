@@ -581,6 +581,15 @@ def build_desktop_router(
             snapshot["projectState"] = coordinator.get_state(project_id).model_dump(
                 mode="json"
             )
+            project_state = snapshot["projectState"]
+            snapshot["state"] = project_state["state"]
+            snapshot["message"] = project_state["message"]
+            snapshot["controlCenter"]["verification"]["releaseGate"] = {
+                "status": "not_evaluated",
+                "reason": "Release evidence is recorded in the project revision manifest",
+                "projectId": project_id,
+                "projectRevision": snapshot["projectProfile"]["projectRevision"],
+            }
         return snapshot
 
     @router.get("/events")
@@ -747,6 +756,8 @@ def build_api_router(
             return flow.coordinator.memory.list_records(
                 status=status,
                 source_project_id=source_project_id,
+                query=query,
+                scope=scope or None,
                 limit=limit,
             )
         return flow.coordinator.memory.search(query, scope=scope or None, limit=limit)

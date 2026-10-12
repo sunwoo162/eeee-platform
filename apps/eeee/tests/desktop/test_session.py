@@ -97,3 +97,23 @@ def test_session_projects_scheduled_and_running_job_states_for_quick_chat():
     running = session.refresh()
     assert running["state"] == "working"
     assert "진행" in running["message"]
+
+
+def test_session_does_not_present_blocked_background_result_as_completed():
+    client = BackgroundDesktopClient()
+    session = DesktopSession(client)
+    session.route("로그인 기능이 있는 Todo 웹앱 만들어줘")
+
+    client.job = {
+        "jobId": "assistant-job-1",
+        "status": "completed",
+        "result": {
+            "status": "awaiting_configuration",
+            "project_id": "project-1",
+            "message": "로컬 검증은 끝났고 외부 연결 설정이 필요해.",
+        },
+    }
+    finished = session.refresh()
+
+    assert finished["state"] == "blocked"
+    assert "외부 연결" in finished["message"]

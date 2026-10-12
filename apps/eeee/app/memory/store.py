@@ -216,6 +216,8 @@ class MemoryStore:
         *,
         status: MemoryStatus | str | None = None,
         source_project_id: str | None = None,
+        query: str = "",
+        scope: dict[str, Any] | None = None,
         limit: int = 100,
     ) -> list[MemoryRecord]:
         if limit < 1 or limit > 500:
@@ -238,9 +240,19 @@ class MemoryStore:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM memory_records" + where + " ORDER BY created_at DESC LIMIT ?",
-                (*params, limit),
+                (*params, 500 if (query.strip() or scope) else limit),
             ).fetchall()
-        return [_record_from_row(row) for row in rows]
+        records = [_record_from_row(row) for row in rows]
+        tokens = {token for token in query.lower().split() if token}
+        filtered: list[MemoryRecord] = []
+        for record in records:
+            if scope and any(record.scope.get(key) != value for key, value in scope.items()):
+                continue
+            haystack = (record.content + " " + " ".join(map(str, record.scope.values()))).lower()
+            if tokens and not any(token in haystack for token in tokens):
+                continue
+            filtered.append(record)
+        return filtered[:limit]
 
     def delete(self, memory_id: str, *, actor: str, reason: str) -> MemoryRecord:
         if not actor.strip():

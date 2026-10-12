@@ -92,8 +92,14 @@ class WorkspaceWindow:
                 except Exception as exc:
                     self.status.setText(str(exc))
                     return
-                state = snapshot.get("state", "idle")
-                message = snapshot.get("message", "")
+                project_state = snapshot.get("projectState")
+                state = snapshot.get("state")
+                message = snapshot.get("message")
+                if isinstance(project_state, dict):
+                    state = project_state.get("state", state)
+                    message = project_state.get("message", message)
+                state = state if isinstance(state, str) else "idle"
+                message = message if isinstance(message, str) else ""
                 project_id = snapshot.get("projectId")
                 self.status.setText(
                     f"상태: {state}\n{message}\n"

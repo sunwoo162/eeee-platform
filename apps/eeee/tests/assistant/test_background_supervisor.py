@@ -70,12 +70,13 @@ def test_pending_job_can_be_resumed_by_a_new_supervisor(tmp_path):
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.init()
     first = BackgroundExecutionSupervisor(store, max_workers=1)
-    job_id = first.submit(
+    job_id = "assistant-job-recover"
+    first._create(
+        job_id,
         "assistant-request-recover",
-        lambda: {"message": "will be recovered"},
-        input_data={"text": "resume me"},
+        {"text": "resume me"},
     )
-    first.shutdown(wait=False)
+    first.shutdown()
 
     second = BackgroundExecutionSupervisor(store, max_workers=1)
     try:
@@ -198,4 +199,28 @@ def test_queued_job_stays_paused_until_explicit_resume(tmp_path):
     finally:
         release.set()
         supervisor.shutdown()
+
+
+def test_paused_job_stays_paused_after_restart_until_explicit_resume(tmp_path):
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    first = BackgroundExecutionSupervisor(store, max_workers=1)
+    try:
+        job_id = first.submit(
+            "assistant-request-paused-restart",
+            lambda: {"id": "must-wait"},
+            input_data={"text": "paused"},
+        )
+        assert first.pause(job_id)["status"] == "paused"
+    finally:
+        first.shutdown(wait=False)
+
+    second = BackgroundExecutionSupervisor(store, max_workers=1)
+    try:
+        assert second.resume_pending(lambda _job: lambda: {"id": "must-wait"}) == []
+        assert second.get(job_id)["status"] == "paused"
+        second.resume(job_id, lambda _job: lambda: {"id": "must-wait"})
+        assert _wait_for(second, job_id, "completed")["result"] == {"id": "must-wait"}
+    finally:
+        second.shutdown()
 

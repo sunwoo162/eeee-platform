@@ -31,8 +31,11 @@ try {
         tests/memory `
         tests/trust `
         tests/release/test_release_manifest_gate.py `
+        tests/api/test_assistant_jobs_api.py `
+        tests/api/test_memory_api.py `
         tests/api/test_desktop_routes.py `
         tests/api/test_request_flow.py `
+        tests/design/test_api.py `
         tests/desktop `
         tests/project_runtime `
         tests/e2e/test_core_project_flow.py `
@@ -70,10 +73,12 @@ foreach ($relativePath in $trackedFiles) {
     }
 }
 
-$diffCheck = & git -C $root diff --check 2>&1
-if ($LASTEXITCODE -ne 0) {
-    $diffCheck | Write-Error
-    throw "git diff --check failed."
+foreach ($diffArgs in @(@("HEAD"), @("HEAD~1", "HEAD"))) {
+    $diffCheck = & git -c core.safecrlf=false -C $root diff --check $diffArgs 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $diffCheck | Write-Error
+        throw "git diff --check failed for $($diffArgs -join ' ')."
+    }
 }
 
 Write-Output "EEEE core product verification passed: pytest, strict UTF-8, and git diff --check."

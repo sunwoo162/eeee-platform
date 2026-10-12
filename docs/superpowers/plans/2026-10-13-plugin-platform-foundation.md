@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** EEEE가 선택형 플러그인을 설치하고 사용자별로 권한 승인·계정 연결·상태 확인·안전한 capability 라우팅을 수행하도록 만든다.
+**Goal:** EEEE가 먼저 자연스러운 개인 비서 대화·기억·후속 맥락을 안정적으로 처리한 뒤, 선택형 플러그인을 설치하고 사용자별로 권한 승인·계정 연결·상태 확인·안전한 capability 라우팅을 수행하도록 만든다.
 
-**Architecture:** 기존 `PluginHost`의 subprocess 경계와 `PluginRegistrationStore`는 로컬 플러그인 실행용으로 유지한다. 그 위에 카탈로그·설치 상태·사용자별 연결·credential 저장소·provider connector를 담당하는 `PluginPlatformService`를 추가하고, Notion은 기존 `NotionClient`를 감싸는 첫 번째 connector로 연결한다. capability router와 데스크톱 control center는 연결되고 health가 정상인 capability만 소비한다.
+**Architecture:** 먼저 개인 비서 코어가 대화 history·선호·안전하게 추출한 기억을 하나의 bounded context로 컴파일하고, 로컬 대화 lane이 그 context를 실제 프롬프트와 후속 응답에 반영하게 한다. 그 위에 기존 `PluginHost`의 subprocess 경계와 `PluginRegistrationStore`를 로컬 플러그인 실행용으로 유지하면서 카탈로그·설치 상태·사용자별 연결·credential 저장소·provider connector를 담당하는 `PluginPlatformService`를 추가하고, Notion은 기존 `NotionClient`를 감싸는 첫 번째 connector로 연결한다. capability router와 데스크톱 control center는 연결되고 health가 정상인 capability만 소비한다.
 
 **Tech Stack:** Python 3.12+, FastAPI, Pydantic v2, SQLite, httpx, keyring, pytest, 기존 PySide6/static control-center API.
 
@@ -21,6 +21,8 @@
 - Notion 기능을 새로 설계하지 않고 기존 `NotionClient`를 adapter 경계 안에서 재사용한다.
 - 이번 범위에서는 원격 marketplace, 자동 다운로드, 포트폴리오·ISEOL 플러그인 구현을 하지 않는다.
 - 모든 플러그인 연결 조회와 실행은 authenticated/local principal의 user id로 격리한다.
+- 일반 대화는 연결된 로컬 대화 모델을 우선 사용하고, GPT Web은 전문 작업 lane에서만 사용한다.
+- 로컬 모델이 없을 때 canned 응답을 실제 AI처럼 가장하지 않고, 가능한 범위와 다음 선택지를 명확히 말한다.
 
 ## Review Focus
 
@@ -29,6 +31,65 @@
 - 사용자 A의 연결이 사용자 B의 상태·capability·실행에 노출되지 않는지 — Task 2/5의 cross-user isolation tests.
 - Notion 401/403/429/5xx가 provider-neutral 상태와 사용자 행동으로 변환되는지 — Task 3의 transport error matrix test.
 - restart와 health failure 뒤 capability가 거짓으로 노출되지 않는지 — Task 4/7의 persistence and routing tests.
+- 같은 대화의 후속 질문이 최근 대화·선호·안전한 기억을 실제 provider 입력에 반영하는지 — Task 0의 secretary context tests.
+
+---
+
+### Task 0: Personal secretary conversation core
+
+**Files:**
+- Create: `apps/eeee/app/assistant/secretary.py`
+- Modify: `apps/eeee/app/agent/local_runtime.py`
+- Modify: `apps/eeee/app/agent/hybrid_runtime.py`
+- Modify: `apps/eeee/app/kernel/capabilities.py`
+- Modify: `apps/eeee/app/assistant/service.py`
+- Modify: `apps/eeee/app/main.py`
+- Test: `apps/eeee/tests/assistant/test_secretary_core.py`
+- Test: `apps/eeee/tests/agent/test_local_runtime.py`
+- Test: `apps/eeee/tests/agent/test_hybrid_runtime.py`
+
+**Interfaces:**
+- `SecretaryContext` carries `conversation_id`, recent turns, preference values, and compiled safe memory text with bounded sizes.
+- `PersonalSecretary.build_prompt(text: str, context: SecretaryContext) -> str` produces a Korean assistant prompt that contains the current request, recent turns in chronological order, and only the safe memory packet.
+- `PersonalSecretary.rememberable_facts(text: str) -> list[tuple[str, str]]` extracts only non-sensitive explicit or strongly implied user preferences/facts; secrets and credentials are rejected.
+- `LocalConversationRuntime.run` and `OllamaBackend.complete_text` accept the compiled context without changing the `AgentRuntime` public contract.
+- `FastLocalConversationRuntime` must not return one generic sentence for every unknown input; it returns a context-aware acknowledgement or a truthful unavailable response with the next action.
+- `GeneralConversationCapability` uses `PersonalSecretary` for every ordinary conversation and returns provider metadata plus the actual assistant message.
+
+- [ ] **Step 1: Write failing secretary conversation tests**
+
+  Test that a follow-up request receives the previous turn and a saved preference in the provider prompt; unrelated conversation history is bounded; a user secret is omitted; a plain backend receives a natural Korean prompt instead of the old fixed “편하게 말해줘” loop; provider identity remains truthful.
+
+- [ ] **Step 2: Run the focused tests and verify they fail**
+
+  Run: `pytest apps/eeee/tests/assistant/test_secretary_core.py apps/eeee/tests/agent/test_local_runtime.py apps/eeee/tests/agent/test_hybrid_runtime.py -q`
+
+  Expected: FAIL because the secretary context compiler and context-aware fallback do not exist.
+
+- [ ] **Step 3: Implement the bounded secretary context**
+
+  Add the typed context compiler and safe fact extraction. Reuse `MemoryContextCompiler` and `MemoryStore.recent_conversation_turns` instead of creating a second persistence ledger. Keep the prompt bounded and redact sensitive values before they reach any provider.
+
+- [ ] **Step 4: Implement context-aware local conversation**
+
+  Pass context as structured provider input, preserve the fast local-first policy, and replace generic canned fallback behavior with deterministic responses for greetings, acknowledgements, follow-ups, capability questions, and unavailable-provider cases. Do not route ordinary chat to GPT Web merely because the local provider failed.
+
+- [ ] **Step 5: Wire the secretary into the general capability and automatic memory path**
+
+  Make `GeneralConversationCapability` build the secretary prompt for every turn. Persist only safe preferences/facts through the existing memory lifecycle, keep short-term turns in the conversation store, and ensure the assistant response is what the user sees—not a routing status or internal placeholder.
+
+- [ ] **Step 6: Run focused and assistant regression tests**
+
+  Run: `pytest apps/eeee/tests/assistant/test_secretary_core.py apps/eeee/tests/assistant/test_assistant_service.py apps/eeee/tests/agent/test_local_runtime.py apps/eeee/tests/agent/test_hybrid_runtime.py apps/eeee/tests/api/test_provider_wiring.py -q`
+
+  Expected: PASS; ordinary chat is local-first, context-aware, truthful, and existing project routing remains separate.
+
+- [ ] **Step 7: Commit**
+
+  ```bash
+  git add apps/eeee/app/assistant/secretary.py apps/eeee/app/agent/local_runtime.py apps/eeee/app/agent/hybrid_runtime.py apps/eeee/app/kernel/capabilities.py apps/eeee/app/assistant/service.py apps/eeee/app/main.py apps/eeee/tests/assistant/test_secretary_core.py apps/eeee/tests/assistant/test_assistant_service.py apps/eeee/tests/agent/test_local_runtime.py apps/eeee/tests/agent/test_hybrid_runtime.py apps/eeee/tests/api/test_provider_wiring.py
+  git commit -m "feat: strengthen EEEE personal secretary core"
+  ```
 
 ---
 

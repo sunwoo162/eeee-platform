@@ -74,3 +74,25 @@ def test_memory_api_persists_explicit_user_preference(tmp_path) -> None:
         assert payload["kind"] == "user_preference"
         assert payload["status"] == "active"
         assert client.get("/api/memory", params={"query": "한국어"}).json()[0]["content"] == "한국어"
+
+
+def test_memory_api_can_list_lifecycle_records_and_delete_one(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspace")
+    with TestClient(create_app(settings)) as client:
+        created = client.post(
+            "/api/memory/user-preference",
+            json={"key": "editor", "value": "vim"},
+        ).json()
+        listed = client.get("/api/memory", params={"status": "active"})
+        assert listed.status_code == 200
+        assert any(item["id"] == created["id"] for item in listed.json())
+
+        detail = client.get(f"/api/memory/{created['id']}")
+        assert detail.status_code == 200
+        deleted = client.post(
+            f"/api/memory/{created['id']}/delete",
+            json={"actor": "user", "reason": "Forget this preference"},
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted"] is True
+        assert client.get(f"/api/memory/{created['id']}").status_code == 404

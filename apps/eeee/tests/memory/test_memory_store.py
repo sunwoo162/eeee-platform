@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.memory.models import MemoryCandidate, MemoryStatus
-from app.memory.store import MemoryConflictError, MemoryStore
+from app.memory.store import MemoryConflictError, MemoryPromotionError, MemoryStore
 
 
 def _candidate(
@@ -97,3 +97,41 @@ def test_active_memory_can_be_revoked_and_superseded(
 
     assert superseded.status is MemoryStatus.SUPERSEDED
     assert revoked.status is MemoryStatus.REVOKED
+
+
+def test_memory_records_can_be_inspected_by_lifecycle_status(memory_store):
+    store, _ = memory_store
+    candidate = store.save_candidate(_candidate())
+    store.promote(candidate.id, actor="user", evidence_ids=["evidence-1"])
+
+    assert [item.id for item in store.list_records(status=MemoryStatus.ACTIVE)] == [candidate.id]
+    assert [item.id for item in store.list_records(status=MemoryStatus.CANDIDATE)] == []
+    assert store.list_records(source_project_id="project-1")[0].id == candidate.id
+
+
+def test_user_can_delete_editable_memory_without_deleting_its_audit_event(memory_store):
+    store, _ = memory_store
+    candidate = store.save_candidate(_candidate())
+    deleted = store.delete(candidate.id, actor="user", reason="No longer useful")
+
+    assert deleted.id == candidate.id
+    with pytest.raises(KeyError):
+        store.get(candidate.id)
+    with store._connect() as connection:
+        event = connection.execute(
+            "SELECT event_type, actor FROM memory_events WHERE memory_id = ? ORDER BY id DESC LIMIT 1",
+            (candidate.id,),
+        ).fetchone()
+    assert tuple(event) == ("deleted", "user")
+
+
+def test_delete_refuses_superseded_memory_to_preserve_replacement_history(memory_store):
+    store, _ = memory_store
+    original = store.save_candidate(_candidate())
+    store.promote(original.id, actor="user", evidence_ids=["evidence-1"])
+    replacement = store.save_candidate(_candidate("candidate-2", content="New rule"))
+    store.promote(replacement.id, actor="user", evidence_ids=["evidence-2"])
+    store.supersede(original.id, replacement.id)
+
+    with pytest.raises(MemoryPromotionError, match="superseded"):
+        store.delete(original.id, actor="user", reason="remove old record")

@@ -18,7 +18,7 @@ from app.design.references import DesignService, ReferencePack
 from app.design.visual_verify import VisualReport
 from app.integrations.contracts import ProjectBriefV1, ProjectOutcomeReportV1
 from app.integrations.contracts import GithubReviewResultV1
-from app.memory.models import MemoryRecord
+from app.memory.models import MemoryRecord, MemoryStatus
 from app.mobile.bridge import MobileBridge, MobileBridgeError
 from app.plugins.host import PluginHost
 from app.plugins.models import PluginHealth, PluginManifest
@@ -125,6 +125,18 @@ class MemoryPromotionPayload(BaseModel):
 
 class MemoryRevokePayload(BaseModel):
     reason: str = Field(min_length=1)
+
+
+class MemoryDeletePayload(BaseModel):
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class MemoryDeleteResponse(BaseModel):
+    deleted: bool
+    memory_id: str = Field(alias="memoryId")
+
+    model_config = {"populate_by_name": True}
 
 
 class UserPreferencePayload(BaseModel):
@@ -683,6 +695,8 @@ def build_api_router(
     @router.get("/memory", response_model=list[MemoryRecord])
     def search_memory(
         query: str = Query(default="", max_length=500),
+        status: MemoryStatus | None = Query(default=None),
+        source_project_id: str | None = Query(default=None, alias="sourceProjectId", max_length=160),
         project_type: str | None = Query(default=None, alias="projectType", max_length=120),
         technology: str | None = Query(default=None, max_length=120),
         feature: str | None = Query(default=None, max_length=120),
@@ -701,7 +715,20 @@ def build_api_router(
             }.items()
             if value is not None
         }
+        if status is not None or source_project_id is not None:
+            return flow.coordinator.memory.list_records(
+                status=status,
+                source_project_id=source_project_id,
+                limit=limit,
+            )
         return flow.coordinator.memory.search(query, scope=scope or None, limit=limit)
+
+    @router.get("/memory/{memory_id}", response_model=MemoryRecord)
+    def get_memory(memory_id: str) -> MemoryRecord:
+        try:
+            return flow.coordinator.memory.get(memory_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.post("/memory/user-preference", response_model=MemoryRecord)
     def save_user_preference(payload: UserPreferencePayload) -> MemoryRecord:
@@ -724,7 +751,26 @@ def build_api_router(
 
     @router.post("/memory/{memory_id}/revoke", response_model=MemoryRecord)
     def revoke_memory(memory_id: str, payload: MemoryRevokePayload) -> MemoryRecord:
-        return flow.coordinator.memory.revoke(memory_id, reason=payload.reason)
+        try:
+            return flow.coordinator.memory.revoke(memory_id, reason=payload.reason)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/memory/{memory_id}/delete", response_model=MemoryDeleteResponse)
+    def delete_memory(memory_id: str, payload: MemoryDeletePayload) -> MemoryDeleteResponse:
+        try:
+            deleted = flow.coordinator.memory.delete(
+                memory_id,
+                actor=payload.actor,
+                reason=payload.reason,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return MemoryDeleteResponse(deleted=True, memoryId=deleted.id)
 
     @router.post("/requests/{request_id}/research", response_model=ResearchResponse)
     def research_api_request(request_id: str) -> ResearchResponse:

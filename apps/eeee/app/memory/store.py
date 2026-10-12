@@ -211,6 +211,60 @@ class MemoryStore:
             raise KeyError(f"Memory not found: {memory_id}")
         return _record_from_row(row)
 
+    def list_records(
+        self,
+        *,
+        status: MemoryStatus | str | None = None,
+        source_project_id: str | None = None,
+        limit: int = 100,
+    ) -> list[MemoryRecord]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        status_value = status.value if isinstance(status, MemoryStatus) else status
+        if status_value is not None:
+            try:
+                status_value = MemoryStatus(status_value).value
+            except ValueError as exc:
+                raise ValueError(f"Unknown memory status: {status_value}") from exc
+        clauses: list[str] = []
+        params: list[object] = []
+        if status_value is not None:
+            clauses.append("status = ?")
+            params.append(status_value)
+        if source_project_id is not None:
+            clauses.append("source_project_id = ?")
+            params.append(source_project_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM memory_records" + where + " ORDER BY created_at DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        return [_record_from_row(row) for row in rows]
+
+    def delete(self, memory_id: str, *, actor: str, reason: str) -> MemoryRecord:
+        if not actor.strip():
+            raise MemoryPromotionError("Deletion requires an actor")
+        if not reason.strip():
+            raise MemoryPromotionError("Deletion requires a reason")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM memory_records WHERE id = ?", (memory_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Memory not found: {memory_id}")
+            record = _record_from_row(row)
+            if not record.user_editable:
+                raise MemoryPromotionError("This memory cannot be deleted by the user")
+            if record.status in {MemoryStatus.SUPERSEDED, MemoryStatus.REVOKED}:
+                raise MemoryPromotionError(
+                    f"Cannot delete {record.status.value} memory; preserve lifecycle history"
+                )
+            _append_event(connection, memory_id, "deleted", actor, {"reason": reason})
+            connection.execute("DELETE FROM memory_records WHERE id = ?", (memory_id,))
+        return record
+
     def promote(
         self,
         memory_id: str,

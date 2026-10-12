@@ -31,22 +31,28 @@ class KeyringCredentialStore:
 
     SERVICE = "Gleave/EEEE/plugin"
 
+    @staticmethod
+    def _module():
+        try:
+            import keyring
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("OS credential storage is unavailable") from exc
+        return keyring
+
     def put(self, user_id: str, plugin_id: str, value: str) -> str:
         if not user_id.strip() or not plugin_id.strip() or not value.strip():
             raise ValueError("credential owner, plugin, and value are required")
-        import keyring
-
+        keyring = self._module()
         reference = f"keyring://{sha256(f'{user_id}:{plugin_id}:{uuid4().hex}'.encode()).hexdigest()}"
         keyring.set_password(self.SERVICE, reference, value)
         return reference
 
     def get(self, reference: str) -> str | None:
-        import keyring
-
+        keyring = self._module()
         return keyring.get_password(self.SERVICE, reference)
 
     def delete(self, reference: str) -> None:
-        import keyring
+        keyring = self._module()
 
         try:
             keyring.delete_password(self.SERVICE, reference)

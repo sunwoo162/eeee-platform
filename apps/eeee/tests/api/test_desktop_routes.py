@@ -127,5 +127,7 @@ def test_desktop_state_exposes_the_eeee_control_center_snapshot(tmp_path):
     ]
     assert any(item["requestId"] == "assistant-control-center" for item in control_center["jobs"])
     assert control_center["memory"]["activeCount"] >= 1
-    assert control_center["plugins"] == []
+    notion = next(item for item in control_center["plugins"] if item["pluginId"] == "notion")
+    assert notion["status"] == "not_installed"
+    assert notion["nextAction"] == "install"
     assert control_center["verification"]["claimLatch"]["profileVersion"] == "claimlatch-v0.2.0"

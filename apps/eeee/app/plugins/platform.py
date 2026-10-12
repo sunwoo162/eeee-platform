@@ -65,6 +65,12 @@ class PluginPlatformService:
 
     def uninstall(self, plugin_id: str) -> None:
         self.catalog_source.get(plugin_id)
+        for connection in self.connections.list_all():
+            if connection.plugin_id != plugin_id:
+                continue
+            if connection.credential_ref:
+                self.credentials.delete(connection.credential_ref)
+            self.connections.remove(connection.user_id, plugin_id)
         self.installations.remove(plugin_id)
 
     def status(self, plugin_id: str, user_id: str = "local-user") -> str:
@@ -140,6 +146,20 @@ class PluginPlatformService:
         if connection.credential_ref:
             self.credentials.delete(connection.credential_ref)
         self.connections.remove(user_id, plugin_id)
+
+    def pause(self, user_id: str, plugin_id: str) -> PluginConnectionView:
+        connection = self.connections.get(user_id, plugin_id)
+        paused = connection.model_copy(update={"status": "paused", "updated_at": _now()})
+        self.connections.save(paused)
+        return self._view(paused)
+
+    def resume(self, user_id: str, plugin_id: str) -> PluginConnectionView:
+        connection = self.connections.get(user_id, plugin_id)
+        if not self.installations.is_installed(plugin_id):
+            raise RuntimeError("plugin must be installed before resuming")
+        health = self.health(user_id, plugin_id)
+        refreshed = self.connections.get(user_id, plugin_id)
+        return self._view(refreshed)
 
     def health(self, user_id: str, plugin_id: str) -> ConnectorHealth:
         connection = self.connections.get(user_id, plugin_id)

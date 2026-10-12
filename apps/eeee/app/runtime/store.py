@@ -507,6 +507,13 @@ class PluginConnectionStore:
             ).fetchall()
         return [self.get(user_id, row["plugin_id"]) for row in rows]
 
+    def list_all(self) -> list[PluginConnection]:
+        with self.store._connect() as database:
+            rows = database.execute(
+                "SELECT user_id, plugin_id FROM plugin_connections ORDER BY user_id, plugin_id"
+            ).fetchall()
+        return [self.get(row["user_id"], row["plugin_id"]) for row in rows]
+
     def remove(self, user_id: str, plugin_id: str) -> None:
         with self.store._connect() as database:
             database.execute(

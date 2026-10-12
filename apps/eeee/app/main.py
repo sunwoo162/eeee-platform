@@ -360,6 +360,7 @@ def create_app(
             trust_gate,
             assistant_service=assistant_service,
             plugin_host=plugin_host,
+            plugin_platform=plugin_platform,
         )
     )
     application.include_router(
@@ -370,7 +371,7 @@ def create_app(
         )
     )
     application.include_router(build_design_router(design_service))
-    application.include_router(build_plugin_router(plugin_host))
+    application.include_router(build_plugin_router(plugin_host, plugin_platform))
     static_dir = Path(__file__).parent / "static"
     application.mount("/static", StaticFiles(directory=static_dir), name="static")
 

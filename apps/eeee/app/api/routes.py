@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Literal
@@ -22,6 +23,12 @@ from app.memory.models import MemoryRecord, MemoryStatus
 from app.mobile.bridge import MobileBridge, MobileBridgeError
 from app.plugins.host import PluginHost
 from app.plugins.models import PluginHealth, PluginManifest
+from app.plugins.api_models import (
+    PluginCatalogView,
+    PluginConnectPayload as PlatformPluginConnectPayload,
+    PluginHealthView,
+)
+from app.plugins.platform import PluginPlatformService
 from app.project_runtime.documents import ProjectDocumentService
 from app.project_runtime.evidence import ProjectEvidenceService
 from app.project_runtime.models import ProjectDocumentSyncResult, ProjectEvidenceIngestionResult, ProjectProfile
@@ -190,7 +197,7 @@ class PluginDiscoverPayload(BaseModel):
     source: str = Field(min_length=1)
 
 
-class PluginConnectPayload(BaseModel):
+class LocalPluginConnectPayload(BaseModel):
     approved: bool = False
 
 
@@ -210,7 +217,17 @@ def _plugin_registration_payload(registration: object) -> dict[str, object]:
     }
 
 
-def build_plugin_router(host: PluginHost) -> APIRouter:
+def _plugin_user_id(request: Request, header: str | None) -> str:
+    _require_local_desktop(request)
+    user_id = header or "local-user"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,120}", user_id):
+        raise HTTPException(status_code=400, detail="Plugin user scope is invalid")
+    return user_id
+
+
+def build_plugin_router(
+    host: PluginHost, platform: PluginPlatformService | None = None
+) -> APIRouter:
     """Expose the local plugin lifecycle; no remote plugin registry is involved."""
 
     router = APIRouter(prefix="/api/plugins")
@@ -218,6 +235,84 @@ def build_plugin_router(host: PluginHost) -> APIRouter:
     @router.get("")
     def list_plugins() -> list[dict[str, object]]:
         return [_plugin_registration_payload(item) for item in host.list()]
+
+    @router.get("/catalog", response_model=list[PluginCatalogView])
+    def plugin_catalog(
+        request: Request,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ) -> list[PluginCatalogView]:
+        if platform is None:
+            return []
+        principal = _plugin_user_id(request, user_id)
+        views = []
+        for entry in platform.catalog():
+            status = platform.status(entry.id, principal)
+            next_action = {
+                "not_installed": "install",
+                "available": "connect",
+                "awaiting_authentication": "connect",
+                "connecting": "wait",
+                "connected": "open",
+                "failed": "reconnect",
+                "paused": "resume",
+            }.get(status, "connect")
+            views.append(PluginCatalogView(
+                id=entry.id, name=entry.name, version=entry.version,
+                description=entry.description, authMode=entry.auth_mode,
+                permissions=entry.permissions, installSource=entry.install_source,
+                defaultInstalled=entry.default_installed, status=status,
+                nextAction=next_action,
+            ))
+        return views
+
+    @router.post("/{plugin_id}/install")
+    def install_plugin(plugin_id: str) -> object:
+        if platform is None:
+            raise HTTPException(status_code=503, detail="Plugin platform is unavailable")
+        try:
+            return platform.install(plugin_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.delete("/{plugin_id}/install", status_code=204)
+    def uninstall_plugin(plugin_id: str) -> Response:
+        if platform is None:
+            raise HTTPException(status_code=503, detail="Plugin platform is unavailable")
+        try:
+            platform.uninstall(plugin_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(status_code=204)
+
+    @router.get("/{plugin_id}/connection")
+    def plugin_connection(
+        plugin_id: str,
+        request: Request,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ) -> dict[str, object]:
+        if platform is None:
+            raise HTTPException(status_code=503, detail="Plugin platform is unavailable")
+        principal = _plugin_user_id(request, user_id)
+        try:
+            return platform.get_connection(principal, plugin_id).model_dump(by_alias=True)
+        except KeyError:
+            try:
+                return {"pluginId": plugin_id, "status": platform.status(plugin_id, principal)}
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/{plugin_id}/pause")
+    def pause_platform_plugin(
+        plugin_id: str,
+        request: Request,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ) -> object:
+        if platform is not None and plugin_id in {item.id for item in platform.catalog()}:
+            try:
+                return platform.pause(_plugin_user_id(request, user_id), plugin_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _plugin_registration_payload(host.pause(plugin_id))
 
     @router.post("/discover", response_model=PluginManifest)
     def discover_plugin(payload: PluginDiscoverPayload) -> PluginManifest:
@@ -236,8 +331,28 @@ def build_plugin_router(host: PluginHost) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/{plugin_id}/connect")
-    def connect_plugin(plugin_id: str, payload: PluginConnectPayload) -> dict[str, object]:
+    def connect_plugin(
+        plugin_id: str,
+        request: Request,
+        payload: LocalPluginConnectPayload | PlatformPluginConnectPayload,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ) -> object:
+        if platform is not None and plugin_id in {item.id for item in platform.catalog()}:
+            if not isinstance(payload, PlatformPluginConnectPayload):
+                raise HTTPException(status_code=422, detail="Plugin credentials and approvedPermissions are required")
+            try:
+                return platform.connect(
+                    _plugin_user_id(request, user_id), plugin_id,
+                    set(payload.approved_permissions), payload.plain_credential(), payload.account_label,
+                )
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except (KeyError, RuntimeError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
+            assert isinstance(payload, LocalPluginConnectPayload)
             return _plugin_registration_payload(host.connect(plugin_id, payload.approved))
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -245,7 +360,17 @@ def build_plugin_router(host: PluginHost) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/{plugin_id}/health", response_model=PluginHealth)
-    def plugin_health(plugin_id: str) -> PluginHealth:
+    def plugin_health(
+        plugin_id: str,
+        request: Request,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ) -> object:
+        if platform is not None and plugin_id in {item.id for item in platform.catalog()}:
+            try:
+                health = platform.health(_plugin_user_id(request, user_id), plugin_id)
+                return PluginHealthView(pluginId=plugin_id, **health.model_dump())
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
         try:
             return host.health(plugin_id)
         except KeyError as exc:
@@ -259,7 +384,17 @@ def build_plugin_router(host: PluginHost) -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.post("/{plugin_id}/disconnect")
-    def disconnect_plugin(plugin_id: str) -> dict[str, object]:
+    def disconnect_plugin(
+        plugin_id: str,
+        request: Request,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ) -> object:
+        if platform is not None and plugin_id in {item.id for item in platform.catalog()}:
+            try:
+                platform.disconnect(_plugin_user_id(request, user_id), plugin_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return {"pluginId": plugin_id, "status": "awaiting_authentication"}
         try:
             return _plugin_registration_payload(host.disconnect(plugin_id))
         except KeyError as exc:
@@ -275,7 +410,18 @@ def build_plugin_router(host: PluginHost) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/{plugin_id}/resume")
-    def resume_plugin(plugin_id: str) -> dict[str, object]:
+    def resume_plugin(
+        plugin_id: str,
+        request: Request,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ) -> object:
+        if platform is not None and plugin_id in {item.id for item in platform.catalog()}:
+            try:
+                return platform.resume(_plugin_user_id(request, user_id), plugin_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
             return _plugin_registration_payload(host.resume(plugin_id))
         except KeyError as exc:
@@ -525,6 +671,7 @@ def build_desktop_router(
     trust_gate: TrustGate,
     assistant_service: AssistantService | None = None,
     plugin_host: PluginHost | None = None,
+    plugin_platform: PluginPlatformService | None = None,
 ) -> APIRouter:
     """Expose the local Desktop control-plane without leaking bridge secrets."""
 
@@ -562,6 +709,24 @@ def build_desktop_router(
                 }
                 for registration in plugin_host.list()
             ]
+        if plugin_platform is not None:
+            for entry in plugin_platform.catalog():
+                status = plugin_platform.status(entry.id)
+                plugins.append({
+                    "pluginId": entry.id,
+                    "name": entry.name,
+                    "version": entry.version,
+                    "status": status,
+                    "nextAction": {
+                        "not_installed": "install",
+                        "available": "connect",
+                        "awaiting_authentication": "connect",
+                        "connected": "open",
+                        "failed": "reconnect",
+                        "paused": "resume",
+                    }.get(status, "connect"),
+                    "approvedPermissions": _platform_permissions(plugin_platform, entry.id),
+                })
         snapshot["controlCenter"] = {
             "sections": [
                 "conversation", "activeWork", "projects", "plugins", "memory", "settings"
@@ -619,6 +784,13 @@ def _require_local_desktop(request: Request) -> None:
         "testclient",
     }:
         raise HTTPException(status_code=403, detail="Desktop control is local-only")
+
+
+def _platform_permissions(platform: PluginPlatformService, plugin_id: str) -> list[str]:
+    try:
+        return platform.get_connection("local-user", plugin_id).approved_permissions
+    except KeyError:
+        return []
 
 
 def _desktop_events(bridge: MobileBridge, cursor: int) -> dict[str, object]:

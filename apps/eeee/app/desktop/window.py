@@ -210,6 +210,21 @@ class PetWindow:
                     painter.end()
                 super().paintEvent(event)
 
+        class _SpeechBubbleFrame(QFrame):
+            """Use the same cat bubble as the only Quick Chat surface."""
+
+            def __init__(self, bubble_pixmap, parent=None):
+                super().__init__(parent)
+                self.bubble_pixmap = bubble_pixmap
+
+            def paintEvent(self, event):
+                if self.bubble_pixmap is not None and not self.bubble_pixmap.isNull():
+                    painter = QPainter(self)
+                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                    painter.drawPixmap(self.rect(), self.bubble_pixmap)
+                    painter.end()
+                super().paintEvent(event)
+
         class _Window(QWidget):
             def __init__(self):
                 super().__init__()
@@ -382,7 +397,9 @@ class PetWindow:
                 status_layout.addWidget(self.mobile_status)
                 root.addWidget(self.status_card)
 
-                self.command_surface = QFrame()
+                self.command_surface = _SpeechBubbleFrame(
+                    QPixmap(str(asset_dir / "cat-speech-bubble.png"))
+                )
                 # Quick Chat is a separate lightweight tool window.  The pet
                 # remains the always-visible host; this surface owns only the
                 # conversation controls and can be hidden independently.
@@ -398,7 +415,7 @@ class PetWindow:
                 # tool window and pushes it far away from the character.
                 self.command_surface.setFixedWidth(340)
                 command_layout = QVBoxLayout(self.command_surface)
-                command_layout.setContentsMargins(14, 14, 14, 14)
+                command_layout.setContentsMargins(30, 20, 30, 36)
                 self.quick_status = QLabel()
                 self.quick_status.setObjectName("quickStatus")
                 self.quick_status.setWordWrap(True)
@@ -535,12 +552,13 @@ class PetWindow:
                     "#quickChat { background: transparent; border: none; color: #33281f; }"
                     "#quickChat QLabel { background: transparent; border: none; color: #f4f3fb; }"
                     "#quickStatus { color: #b9bdd0; font-size: 11px; }"
-                    "#quickReply { background: #fff7ef; border: 2px solid #efc28f; "
-                    "border-radius: 24px; padding: 11px 15px; color: #33281f; }"
-                    "#quickChat QLineEdit { background: #fffaf5; padding: 10px 13px; "
-                    "border: 2px solid #efc28f; border-radius: 20px; color: #33281f; }"
-                    "#quickChat QPushButton { background: #f1a65a; padding: 10px 12px; "
-                    "border: 2px solid #efc28f; border-radius: 20px; color: #33281f; font-weight: 600; }"
+                    "#quickReply { background: transparent; border: none; "
+                    "padding: 0 4px; color: #33281f; }"
+                    "#quickChat QLineEdit { background: transparent; padding: 6px 8px; "
+                    "border: none; color: #33281f; selection-background-color: #f4c58e; }"
+                    "#quickChat QPushButton { background: transparent; padding: 6px 8px; "
+                    "border: none; color: #33281f; font-weight: 600; }"
+                    "#quickChat QPushButton:hover { background: transparent; color: #6b4a2d; }"
                 )
                 self._apply_language()
                 self._timer = QTimer(self)

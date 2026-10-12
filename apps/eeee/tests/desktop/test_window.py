@@ -136,6 +136,19 @@ def test_speech_bubble_uses_the_generated_transparent_asset():
     window.close()
 
 
+def test_quick_chat_uses_the_same_speech_bubble_asset_without_legacy_pills():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    quick_bubble_pixmap = getattr(window.command_surface, "bubble_pixmap", None)
+
+    assert quick_bubble_pixmap is not None
+    assert not quick_bubble_pixmap.isNull()
+    assert "#fff7ef" not in window.command_surface.styleSheet()
+    assert "#efc28f" not in window.command_surface.styleSheet()
+    window.close()
+
+
 def test_quick_chat_above_pet_contains_input_and_latest_reply():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())

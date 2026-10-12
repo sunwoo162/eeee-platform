@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -59,6 +60,18 @@ class RouteClient(SlowClient):
         return {"status": "completed", "message": "요청을 받았어요."}
 
 
+class SlowInitialRefreshClient(RouteClient):
+    def get_state(self):
+        time.sleep(0.2)
+        return super().get_state()
+
+
+class ClarificationClient(RouteClient):
+    def route_assistant(self, text, workspace=None):
+        self.routed_text = text
+        return {"status": "needs_clarification", "message": "어떤 작업부터 시작할까?"}
+
+
 def _wait_for(app: QApplication, predicate) -> None:
     deadline = time.monotonic() + 3
     while not predicate() and time.monotonic() < deadline:
@@ -96,16 +109,19 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert window.assistant_input.objectName() == "assistantComposer"
     assert window.detail.objectName() == "assistantBubble"
     _wait_for(app, lambda: window.current_state.get("state") == "idle")
+    _wait_for(app, lambda: window.detail.text() == "")
     assert window.detail.text() == ""
     assert window.headline.isHidden()
     assert window.status_card.isHidden()
     assert window.command_surface.isHidden()
     assert window.legacy_panel.isHidden()
+    assert window._reply_hide_timer.interval() == 5000
     window.show_command_surface()
     assert not window.command_surface.isHidden()
-    assert not window.detail.isHidden()
+    assert window.detail.isHidden()
     assert window.quick_status.isHidden()
-    assert window.quick_reply.isHidden()
+    assert window.quick_reply.text() == ""
+    assert not window.quick_reply.isVisible()
     window.hide_command_surface()
     assert not window.detail.isHidden()
     window.close()
@@ -119,6 +135,138 @@ def test_pet_surface_is_transparent_and_compact():
     assert "background: transparent" in window.styleSheet()
     assert window.status_card.isHidden()
     assert window.legacy_panel.isHidden()
+    window.close()
+
+
+def test_speech_bubble_uses_the_generated_transparent_asset():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    bubble_pixmap = getattr(window.detail, "bubble_pixmap", None)
+
+    assert bubble_pixmap is not None
+    assert not bubble_pixmap.isNull()
+    assert "background: #fff7ef" not in window.styleSheet()
+    window.close()
+
+
+def test_quick_chat_uses_the_same_speech_bubble_asset_without_legacy_pills():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    quick_bubble_pixmap = getattr(window.command_surface, "bubble_pixmap", None)
+
+    assert quick_bubble_pixmap is not None
+    assert not quick_bubble_pixmap.isNull()
+    assert "#fff7ef" not in window.command_surface.styleSheet()
+    assert "#efc28f" not in window.command_surface.styleSheet()
+    window.close()
+
+
+def test_quick_chat_sends_with_enter_without_inserting_a_greeting():
+    app = QApplication.instance() or QApplication([])
+    client = RouteClient()
+    window = PetWindow(client)
+    _wait_for(app, lambda: not window._busy)
+    window.show_command_surface()
+
+    assert window.assistant_input.placeholderText() == ""
+    _wait_for(app, lambda: window.quick_reply.text() == "")
+    assert window.quick_reply.text() == ""
+
+    window.assistant_input.setText("안녕")
+    window.assistant_input.returnPressed.emit()
+    _wait_for(app, lambda: client.routed_text == "안녕")
+    assert client.routed_text == "안녕"
+    _wait_for(app, lambda: not window._busy)
+
+    window.assistant_input.setText("다시 보내기")
+    window.assistant_input.returnPressed.emit()
+    _wait_for(app, lambda: client.routed_text == "다시 보내기")
+    assert client.routed_text == "다시 보내기"
+    window.close()
+
+
+def test_quick_chat_input_is_centered_and_not_blocked_by_initial_refresh():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowInitialRefreshClient())
+    window.show_command_surface()
+    app.processEvents()
+
+    assert not hasattr(window, "assistant_paw_left")
+    assert not hasattr(window, "assistant_paw_right")
+    assert window.assistant_input.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert abs(
+        window.assistant_input.geometry().center().x()
+        - window.command_surface.rect().center().x()
+    ) <= 8
+    assert window.assistant_input.height() == 42
+    assert window.assistant_input.isEnabled()
+    window.close()
+
+
+def test_bubble_text_is_black_and_centered_without_a_height_cap():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    assert window.detail.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert window.quick_reply.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert "color: #000000" in window.styleSheet()
+    assert "color: #000000" in window.command_surface.styleSheet()
+    assert window.detail.maximumHeight() == 16777215
+    assert window.quick_reply.maximumHeight() == 16777215
+    window.close()
+
+
+def test_idle_assistant_reply_is_not_replaced_by_greeting():
+    app = QApplication.instance() or QApplication([])
+    client = ClarificationClient()
+    window = PetWindow(client)
+    window.show_command_surface()
+    _wait_for(app, lambda: not window._busy)
+
+    window.assistant_input.setText("도와줘")
+    window.assistant_input.returnPressed.emit()
+    _wait_for(app, lambda: window.current_state.get("state") == "idle")
+    _wait_for(app, lambda: window.quick_reply.text() == "어떤 작업부터 시작할까?")
+
+    assert window.quick_reply.text() == "어떤 작업부터 시작할까?"
+    window.close()
+
+
+def test_quick_chat_above_pet_contains_input_and_latest_reply():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show()
+    window.move(300, 500)
+    _wait_for(app, lambda: window.isVisible())
+    window.detail.setText("이전 답변")
+
+    window.show_command_surface()
+    window._start_reply_typing("이전 답변")
+    window._reposition_command_surface()
+
+    assert window.command_surface.frameGeometry().bottom() < window.frameGeometry().top()
+    assert window.frameGeometry().top() - window.command_surface.frameGeometry().bottom() <= 1
+    assert window.detail.isHidden()
+    assert window.quick_reply.isVisible()
+    assert window.quick_reply.text()
+    window.close()
+
+
+def test_quick_chat_starts_with_only_a_centered_composer():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    app.processEvents()
+
+    assert window.quick_reply.text() == ""
+    assert not window.quick_reply.isVisible()
+    assert window.assistant_input.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert abs(
+        window.assistant_input.geometry().center().y()
+        - window.command_surface.rect().center().y()
+    ) <= 8
     window.close()
 
 
@@ -146,12 +294,67 @@ def test_cat_keyboard_pet_assets_are_loaded_and_typing_switches_hands():
     window.close()
 
 
-def test_pet_asset_table_keeps_each_logical_hand_on_its_matching_side():
-    assert PET_ASSET_TABLE["left"]["base"] == "left"
-    assert PET_ASSET_TABLE["left"]["press"] == "left_alt"
-    assert PET_ASSET_TABLE["right"]["base"] == "right"
-    assert PET_ASSET_TABLE["right"]["press"] == "right_alt"
-    assert PET_ASSET_TABLE["left"]["paw_mask"]["x_max"] < PET_ASSET_TABLE["right"]["paw_mask"]["x_min"]
+def test_idle_pose_composes_both_resting_paws():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    assert not window._pet_pixmaps["paw_left_rest"].isNull()
+    assert not window._pet_pixmaps["paw_right_rest"].isNull()
+    idle = window._source_pixmap_for_frame("idle")
+    assert not idle.isNull()
+    assert idle.toImage() != window._pet_pixmaps["idle"].toImage()
+    window.close()
+
+
+def test_typing_pose_returns_to_two_paw_idle_after_five_seconds():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window._read_global_key_states = lambda: {}
+    window._typing_active = True
+    window._last_typing_frame = "right_press"
+    window._last_text_edit_at = time.monotonic() - 5.1
+
+    window._update_pet_motion()
+
+    assert window._typing_active is False
+    assert window._last_rendered_frame == "idle"
+    window.close()
+
+
+def test_right_repeat_uses_the_same_hand_short_pose():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    assert window._typing_hand == "left"
+    window._typing_hand = "right"
+    window._typing_hand_press_count = 1
+    assert window._typing_frame_name() == "right"
+    window._typing_hand_press_count = 2
+    assert window._typing_frame_name() == "right_press"
+    assert window._press_source_frame("right") == "right_short"
+    window.close()
+
+
+def test_right_hand_uses_the_viewer_left_keyboard_pose_assets():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    asset_dir = Path(__file__).resolve().parents[2] / "app" / "desktop" / "assets"
+
+    assert (asset_dir / "cat-keyboard-left.png").is_file()
+    assert (asset_dir / "cat-keyboard-left-alt.png").is_file()
+    assert window._press_source_frame("right") == "right_short"
+    window._typing_hand_press_count = 1
+    assert window._typing_frame_name() == "left"
+    window._typing_hand = "right"
+    window._typing_hand_press_count = 1
+    assert window._typing_frame_name() == "right"
+    window._typing_hand_press_count = 2
+    assert window._typing_frame_name() == "right_press"
+    assert len({
+        (asset_dir / "cat-keyboard-left.png").read_bytes(),
+        (asset_dir / "cat-keyboard-left-alt.png").read_bytes(),
+    }) == 2
+    window.close()
 
 
 def test_every_pet_frame_stays_inside_the_compact_character_bounds():
@@ -297,28 +500,35 @@ def test_repeated_same_hand_input_animates_without_switching_paws():
     window.close()
 
 
-def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
+def test_same_hand_press_frame_is_distinct_and_right_uses_complete_pose_pair():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
-    assert window._press_source_frame("left") == "left_alt"
-    assert window._press_source_frame("right") == "right_alt"
+    assert window._press_source_frame("left") == "left_short"
+    assert window._press_source_frame("right") == "right_short"
+    # The repeated right-hand pose must come from the dedicated short-paw
+    # export, never from the full alternate pose that contains the long paw.
+    assert window._pet_pixmaps["right_short"].toImage() == window._pet_pixmaps[
+        "right_repeat"
+    ].toImage()
 
     base = window._source_pixmap_for_frame("left").toImage()
     pressed = window._source_pixmap_for_frame("left_press").toImage()
     opposite = window._source_pixmap_for_frame("right").toImage()
+    idle = window._source_pixmap_for_frame("idle").toImage()
     clip = window._same_paw_clip_path("left")
-    outside_diffs = sum(
-        base.pixelColor(x, y) != pressed.pixelColor(x, y)
+    repeat_outside_diffs = sum(
+        idle.pixelColor(x, y) != pressed.pixelColor(x, y)
         for y in range(200, 400, 24)
         for x in range(600, 1000, 24)
         if not clip.contains(QPointF(x, y))
     )
     right_base = window._source_pixmap_for_frame("right").toImage()
     right_pressed = window._source_pixmap_for_frame("right_press").toImage()
+    right_idle = window._source_pixmap_for_frame("idle").toImage()
     right_clip = window._same_paw_clip_path("right")
-    right_outside_diffs = sum(
-        right_base.pixelColor(x, y) != right_pressed.pixelColor(x, y)
+    right_repeat_outside_diffs = sum(
+        right_idle.pixelColor(x, y) != right_pressed.pixelColor(x, y)
         for y in range(200, 400, 24)
         for x in range(600, 1000, 24)
         if not right_clip.contains(QPointF(x, y))
@@ -326,9 +536,12 @@ def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
 
     assert pressed != base
     assert pressed != opposite
-    assert outside_diffs == 0
+    # First press uses the complete pose (including the raised opposite paw),
+    # while a consecutive same-hand press renders only the active short paw
+    # over the idle pose. The opposite paw therefore stays down on repeats.
+    assert repeat_outside_diffs == 0
     assert right_pressed != right_base
-    assert right_outside_diffs == 0
+    assert right_repeat_outside_diffs == 0
     window.close()
 
 
@@ -338,26 +551,26 @@ def test_pet_asset_table_keeps_press_motion_modular_and_tight():
 
     assert left["body"] == "idle"
     assert left["base"] == "left"
-    assert left["press"] == "left_alt"
+    assert left["press"] == "left_short"
     assert right["body"] == "idle"
     assert right["base"] == "right"
-    assert right["press"] == "right_alt"
+    assert right["press"] == "right_short"
     assert left["paw_mask"]["x_max"] - left["paw_mask"]["x_min"] < 300
     assert right["paw_mask"]["x_max"] - right["paw_mask"]["x_min"] < 300
-    assert left["paw_mask"]["y_min"] > 520
-    assert right["paw_mask"]["y_min"] > 400
+    assert left["paw_mask"]["y_min"] > 400
+    assert right["paw_mask"]["y_min"] > 520
 
     # Stable body/keyboard anchors must never be inside the press layer.  If
     # they are, swapping a repeated-key pose visibly shakes the mascot.
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
     left_mask = window._same_paw_clip_path("left")
-    assert left_mask.contains(QPointF(570, 650))
+    assert left_mask.contains(QPointF(1160, 540))
     assert not left_mask.contains(QPointF(900, 460))
-    assert not left_mask.contains(QPointF(570, 800))
+    assert not left_mask.contains(QPointF(1100, 800))
     right_mask = window._same_paw_clip_path("right")
-    assert right_mask.contains(QPointF(1160, 600))
-    assert not right_mask.contains(QPointF(900, 460))
+    assert not right_mask.contains(QPointF(570, 535))
+    assert not right_mask.contains(QPointF(570, 800))
     window.close()
 
 
@@ -414,7 +627,7 @@ def test_gaze_frames_reuse_the_idle_keyboard_canvas():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
-    idle = window._pet_pixmaps["idle"].toImage()
+    idle = window._resting_pet_pixmap().toImage()
     for frame in ("gaze_left", "gaze_center", "gaze_right"):
         gaze = window._source_pixmap_for_frame(frame).toImage()
         assert gaze.copy(0, 650, idle.width(), idle.height() - 650) == idle.copy(
@@ -542,13 +755,13 @@ def test_quick_chat_is_anchored_to_the_pet_and_clamped_to_screen_edges():
     assert position.x() >= screen.left() + 12
     assert position.x() + surface_size.width() <= screen.right() - 11
     assert (
-        position.y() >= anchor.bottom() + 12
-        or position.y() + surface_size.height() <= anchor.top() - 12
+        position.y() >= anchor.bottom()
+        or position.y() + surface_size.height() <= anchor.top()
     )
     window.close()
 
 
-def test_quick_chat_prefers_below_the_pet_when_space_is_available():
+def test_quick_chat_prefers_above_the_pet_when_space_is_available():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
     window.show()
@@ -559,7 +772,7 @@ def test_quick_chat_prefers_below_the_pet_when_space_is_available():
     anchor = window._pet_anchor_rect()
     position = window._command_surface_position(screen, surface_size)
 
-    assert position.y() >= anchor.bottom() + 12
+    assert position.y() + surface_size.height() <= anchor.top()
     assert abs(
         position.x() + surface_size.width() // 2 - anchor.center().x()
     ) <= 12
@@ -642,6 +855,20 @@ def test_short_reply_bubble_is_hidden_after_its_display_window():
     _wait_for(app, lambda: window.detail.isHidden())
 
     assert window.detail.isHidden()
+    window.close()
+
+
+def test_hiding_a_hidden_pet_does_not_lose_timer_restore_state():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show()
+    app.processEvents()
+    window.hide_to_tray()
+    window.hide_to_tray()
+    window.restore_from_tray()
+
+    assert window._pet_motion_timer.isActive()
+    assert window._topmost_timer.isActive()
     window.close()
 
 

@@ -8,7 +8,7 @@ from app.desktop.presentation import PetPresentation
 from app.desktop.session import DesktopSession
 from app.desktop.worker import QtTaskRunner
 from app.assistant.profile import DEFAULT_PROFILE, load_profile, save_profile
-from app.desktop.pet_assets import PET_ASSET_TABLE
+from app.desktop.pet_assets import PET_ASSET_TABLE, REST_PAW_LAYER_PLACEMENTS
 
 
 def _force_windows_topmost(widget) -> None:
@@ -40,6 +40,8 @@ _DESKTOP_TEXT = {
         "window_title": "EEEE • Gleave",
         "language": "언어",
         "ready": "준비됨",
+        # Quick Chat opens with an empty composer. A greeting here would be
+        # rendered as a second line above the user's text.
         "start_hint": "",
         "project_none": "프로젝트: 선택되지 않음",
         "runtime_none": "실행 프로필: 선택되지 않음",
@@ -49,8 +51,7 @@ _DESKTOP_TEXT = {
         "configuration_prefix": "추가 설정 필요",
         "claim_checking": "ClaimLatch: 확인 중",
         "mobile_available": "모바일 브리지: 데스크톱에서 연결 가능",
-        "assistant_placeholder": "EEEE에게 다음 할 일을 물어보세요…",
-        "ask": "EEEE에게 묻기",
+        "assistant_placeholder": "",
         "pairing": "휴대폰 연결 코드",
         "pairing_none": "연결 코드 없음",
         "events_none": "최근 EEEE 이벤트 없음",
@@ -90,8 +91,7 @@ _DESKTOP_TEXT = {
         "configuration_prefix": "Configuration needed",
         "claim_checking": "ClaimLatch: checking",
         "mobile_available": "Mobile bridge: available from Desktop",
-        "assistant_placeholder": "Ask EEEE what to do next…",
-        "ask": "Ask EEEE",
+        "assistant_placeholder": "",
         "pairing": "Pair phone",
         "pairing_none": "No pairing code issued",
         "events_none": "No recent EEEE events",
@@ -190,6 +190,44 @@ class PetWindow:
                 'PySide6 is required for the desktop shell. Install with `pip install -e ".[desktop]"`.'
             ) from exc
 
+        class _SpeechBubbleLabel(QLabel):
+            """Draw a scalable bubble asset behind dynamic response text."""
+
+            def __init__(self, bubble_pixmap, parent=None):
+                super().__init__(parent)
+                self.bubble_pixmap = bubble_pixmap
+                self.setWordWrap(True)
+                self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                # Keep the text centered in the drawable body of the bubble;
+                # the old bottom-heavy margins made short replies appear
+                # above the bubble and visually detached from the cat.
+                self.setContentsMargins(30, 26, 30, 26)
+                self.setMinimumHeight(96)
+                self.setTextFormat(Qt.TextFormat.PlainText)
+
+            def paintEvent(self, event):
+                if self.bubble_pixmap is not None and not self.bubble_pixmap.isNull():
+                    painter = QPainter(self)
+                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                    painter.drawPixmap(self.rect(), self.bubble_pixmap)
+                    painter.end()
+                super().paintEvent(event)
+
+        class _SpeechBubbleFrame(QFrame):
+            """Use the same cat bubble as the only Quick Chat surface."""
+
+            def __init__(self, bubble_pixmap, parent=None):
+                super().__init__(parent)
+                self.bubble_pixmap = bubble_pixmap
+
+            def paintEvent(self, event):
+                if self.bubble_pixmap is not None and not self.bubble_pixmap.isNull():
+                    painter = QPainter(self)
+                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                    painter.drawPixmap(self.rect(), self.bubble_pixmap)
+                    painter.end()
+                super().paintEvent(event)
+
         class _Window(QWidget):
             def __init__(self):
                 super().__init__()
@@ -204,6 +242,7 @@ class PetWindow:
                 self._pet_is_dragging = False
                 self._busy = False
                 self._refreshing = False
+                self._conversation_active = False
                 self._auth_login_in_progress = False
                 self._closing = False
                 self._quit_requested = False
@@ -233,7 +272,8 @@ class PetWindow:
 
                 root = QVBoxLayout(self)
                 root.setContentsMargins(22, 18, 22, 20)
-                root.setSpacing(12)
+                # Keep the speech bubble visually attached to the pet.
+                root.setSpacing(0)
 
                 language_row_widget = QWidget()
                 language_row = QHBoxLayout(language_row_widget)
@@ -260,13 +300,25 @@ class PetWindow:
                     frame: QPixmap(str(asset_dir / filename))
                     for frame, filename in {
                         "idle": "cat-keyboard-idle.png",
-                        # Keep the visual side and physical keyboard side
-                        # aligned: left input uses the left-paw artwork and
-                        # right input uses the right-paw artwork.
-                        "left": "cat-keyboard-left.png",
-                        "right": "cat-keyboard-right.png",
-                        "left_alt": "cat-keyboard-left-alt.png",
-                        "right_alt": "cat-keyboard-right-alt.png",
+                        # The visual source files are named by their legacy
+                        # export direction; user input direction is the
+                        # opposite, so keep the mapping explicit here.
+                        "left": "cat-keyboard-right.png",
+                        # The cat's right hand is the paw on the viewer's
+                        # left.  Keep it on the left-hand-named source export;
+                        # the logical hand name is anatomical, not viewer
+                        # relative.
+                        "right": "cat-keyboard-left.png",
+                        "left_alt": "cat-keyboard-right-alt.png",
+                        "right_alt": "cat-keyboard-left-alt.png",
+                        "paw_left_rest": "pet/paw-left-rest.png",
+                        "paw_right_rest": "pet/paw-right-rest.png",
+                        "left_short": "cat-keyboard-left-alt.png",
+                        # Repeated right-hand input uses the dedicated short
+                        # paw export.  Do not crop the full alternate pose:
+                        # its long resting paw becomes a stray finger.
+                        "right_repeat": "cat-keyboard-right-repeat.png",
+                        "right_short": "cat-keyboard-right-repeat.png",
                         "gaze_left": "cat-keyboard-gaze-left.png",
                         "gaze_right": "cat-keyboard-gaze-right.png",
                     }.items()
@@ -310,10 +362,10 @@ class PetWindow:
                 self.headline.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
                 root.addWidget(self.headline)
 
-                self.detail = QLabel()
+                self.detail = _SpeechBubbleLabel(
+                    QPixmap(str(asset_dir / "cat-speech-bubble.png"))
+                )
                 self.detail.setObjectName("assistantBubble")
-                self.detail.setWordWrap(True)
-                self.detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.detail.setMinimumWidth(240)
                 self.detail.setMaximumWidth(640)
                 root.addWidget(self.detail)
@@ -349,7 +401,9 @@ class PetWindow:
                 status_layout.addWidget(self.mobile_status)
                 root.addWidget(self.status_card)
 
-                self.command_surface = QFrame()
+                self.command_surface = _SpeechBubbleFrame(
+                    QPixmap(str(asset_dir / "cat-speech-bubble.png"))
+                )
                 # Quick Chat is a separate lightweight tool window.  The pet
                 # remains the always-visible host; this surface owns only the
                 # conversation controls and can be hidden independently.
@@ -363,9 +417,14 @@ class PetWindow:
                 # Keep Quick Chat compact enough to feel attached to the pet.
                 # Without a width cap, Qt lets a long response expand the
                 # tool window and pushes it far away from the character.
-                self.command_surface.setFixedWidth(340)
+                self.command_surface.setFixedWidth(360)
                 command_layout = QVBoxLayout(self.command_surface)
-                command_layout.setContentsMargins(14, 14, 14, 14)
+                # The input and the latest reply share one bubble. Equal
+                # vertical margins keep both controls centered instead of
+                # pinning the text to the top edge or the tail.
+                command_layout.setContentsMargins(34, 22, 34, 22)
+                command_layout.setSpacing(8)
+                command_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.quick_status = QLabel()
                 self.quick_status.setObjectName("quickStatus")
                 self.quick_status.setWordWrap(True)
@@ -373,28 +432,32 @@ class PetWindow:
                 self.quick_reply = QLabel()
                 self.quick_reply.setObjectName("quickReply")
                 self.quick_reply.setWordWrap(True)
+                self.quick_reply.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 command_layout.addWidget(self.quick_reply)
-                assistant_row = QHBoxLayout()
+                self.assistant_row = QHBoxLayout()
+                self.assistant_row.setContentsMargins(0, 0, 0, 0)
+                self.assistant_row.setSpacing(0)
+                self.assistant_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.assistant_input = QLineEdit()
                 self.assistant_input.setObjectName("assistantComposer")
-                self.assistant_input.setMinimumWidth(190)
-                self.assistant_input.setMaximumWidth(210)
+                self.assistant_input.setMinimumWidth(0)
+                self.assistant_input.setMaximumWidth(300)
+                self.assistant_input.setFixedHeight(42)
+                self.assistant_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.assistant_input.installEventFilter(self)
-                self.assistant_button = QPushButton()
-                self.assistant_button.setObjectName("primaryAction")
-                self.assistant_button.setFixedWidth(108)
-                self.assistant_button.clicked.connect(self._route_assistant)
+                # Enter is the only send action; retain the old attribute as
+                # a compatibility alias without rendering another button.
+                self.assistant_button = self.assistant_input
                 self.assistant_input.returnPressed.connect(self._route_assistant)
                 self.assistant_input.textEdited.connect(self._on_user_typing)
-                assistant_row.addWidget(self.assistant_input)
-                assistant_row.addWidget(self.assistant_button)
-                command_layout.addLayout(assistant_row)
+                self.assistant_row.addWidget(self.assistant_input)
+                command_layout.addLayout(self.assistant_row)
                 self.command_surface.installEventFilter(self)
                 self._app.installEventFilter(self)
 
                 self._reply_hide_timer = QTimer(self)
                 self._reply_hide_timer.setSingleShot(True)
-                self._reply_hide_timer.setInterval(8000)
+                self._reply_hide_timer.setInterval(5000)
                 self._reply_hide_timer.timeout.connect(self._hide_reply_bubble)
                 self._typing_timer = QTimer(self)
                 self._typing_timer.setInterval(24)
@@ -480,8 +543,8 @@ class PetWindow:
                     "#desktopCompanion QLabel { background: transparent; border: none; "
                     "color: #f4f3fb; }"
                     "#assistantCharacter { padding: 4px; }"
-                    "#assistantBubble { background: #fff7ef; border: 2px solid #efc28f; "
-                    "border-radius: 24px; padding: 12px 18px; color: #33281f; }"
+                     "QLabel#assistantBubble { background: transparent; border: none; color: #000000; "
+                     "qproperty-alignment: AlignCenter; }"
                     "#projectStatusCard { background: #202332; border: 1px solid #373c53; "
                     "border-radius: 14px; }"
                     "#projectStatus { color: #ffffff; font-weight: 600; }"
@@ -501,14 +564,12 @@ class PetWindow:
                 )
                 self.command_surface.setStyleSheet(
                     "#quickChat { background: transparent; border: none; color: #33281f; }"
-                    "#quickChat QLabel { background: transparent; border: none; color: #f4f3fb; }"
+                     "#quickChat QLabel { background: transparent; border: none; color: #000000; }"
                     "#quickStatus { color: #b9bdd0; font-size: 11px; }"
-                    "#quickReply { background: #fff7ef; border: 2px solid #efc28f; "
-                    "border-radius: 24px; padding: 11px 15px; color: #33281f; }"
-                    "#quickChat QLineEdit { background: #fffaf5; padding: 10px 13px; "
-                    "border: 2px solid #efc28f; border-radius: 20px; color: #33281f; }"
-                    "#quickChat QPushButton { background: #f1a65a; padding: 10px 12px; "
-                    "border: 2px solid #efc28f; border-radius: 20px; color: #33281f; font-weight: 600; }"
+                     "QLabel#quickReply { background: transparent; border: none; "
+                     "padding: 0 4px; color: #000000; qproperty-alignment: AlignCenter; }"
+                    "#quickChat QLineEdit { background: transparent; padding: 6px 8px; "
+                     "border: none; color: #000000; selection-background-color: #f4c58e; }"
                 )
                 self._apply_language()
                 self._timer = QTimer(self)
@@ -522,7 +583,9 @@ class PetWindow:
                     self._render({"state": "blocked", "message": initial_error})
                 else:
                     self._timer.start(5000)
-                    self.refresh()
+                    # The first status fetch must not lock the Quick Chat
+                    # composer; it is background state, not a user action.
+                    self.refresh(silent=True)
 
             def eventFilter(self, watched, event):
                 assistant_input = getattr(self, "assistant_input", None)
@@ -599,15 +662,23 @@ class PetWindow:
                     _force_windows_topmost(self.command_surface)
 
             def show_command_surface(self):
-                # The pet bubble remains the only response surface. Quick
-                # Chat is only the composer anchored below the pet.
-                self.detail.show()
+                # Quick Chat lives above the pet. It reuses the same response
+                # bubble for the latest answer and places the composer below
+                # that answer, so nothing is rendered under the character.
+                latest_reply = self.detail.text().strip()
+                if latest_reply in {
+                    self._text("connecting"),
+                    self._text("assistant_busy"),
+                }:
+                    latest_reply = ""
+                self.quick_reply.setText(latest_reply)
+                self.detail.hide()
                 self._reply_hide_timer.stop()
                 self.command_surface.show()
                 self.command_surface.adjustSize()
                 self.command_surface.move(self._command_surface_position())
                 QTimer.singleShot(0, self._reposition_command_surface)
-                self.quick_reply.hide()
+                self.quick_reply.setVisible(bool(self.quick_reply.text().strip()))
                 self.raise_()
                 self.command_surface.raise_()
                 self.command_surface.activateWindow()
@@ -640,7 +711,9 @@ class PetWindow:
 
             def _command_surface_position(self, screen_rect=None, surface_size=None):
                 """Place Quick Chat next to the pet, clamped to the usable screen."""
-                margin = 12
+                # The bubble tail should nearly touch the cat. The old
+                # gap plus transparent asset padding made them feel detached.
+                margin = 0
                 anchor = self._pet_anchor_rect()
                 if screen_rect is None:
                     screen = self.screen()
@@ -657,11 +730,11 @@ class PetWindow:
 
                 centered_x = anchor.center().x() - surface_size.width() // 2
                 x = max(min_x, min(centered_x, max_x))
-                below_y = anchor.bottom() + margin
                 above_y = anchor.top() - margin - surface_size.height()
-                # The composer belongs below the pet. Only move it above when
-                # the current monitor has no room underneath.
-                y = below_y if below_y <= max_y else above_y
+                below_y = anchor.bottom() + margin
+                # The composer and latest reply belong above the pet. Only
+                # move it below when the top of the monitor has no room.
+                y = above_y if above_y >= min_y else below_y
                 y = max(min_y, min(y, max_y))
                 return QPoint(x, y)
 
@@ -683,11 +756,9 @@ class PetWindow:
             def _press_source_frame(self, frame: str) -> str:
                 """Return the sibling artwork for a same-paw press frame.
 
-                The logical frame names describe physical keyboard hands, but
-                the artwork filenames are mirrored relative to the viewer. The
-                alternate asset for ``left`` is therefore ``right_alt`` and
-                vice versa. These sibling assets keep the body and keyboard
-                anchored while changing only the paw's pose.
+                The first press uses a complete pose so the opposite paw is
+                visibly raised. Repeated presses use a short sibling pose
+                clipped onto idle so the opposite paw stays down.
                 """
                 spec = PET_ASSET_TABLE.get(frame)
                 return spec["press"] if spec else frame
@@ -705,29 +776,50 @@ class PetWindow:
                 path.closeSubpath()
                 return path
 
+            def _resting_pet_pixmap(self):
+                """Compose the neutral pose with both front paws on keys."""
+                body = self._pet_pixmaps.get("idle")
+                if body is None or body.isNull():
+                    return body
+                composed = body.copy()
+                painter = QPainter(composed)
+                for layer_key, (x, y) in REST_PAW_LAYER_PLACEMENTS.items():
+                    layer = self._pet_pixmaps.get(layer_key)
+                    if layer is not None and not layer.isNull():
+                        painter.drawPixmap(x, y, layer)
+                painter.end()
+                return composed
+
             def _source_pixmap_for_frame(self, frame: str):
                 """Keep the keyboard fixed while changing only the eyes."""
-                base = self._pet_pixmaps.get("idle")
+                base = self._resting_pet_pixmap()
                 is_gaze = frame.startswith("gaze_")
                 is_press = frame.endswith("_press")
                 base_frame = frame.removesuffix("_press")
                 is_typing = base_frame in {"left", "right", "left_alt", "right_alt"}
                 if not is_gaze and not is_typing:
-                    return self._pet_pixmaps.get(frame)
+                    return base if frame == "idle" else self._pet_pixmaps.get(frame)
                 if is_typing:
                     asset_spec = PET_ASSET_TABLE.get(base_frame)
                     if asset_spec is None:
                         return self._pet_pixmaps.get(base_frame)
-                    base = self._pet_pixmaps.get(asset_spec["body"])
-                    paw_key = asset_spec["press"] if is_press else asset_spec["base"]
-                    paw_source = self._pet_pixmaps.get(paw_key)
-                    if base is not None and paw_source is not None:
-                        composed = base.copy()
-                        paw_painter = QPainter(composed)
-                        paw_painter.setClipPath(self._same_paw_clip_path(base_frame))
-                        paw_painter.drawPixmap(0, 0, paw_source)
-                        paw_painter.end()
-                        base = composed
+                    if not is_press:
+                        # First press: use the complete approved pose so the
+                        # opposite paw's pink pads remain visible.
+                        base = self._pet_pixmaps.get(asset_spec["base"])
+                    else:
+                        # Repeat: change only the active paw over idle. The
+                        # opposite paw must stay down for same-array repeats.
+                        base = self._resting_pet_pixmap()
+                        paw_key = asset_spec["press"]
+                        paw_source = self._pet_pixmaps.get(paw_key)
+                        if base is not None and paw_source is not None:
+                            composed = base.copy()
+                            paw_painter = QPainter(composed)
+                            paw_painter.setClipPath(self._same_paw_clip_path(base_frame))
+                            paw_painter.drawPixmap(0, 0, paw_source)
+                            paw_painter.end()
+                            base = composed
                 if base is None or base.isNull():
                     return base
 
@@ -764,8 +856,9 @@ class PetWindow:
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
-                if frame.removesuffix("_press") in {"left", "right", "left_alt", "right_alt"}:
-                    pressing = frame.removesuffix("_press").removesuffix("_alt")
+                pose_frame = frame.removesuffix("_repeat").removesuffix("_press")
+                if pose_frame in {"left", "right", "left_alt", "right_alt"}:
+                    pressing = pose_frame.removesuffix("_alt")
                     self._typing_pose = {
                         "pressing": pressing,
                         "lifted": "right" if pressing == "left" else "left",
@@ -904,10 +997,15 @@ class PetWindow:
                     return
 
                 self._typing_active = False
-                # Once the user has typed, keep the last hand pose instead of
-                # snapping back to the idle keyboard pose.  The eye overlay
-                # still follows the cursor through the current gaze offset.
-                self._set_pet_frame(self._last_typing_frame or gaze_frame)
+                if (
+                    self._last_text_edit_at
+                    and time.monotonic() - self._last_text_edit_at >= 5.0
+                ):
+                    self._set_pet_frame("idle")
+                else:
+                    # Keep the last hand pose briefly after typing stops so
+                    # the animation does not visibly snap between keystrokes.
+                    self._set_pet_frame(self._last_typing_frame or gaze_frame)
 
             def _start_reply_typing(self, text: str) -> None:
                 self._typing_timer.stop()
@@ -915,6 +1013,8 @@ class PetWindow:
                 self._typing_index = 0
                 self.detail.setText("")
                 self.quick_reply.setText("")
+                self.detail.setVisible(not self.command_surface.isVisible())
+                self.quick_reply.setVisible(False)
                 if not text:
                     return
                 self._advance_reply_typing()
@@ -930,6 +1030,8 @@ class PetWindow:
                 visible_text = self._typing_text[: self._typing_index]
                 self.detail.setText(visible_text)
                 self.quick_reply.setText(visible_text)
+                self.detail.setVisible(not self.command_surface.isVisible())
+                self.quick_reply.setVisible(self.command_surface.isVisible())
                 if self._typing_index >= len(self._typing_text):
                     self._typing_timer.stop()
                     self._schedule_reply_hide()
@@ -969,6 +1071,9 @@ class PetWindow:
                     return
                 self._closing = True
                 self._timer.stop()
+                self._topmost_timer.stop()
+                self._pet_motion_timer.stop()
+                self._typing_timer.stop()
                 self._reply_hide_timer.stop()
                 self._app.removeEventFilter(self)
                 self._task_runner.shutdown()
@@ -1006,10 +1111,40 @@ class PetWindow:
                     self.restore_from_tray()
 
             def hide_to_tray(self):
+                if self.isHidden():
+                    return
+                # A hidden tray pet does not need animation, topmost polling,
+                # refresh polling, or reply typing. Pausing these timers keeps
+                # multiple hidden test/app windows from competing for the UI
+                # event loop; restore_from_tray resumes them.
+                self._tray_ui_timers_were_active = {
+                    "refresh": self._timer.isActive(),
+                    "topmost": self._topmost_timer.isActive(),
+                    "motion": self._pet_motion_timer.isActive(),
+                    "typing": self._typing_timer.isActive(),
+                    "reply_hide": self._reply_hide_timer.isActive(),
+                }
+                self._timer.stop()
+                self._topmost_timer.stop()
+                self._pet_motion_timer.stop()
+                self._typing_timer.stop()
+                self._reply_hide_timer.stop()
+                self.command_surface.hide()
                 self.hide()
 
             def restore_from_tray(self):
                 self.showNormal()
+                active = getattr(self, "_tray_ui_timers_were_active", {})
+                if active.get("motion"):
+                    self._pet_motion_timer.start()
+                if active.get("topmost"):
+                    self._topmost_timer.start()
+                if active.get("refresh"):
+                    self._timer.start(5000)
+                if active.get("typing"):
+                    self._typing_timer.start()
+                if active.get("reply_hide"):
+                    self._reply_hide_timer.start()
                 self.raise_()
                 self.activateWindow()
 
@@ -1103,14 +1238,13 @@ class PetWindow:
                 self.setWindowTitle(f"{self.profile_name} • Gleave")
                 self.language_label.setText(self._text("language"))
                 self.assistant_input.setPlaceholderText(self._text("assistant_placeholder"))
-                self.assistant_button.setText(self._text("ask"))
                 self.pairing_button.setText(self._text("pairing"))
                 self.pairing_status.setText(self._text("pairing_none"))
                 self.workspace_button.setText(self._text("open_workspace"))
                 self.hide_button.setText(self._text("hide"))
                 if not self.current_state:
                     self.headline.setText(self._text("ready"))
-                    self.detail.setText(self._text("start_hint"))
+                    self.detail.setText("")
                     self.project_status.setText(self._text("project_none"))
                     self.runtime_status.setText(self._text("runtime_none"))
                     self.trust_status.setText(self._text("claim_checking"))
@@ -1139,7 +1273,6 @@ class PetWindow:
                 self.request_input.setEnabled(not self._busy)
                 self.request_button.setEnabled(not self._busy)
                 self.assistant_input.setEnabled(not self._busy)
-                self.assistant_button.setEnabled(not self._busy)
                 self.candidate_select.setEnabled(not self._busy)
                 self.approve_button.setEnabled(
                     not self._busy and view.show_approval and self.candidate_select.count() > 0
@@ -1163,6 +1296,9 @@ class PetWindow:
                     self._busy = True
                     self.detail.setText(busy_message)
                     self.quick_status.setText(busy_message)
+                    if self.command_surface.isVisible():
+                        self.quick_reply.setText(busy_message)
+                        self.quick_reply.show()
                     self._update_controls()
 
                 def success(payload):
@@ -1225,12 +1361,12 @@ class PetWindow:
                 headlines = _DESKTOP_TEXT[self.language]["headline"]
                 self.headline.setText(headlines.get(view.state, view.headline))
                 detail = view.detail
-                if view.state == "idle" and detail == "Ready for a development request":
-                    detail = self._text("start_hint")
+                if view.state == "idle" and not self._conversation_active:
+                    detail = ""
                 self.quick_status.setText(headlines.get(view.state, view.headline))
                 self._reply_hide_timer.stop()
                 if self.command_surface.isVisible():
-                    self.detail.show()
+                    self.detail.hide()
                     self.quick_reply.hide()
                 else:
                     self.quick_reply.hide()
@@ -1258,7 +1394,10 @@ class PetWindow:
                     if isinstance(project_state, dict)
                     else payload
                 )
-                self._render_desktop_status(status_payload)
+                if not self.current_state and not self.command_surface.isVisible():
+                    self._render(status_payload)
+                else:
+                    self._render_desktop_status(status_payload)
 
             def _render_desktop_status(self, payload: dict[str, object]) -> None:
                 project_id = payload.get("projectId")
@@ -1325,6 +1464,7 @@ class PetWindow:
                 text = self.assistant_input.text().strip()
                 if not text:
                     return
+                self._conversation_active = True
 
                 def on_success(payload):
                     self.assistant_input.clear()

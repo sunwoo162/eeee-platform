@@ -11,13 +11,14 @@ from pydantic import BaseModel, Field
 from app.api.service import ApiFlowService
 from app.assistant.models import CapabilitySelection
 from app.assistant.service import AssistantRouteResult, AssistantService
+from app.assistant.background import JobTransitionError
 from app.coordinator.service import Coordinator
 from app.domain.errors import ApprovalError
 from app.design.references import DesignService, ReferencePack
 from app.design.visual_verify import VisualReport
 from app.integrations.contracts import ProjectBriefV1, ProjectOutcomeReportV1
 from app.integrations.contracts import GithubReviewResultV1
-from app.memory.models import MemoryRecord
+from app.memory.models import MemoryRecord, MemoryStatus
 from app.mobile.bridge import MobileBridge, MobileBridgeError
 from app.plugins.host import PluginHost
 from app.plugins.models import PluginHealth, PluginManifest
@@ -126,6 +127,18 @@ class MemoryRevokePayload(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class MemoryDeletePayload(BaseModel):
+    actor: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class MemoryDeleteResponse(BaseModel):
+    deleted: bool
+    memory_id: str = Field(alias="memoryId")
+
+    model_config = {"populate_by_name": True}
+
+
 class UserPreferencePayload(BaseModel):
     key: str = Field(min_length=1, max_length=120)
     value: str = Field(min_length=1, max_length=2_000)
@@ -157,6 +170,9 @@ class DesignVerifyResponse(BaseModel):
 class AssistantRequestPayload(BaseModel):
     text: str = Field(min_length=1)
     workspace: str | None = None
+    conversation_id: str = Field(default="desktop-default", alias="conversationId", min_length=1, max_length=160)
+
+    model_config = {"populate_by_name": True}
 
 
 class AssistantRouteResponse(AssistantRouteResult):
@@ -340,7 +356,11 @@ def build_assistant_router(
     def route_assistant_request(payload: AssistantRequestPayload) -> AssistantRouteResponse:
         try:
             return AssistantRouteResponse.model_validate(
-                service.route(payload.text, payload.workspace).model_dump()
+                service.route(
+                    payload.text,
+                    payload.workspace,
+                    conversation_id=payload.conversation_id,
+                ).model_dump()
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -351,7 +371,44 @@ def build_assistant_router(
 
     @router.get("/assistant/jobs/{job_id}")
     def get_assistant_job(job_id: str) -> dict[str, object]:
-        return service.get_background_job(job_id)
+        try:
+            return service.get_background_job(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/assistant/jobs")
+    def list_assistant_jobs(
+        status: str | None = Query(default=None, max_length=40),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> list[dict[str, object]]:
+        try:
+            return service.list_background_jobs(status=status, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _job_action(action: Callable[[str], dict[str, object]], job_id: str) -> dict[str, object]:
+        try:
+            return action(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobTransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/assistant/jobs/{job_id}/pause")
+    def pause_assistant_job(job_id: str) -> dict[str, object]:
+        return _job_action(service.pause_background_job, job_id)
+
+    @router.post("/assistant/jobs/{job_id}/resume")
+    def resume_assistant_job(job_id: str) -> dict[str, object]:
+        return _job_action(service.resume_background_job, job_id)
+
+    @router.post("/assistant/jobs/{job_id}/cancel")
+    def cancel_assistant_job(job_id: str) -> dict[str, object]:
+        return _job_action(service.cancel_background_job, job_id)
+
+    @router.post("/assistant/jobs/{job_id}/retry")
+    def retry_assistant_job(job_id: str) -> dict[str, object]:
+        return _job_action(service.retry_background_job, job_id)
 
     @router.post(
         "/projects/{project_id}/documents/sync",
@@ -466,6 +523,8 @@ def build_desktop_router(
     store: SQLiteStore,
     bridge: MobileBridge,
     trust_gate: TrustGate,
+    assistant_service: AssistantService | None = None,
+    plugin_host: PluginHost | None = None,
 ) -> APIRouter:
     """Expose the local Desktop control-plane without leaking bridge secrets."""
 
@@ -489,6 +548,32 @@ def build_desktop_router(
             "events": events[-20:],
             "latestEventCursor": int(events[-1]["cursor"]) if events else 0,
         }
+        active_memories = coordinator.memory.list_records(status=MemoryStatus.ACTIVE, limit=500)
+        candidate_memories = coordinator.memory.list_records(status=MemoryStatus.CANDIDATE, limit=500)
+        jobs = assistant_service.list_background_jobs(limit=20) if assistant_service is not None else []
+        plugins = []
+        if plugin_host is not None:
+            plugins = [
+                {
+                    "pluginId": registration.plugin_id,
+                    "version": registration.manifest_version,
+                    "status": registration.status,
+                    "updatedAt": registration.updated_at,
+                }
+                for registration in plugin_host.list()
+            ]
+        snapshot["controlCenter"] = {
+            "sections": [
+                "conversation", "activeWork", "projects", "plugins", "memory", "settings"
+            ],
+            "jobs": jobs,
+            "memory": {
+                "activeCount": len(active_memories),
+                "candidateCount": len(candidate_memories),
+            },
+            "plugins": plugins,
+            "verification": {"claimLatch": trust_gate.health_payload()},
+        }
         if project_id is not None:
             snapshot["projectProfile"] = store.get_project_profile(project_id).model_dump(
                 mode="json", by_alias=True
@@ -496,6 +581,15 @@ def build_desktop_router(
             snapshot["projectState"] = coordinator.get_state(project_id).model_dump(
                 mode="json"
             )
+            project_state = snapshot["projectState"]
+            snapshot["state"] = project_state["state"]
+            snapshot["message"] = project_state["message"]
+            snapshot["controlCenter"]["verification"]["releaseGate"] = {
+                "status": "not_evaluated",
+                "reason": "Release evidence is recorded in the project revision manifest",
+                "projectId": project_id,
+                "projectRevision": snapshot["projectProfile"]["projectRevision"],
+            }
         return snapshot
 
     @router.get("/events")
@@ -638,6 +732,8 @@ def build_api_router(
     @router.get("/memory", response_model=list[MemoryRecord])
     def search_memory(
         query: str = Query(default="", max_length=500),
+        status: MemoryStatus | None = Query(default=None),
+        source_project_id: str | None = Query(default=None, alias="sourceProjectId", max_length=160),
         project_type: str | None = Query(default=None, alias="projectType", max_length=120),
         technology: str | None = Query(default=None, max_length=120),
         feature: str | None = Query(default=None, max_length=120),
@@ -656,7 +752,22 @@ def build_api_router(
             }.items()
             if value is not None
         }
+        if status is not None or source_project_id is not None:
+            return flow.coordinator.memory.list_records(
+                status=status,
+                source_project_id=source_project_id,
+                query=query,
+                scope=scope or None,
+                limit=limit,
+            )
         return flow.coordinator.memory.search(query, scope=scope or None, limit=limit)
+
+    @router.get("/memory/{memory_id}", response_model=MemoryRecord)
+    def get_memory(memory_id: str) -> MemoryRecord:
+        try:
+            return flow.coordinator.memory.get(memory_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.post("/memory/user-preference", response_model=MemoryRecord)
     def save_user_preference(payload: UserPreferencePayload) -> MemoryRecord:
@@ -679,7 +790,26 @@ def build_api_router(
 
     @router.post("/memory/{memory_id}/revoke", response_model=MemoryRecord)
     def revoke_memory(memory_id: str, payload: MemoryRevokePayload) -> MemoryRecord:
-        return flow.coordinator.memory.revoke(memory_id, reason=payload.reason)
+        try:
+            return flow.coordinator.memory.revoke(memory_id, reason=payload.reason)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/memory/{memory_id}/delete", response_model=MemoryDeleteResponse)
+    def delete_memory(memory_id: str, payload: MemoryDeletePayload) -> MemoryDeleteResponse:
+        try:
+            deleted = flow.coordinator.memory.delete(
+                memory_id,
+                actor=payload.actor,
+                reason=payload.reason,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return MemoryDeleteResponse(deleted=True, memoryId=deleted.id)
 
     @router.post("/requests/{request_id}/research", response_model=ResearchResponse)
     def research_api_request(request_id: str) -> ResearchResponse:

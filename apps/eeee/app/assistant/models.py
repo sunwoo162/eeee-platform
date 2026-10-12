@@ -46,6 +46,8 @@ class AssistantContext(BaseModel):
     qa_baseline_ids: list[str] = Field(default_factory=list)
     user_preferences: dict[str, Any] = Field(default_factory=dict)
     memory_context: str = "{}"
+    conversation_id: str = "desktop-default"
+    conversation_turns: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ResponseVerification(BaseModel):

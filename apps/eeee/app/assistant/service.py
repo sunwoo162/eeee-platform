@@ -48,6 +48,9 @@ class AssistantRouteResult(BaseModel):
     plugin_id: str | None = None
     plugin_execution_id: str | None = None
     job_id: str | None = Field(default=None, alias="jobId")
+    # Expose the selected lane so the Desktop can show/debug the real route
+    # instead of making the user guess whether a turn reached Web/GPT.
+    provider: str | None = None
 
 
 class AssistantService:
@@ -83,10 +86,11 @@ class AssistantService:
 
     def route(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
+        conversation_id: str = "desktop-default",
     ) -> AssistantRouteResult:
         request = AssistantRequest(
             raw_text=text,
-            context={"workspace": workspace},
+            context={"workspace": workspace, "conversationId": conversation_id},
             requested_capability=requested_capability,
         )
         if self.background_supervisor is not None:
@@ -97,14 +101,16 @@ class AssistantService:
                     request_id,
                     lambda: self._route_sync(
                         text, workspace, requested_capability=requested_capability,
+                        conversation_id=conversation_id,
                     ).model_dump(mode="json"),
                     input_data={
                         "text": text,
                         "workspace": workspace,
                         "requestedCapability": requested_capability,
+                        "conversationId": conversation_id,
                     },
                 )
-                return AssistantRouteResult(
+                result = AssistantRouteResult(
                     status="accepted",
                     selection=selection,
                     message="프로젝트 작업을 백그라운드에서 시작했어. 진행 상황에서 확인할 수 있어.",
@@ -116,10 +122,18 @@ class AssistantService:
                         subject_id=job_id,
                     ),
                 )
-        return self._route_sync(text, workspace, requested_capability=requested_capability)
+                self._remember_turn(conversation_id, text, result.message)
+                return result
+        result = self._route_sync(
+            text, workspace, requested_capability=requested_capability,
+            conversation_id=conversation_id,
+        )
+        self._remember_turn(conversation_id, text, result.message)
+        return result
 
     def _route_sync(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
+        conversation_id: str = "desktop-default",
     ) -> AssistantRouteResult:
         implicit_preference = extract_implicit_preference(text)
         if implicit_preference is not None:
@@ -129,7 +143,9 @@ class AssistantService:
                 scope={"source": "automatic_learning"},
             )
         envelope = self.kernel.route(
-            AssistantRequest(raw_text=text, context={"workspace": workspace},
+            AssistantRequest(
+                raw_text=text,
+                context={"workspace": workspace, "conversationId": conversation_id},
                              requested_capability=requested_capability),
             AssistantContext(),
         )
@@ -154,6 +170,17 @@ class AssistantService:
         message = output.get("message", "요청을 완료하지 못했어.")
         if completed_locally:
             message = "로컬 프로젝트가 생성되고 QA/ClaimLatch 검증을 통과했어. 외부 플러그인은 선택적으로 연결할 수 있어."
+        provider = None
+        events = output.get("events")
+        if isinstance(events, list):
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                event_type = event.get("type")
+                if event_type == "provider.selected" and isinstance(event.get("provider"), str):
+                    provider = event["provider"]
+                elif event_type == "local.conversation" and isinstance(event.get("provider"), str):
+                    provider = event["provider"]
         return AssistantRouteResult(
             status=status,
             selection=CapabilitySelection.model_validate(output["selection"]),
@@ -176,6 +203,7 @@ class AssistantService:
             suggested_action=output.get("pluginRequired", {}).get("suggestedAction") if isinstance(output.get("pluginRequired"), dict) else None,
             plugin_id=output.get("pluginId"),
             plugin_execution_id=output.get("pluginExecutionId"),
+            provider=provider,
             response_verification=ResponseVerification.model_validate(
                 output.get("responseVerification", {
                     "decision": "WARN",
@@ -186,6 +214,13 @@ class AssistantService:
             ),
         )
 
+    def _remember_turn(self, conversation_id: str, user_text: str, assistant_text: str) -> None:
+        memory_store = getattr(self.coordinator, "memory", None)
+        if memory_store is None:
+            return
+        memory_store.append_conversation_turn(conversation_id, "user", user_text)
+        memory_store.append_conversation_turn(conversation_id, "assistant", assistant_text)
+
     def get_project_profile(self, project_id: str) -> ProjectProfile:
         return self.store.get_project_profile(project_id)
 
@@ -194,23 +229,50 @@ class AssistantService:
             raise KeyError(f"Assistant job not found: {job_id}")
         return self.background_supervisor.get(job_id)
 
+    def list_background_jobs(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
+        if self.background_supervisor is None:
+            return []
+        return self.background_supervisor.list_jobs(status=status, limit=limit)
+
+    def pause_background_job(self, job_id: str) -> dict[str, object]:
+        if self.background_supervisor is None:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return self.background_supervisor.pause(job_id)
+
+    def cancel_background_job(self, job_id: str) -> dict[str, object]:
+        if self.background_supervisor is None:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return self.background_supervisor.cancel(job_id)
+
+    def resume_background_job(self, job_id: str) -> dict[str, object]:
+        if self.background_supervisor is None:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return self.background_supervisor.resume(job_id, self._background_operation_factory)
+
+    def retry_background_job(self, job_id: str) -> dict[str, object]:
+        if self.background_supervisor is None:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return self.background_supervisor.retry(job_id, self._background_operation_factory)
+
     def resume_background_jobs(self) -> list[str]:
         if self.background_supervisor is None:
             return []
 
-        def operation_factory(job: dict[str, object]):
-            input_data = job.get("input", {})
-            input_data = input_data if isinstance(input_data, dict) else {}
-            text = input_data.get("text")
-            workspace = input_data.get("workspace")
-            requested_capability = input_data.get("requestedCapability")
-            if not isinstance(text, str) or not text.strip():
-                return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
-            return lambda: self._route_sync(
-                text,
-                workspace if isinstance(workspace, str) else None,
-                requested_capability=requested_capability if isinstance(requested_capability, str) else None,
-            ).model_dump(mode="json")
+        return self.background_supervisor.resume_pending(self._background_operation_factory)
 
-        return self.background_supervisor.resume_pending(operation_factory)
+    def _background_operation_factory(self, job: dict[str, object]):
+        input_data = job.get("input", {})
+        input_data = input_data if isinstance(input_data, dict) else {}
+        text = input_data.get("text")
+        workspace = input_data.get("workspace")
+        requested_capability = input_data.get("requestedCapability")
+        conversation_id = input_data.get("conversationId")
+        if not isinstance(text, str) or not text.strip():
+            return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
+        return lambda: self._route_sync(
+            text,
+            workspace if isinstance(workspace, str) else None,
+            requested_capability=requested_capability if isinstance(requested_capability, str) else None,
+            conversation_id=conversation_id if isinstance(conversation_id, str) else "desktop-default",
+        ).model_dump(mode="json")
 

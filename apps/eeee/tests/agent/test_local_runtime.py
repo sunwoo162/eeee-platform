@@ -98,10 +98,60 @@ def test_ollama_backend_adapts_conversational_finish_response(monkeypatch, tmp_p
     assert result.actions[0].kind == "finish"
 
 
+def test_ollama_backend_plain_conversation_does_not_request_json(monkeypatch, tmp_path):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "점심은 가볍게 국수나 샌드위치가 좋겠어요."}}
+
+    calls = []
+    monkeypatch.setattr(
+        "app.agent.local_runtime.httpx.post",
+        lambda *args, **kwargs: (calls.append((args, kwargs)) or Response()),
+    )
+
+    result = OllamaBackend(model="qwen2.5:1.5b").complete_text(
+        "오늘 점심 뭐 먹을까?", workspace=tmp_path, context=[]
+    )
+
+    payload = calls[0][1]["json"]
+    assert result == "점심은 가볍게 국수나 샌드위치가 좋겠어요."
+    assert payload["stream"] is False
+    assert "format" not in payload
+    assert "자연스러운 한국어" in payload["messages"][0]["content"]
+    assert "Observations:" not in payload["messages"][1]["content"]
+
+
+def test_ollama_backend_plain_conversation_keeps_model_warm_and_bounds_output(monkeypatch, tmp_path):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "응, 바로 도와줄게."}}
+
+    calls = []
+    monkeypatch.setattr(
+        "app.agent.local_runtime.httpx.post",
+        lambda *args, **kwargs: (calls.append((args, kwargs)) or Response()),
+    )
+
+    OllamaBackend(model="qwen2.5:1.5b").complete_text(
+        "안녕", workspace=tmp_path, context=[{"ignored": True}]
+    )
+
+    payload = calls[0][1]["json"]
+    assert payload["keep_alive"] == "10m"
+    assert payload["options"] == {"num_predict": 128, "temperature": 0.4}
+    assert payload["messages"][1]["content"] == "안녕"
+
+
 def test_local_conversation_lane_returns_text_without_executing_actions(tmp_path):
     class ConversationBackend:
         def complete(self, prompt, *, workspace, context):
-            assert "ordinary conversation only" in prompt
+            assert "일반 대화만 처리해" in prompt
             return LocalModelResponse(
                 summary="도와줄 수 있는 일을 함께 정리해볼게.",
                 actions=[LocalAction(kind="run", argv=["not-used"])],
@@ -116,3 +166,37 @@ def test_local_conversation_lane_returns_text_without_executing_actions(tmp_path
     assert result.summary == "도와줄 수 있는 일을 함께 정리해볼게."
     assert result.changed_files == []
     assert result.test_commands == []
+
+
+def test_local_conversation_lane_uses_plain_text_backend_when_available(tmp_path):
+    class PlainTextBackend:
+        def __init__(self):
+            self.prompts = []
+
+        def complete_text(self, prompt, *, workspace, context):
+            self.prompts.append(prompt)
+            return "그럴 수 있어. 수면과 식사 상태부터 같이 확인해보자."
+
+    backend = PlainTextBackend()
+    result = LocalConversationRuntime(backend=backend).run(
+        AgentRequest("내가 왜 피곤한지 설명해줘.", tmp_path, [], "conversation-plain")
+    )
+
+    assert result.status == "completed"
+    assert result.summary == "그럴 수 있어. 수면과 식사 상태부터 같이 확인해보자."
+    assert "Return exactly one JSON object" not in backend.prompts[0]
+    assert "일반 대화만 처리해" in backend.prompts[0]
+
+
+def test_local_conversation_lane_reports_provider_truthfully(tmp_path):
+    class FailingBackend:
+        def complete_text(self, *args, **kwargs):
+            raise AssertionError("provider identity should not call the model")
+
+    result = LocalConversationRuntime(backend=FailingBackend()).run(
+        AgentRequest("지금 GPT 웹을 쓰고 있어?", tmp_path, [], "conversation-provider")
+    )
+
+    assert result.status == "completed"
+    assert "GPT Web이 아니라" in result.summary
+    assert result.events == [{"type": "local.conversation", "provider": "ollama"}]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -92,6 +93,48 @@ class OllamaBackend:
                     "next_prompt": None,
                 }
         return LocalModelResponse.model_validate(decoded)
+
+    def complete_text(self, prompt: str, *, workspace: Path, context: list[dict[str, object]]) -> str:
+        """Run a plain conversational turn without the tool-loop JSON contract."""
+        response = httpx.post(
+            self.base_url,
+            json={
+                "model": self.model,
+                "stream": False,
+                # Keep the small conversation model resident between turns.
+                # Without this Ollama may unload it after its idle window,
+                # making the next ordinary greeting look like a Web/GPT delay.
+                "keep_alive": "10m",
+                "options": {
+                    "num_predict": 128,
+                    "temperature": 0.4,
+                },
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "너는 EEEE라는 한국어 개인 비서야. "
+                            "사용자에게 바로 답하고 자연스러운 한국어 1~3문장만 써. "
+                            "JSON, 영어, 내부 라우팅 설명, 정해진 안내문은 쓰지 마. "
+                            "현재 이 대화는 로컬 Ollama AI가 처리하고 있어. "
+                            "사용자가 어떤 AI를 쓰는지 물으면 GPT Web이 아니라 로컬 AI라고 사실대로 답해."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        message = payload.get("message", {}) if isinstance(payload, dict) else {}
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("local conversation response did not contain message.content")
+        cleaned = content.strip()
+        if "</think>" in cleaned:
+            cleaned = cleaned.rsplit("</think>", 1)[1].strip()
+        return cleaned or content.strip()
 
 
 class LocalAgentRuntime:
@@ -241,24 +284,45 @@ class LocalConversationRuntime:
         self.backend = backend
 
     def run(self, request: AgentRequest) -> AgentResult:
+        # Provider identity must not be delegated to a small local model: it
+        # can otherwise confidently invent that a Web/GPT session answered.
+        # Answer this narrow diagnostic turn deterministically while keeping
+        # all other ordinary conversation on the local model.
+        if re.search(r"\b(?:gpt|chatgpt)\b|지피티|챗gpt", request.prompt, re.IGNORECASE):
+            return AgentResult(
+                status="completed",
+                summary=(
+                    "지금 이 일반 대화는 GPT Web이 아니라 내 컴퓨터의 로컬 AI로 처리하고 있어. "
+                    "프로젝트 개발처럼 전문 작업이 필요할 때만 별도 작업 에이전트 경로를 사용할게."
+                ),
+                events=[{"type": "local.conversation", "provider": "ollama"}],
+                changed_files=[], test_commands=[], error=None,
+            )
         prompt = (
-            "You are EEEE, a natural Korean desktop assistant. This is ordinary conversation only. "
-            "Do not read or change files, run commands, plan a project, or call tools. "
-            "Answer the user's message directly and helpfully. If the user asks what you can do, "
-            "briefly explain EEEE's capabilities. Do not refuse ordinary safe questions. "
-            "Return exactly one JSON object with no extra keys: "
-            '{"summary":"your natural Korean reply","actions":[{"kind":"finish"}],"done":true,"next_prompt":null}. '
-            f"User message: {request.prompt}"
+            "일반 대화만 처리해. 파일을 읽거나 바꾸지 말고, 명령을 실행하거나 프로젝트를 계획하거나 도구를 호출하지 마. "
+            "아래 사용자 요청에 직접 답해. 최종 답변은 자연스러운 한국어 1~3문장으로만 작성하고, "
+            "영어·JSON·내부 라우팅 설명·'추가 정보가 필요합니다' 같은 정해진 안내문은 쓰지 마. "
+            "사용자가 무엇을 할 수 있냐고 물으면 EEEE의 능력을 짧게 설명하고, 인사에는 자연스럽게 답해. "
+            f"사용자 요청: {request.prompt}"
         )
         try:
-            response = self.backend.complete(prompt, workspace=request.workspace, context=[])
+            complete_text = getattr(self.backend, "complete_text", None)
+            if callable(complete_text):
+                summary = complete_text(prompt, workspace=request.workspace, context=[])
+                if not isinstance(summary, str) or not summary.strip():
+                    raise ValueError("local conversation response was empty")
+            else:
+                # Keep the small scripted backend contract used by tests and
+                # alternate local adapters while Ollama uses plain text above.
+                response = self.backend.complete(prompt, workspace=request.workspace, context=[])
+                summary = response.summary
         except Exception as exc:
             return AgentResult(
                 status="unavailable", summary="Local conversation provider failed",
                 events=[], changed_files=[], test_commands=[], error=str(exc),
             )
         return AgentResult(
-            status="completed", summary=response.summary,
+            status="completed", summary=summary.strip(),
             events=[{"type": "local.conversation", "provider": "ollama"}],
             changed_files=[], test_commands=[], error=None,
         )

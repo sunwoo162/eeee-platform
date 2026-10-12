@@ -158,7 +158,22 @@ class WebProjectRunner:
         qa_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return PreparedWebRun(
             qa_report=report, qa_report_path=str(qa_path),
-            artifacts=[{"id": "web-source", "path": "apps", "evidence_ids": evidence_ids}, {"id": "web-qa", "path": "QA_REPORT.json", "evidence_ids": evidence_ids}],
+            artifacts=[
+                {
+                    "id": "web-source",
+                    "path": "apps",
+                    "evidence_ids": evidence_ids,
+                    "evidence_project_id": project_id,
+                    "evidence_project_revision": project_revision,
+                },
+                {
+                    "id": "web-qa",
+                    "path": "QA_REPORT.json",
+                    "evidence_ids": evidence_ids,
+                    "evidence_project_id": project_id,
+                    "evidence_project_revision": project_revision,
+                },
+            ],
         )
 
     def run(self, *, project_id: str, project_revision: str, workspace: str | Path, claim_latch: Mapping[str, Any]) -> WebRunResult:

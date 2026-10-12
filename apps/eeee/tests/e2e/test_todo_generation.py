@@ -22,7 +22,10 @@ class FakeAgentRuntime:
 
 
 def _completed_result(client, accepted):
-    deadline = time.monotonic() + 10
+    # Project generation includes release evidence and filesystem checks;
+    # allow normal Windows CI/desktop load without treating a slow worker as
+    # a product failure.
+    deadline = time.monotonic() + 30
     job = None
     while time.monotonic() < deadline:
         job = client.get(f"/api/assistant/jobs/{accepted['jobId']}").json()

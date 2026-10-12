@@ -10,6 +10,24 @@
 
 **Spec:** C:/Users/user/Documents/EEEE/docs/architecture/eeee-iseol-claimlatch-organization.md
 
+## Current implementation status (2026-10-12)
+
+This document is the historical integration plan and its task checkboxes are retained as
+traceability. The local core path described by Tasks 3–7 is now implemented in the EEEE app:
+
+- the ClaimLatch client/process/audit boundary is in `apps/eeee/app/integrations/`;
+- deterministic trust and release gates are in `apps/eeee/app/trust/` and
+  `apps/eeee/app/release/`;
+- persistent memory lifecycle and safe inspection controls are available through the local API;
+- durable assistant jobs and the EEEE desktop/web control-center snapshot are available;
+- the core acceptance command is `scripts/verify-core-product.ps1`.
+
+The remaining unchecked items are not silently complete. They cover optional hosted providers,
+the full TypeScript ISEOL Agent organization runtime, external plugin connectors, and remote
+publication. Those items require their own implementation and verification before being marked
+complete. The local core is considered release-ready only when the acceptance command and the
+full relevant test suites pass on the current revision.
+
 ## Global Constraints
 
 - Preserve the three existing folders; never delete, reset, or overwrite them.

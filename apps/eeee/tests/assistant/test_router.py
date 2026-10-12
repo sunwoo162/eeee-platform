@@ -45,6 +45,13 @@ def test_unmatched_conversation_uses_eeee_direct_capability() -> None:
     assert result.reasons
 
 
+def test_natural_language_question_with_request_suffix_stays_conversation() -> None:
+    result = router().select(AssistantRequest(raw_text="내가 왜 피곤한지 설명해줘."))
+
+    assert result.status == "selected"
+    assert result.capability_id == "general-conversation"
+
+
 def test_capability_question_about_development_stays_with_eeee() -> None:
     result = router().select(AssistantRequest(raw_text="너 개발 어느 정도 할 수 있어?"))
 

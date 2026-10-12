@@ -852,39 +852,45 @@ ClaimLatch 저장소에는 다음 기능이 있다.
 - Signed Verification Receipt와 Receipt Store
 - 독립 벤치마크 및 정책 검증
 
-### 10.4 현재 누락된 직접 통합
+### 10.4 현재 직접 통합 상태
 
-현재 `EEEE` 저장소에는 ClaimLatch를 직접 import하거나 호출하는 통합 계층이 아직 없다. 따라서 현재 상태를 정확히 말하면:
+현재 `EEEE`에는 로컬 ClaimLatch 통합 계층이 구현되어 있다. 핵심 경계는
+`apps/eeee/app/integrations/claimlatch_client.py`의 버전 고정 클라이언트,
+`apps/eeee/app/integrations/claimlatch_process.py`의 loopback 프로세스 어댑터,
+`apps/eeee/app/integrations/claimlatch_audit.py`의 SQLite 감사 기록이다.
+`apps/eeee/app/trust/pipeline.py`와 `apps/eeee/app/trust/gate.py`는 자연어 주장·구조화된
+행동·릴리스 보고서를 결정론적 증거와 함께 fail-closed로 판정한다. 따라서 현재 상태는:
 
 ```text
 현재 EEEE
   ├─ 자체 결정론적 Harness 검증: 있음
-  ├─ 자체 QA·Evidence 구조: 기반 있음
+  ├─ 자체 QA·Evidence 구조: 있음
   ├─ SQLite 영속 상태: 있음
-  └─ ClaimLatch 직접 연동: 아직 없음
+  ├─ ClaimLatch 로컬 Adapter·프로세스 경계: 있음
+  ├─ ClaimLatch 감사 Receipt·revision 연결: 있음
+  └─ 릴리스·메모리 승격 fail-closed Gate: 있음
 ```
 
-이는 설계에서 ClaimLatch를 누락했다는 뜻이 아니라, 세 저장소를 실제로 합치는 구현 단계가 아직 남아 있다는 뜻이다. 통합 시에는 ISEOL과 EEEE 사이에 다음 계층을 추가해야 한다.
+현재 구현의 범위와 한계도 분리해 기록한다. 기본 검증은 외부 로그인이나 hosted 서버 없이
+로컬 결정론적 verifier로 수행한다. 외부 LLM 기반 ClaimLatch provider를 사용하는 경우에는
+별도 환경 설정이 필요하며, provider 오류·증거 누락·revision 불일치는 모두 PASS가 아니라
+WARN/BLOCK으로 남는다. ISEOL의 전체 Agent 조직 런타임과 선택적 외부 플러그인은 이 저장소의
+core release gate 범위를 넘어선다.
 
 ```text
-app/integrations/claimlatch/
-├─ client 또는 local process adapter
-├─ text report verifier
-├─ agent handoff verifier
-├─ final report verifier
-├─ memory candidate verifier
-├─ structured action policy adapter
-├─ receipt persistence adapter
-└─ fail-closed release policy
+apps/eeee/app/integrations/
+├─ claimlatch_client.py       # 버전·payload·revision 계약
+├─ claimlatch_process.py      # 제한된 loopback/process 경계
+└─ claimlatch_audit.py        # report/receipt/payload hash 감사
+apps/eeee/app/trust/
+├─ pipeline.py                # 주장·행동·릴리스 검증 흐름
+└─ gate.py                    # PASS/WARN/BLOCK 정책
+apps/eeee/app/release/manifest.py  # artifact·UTF-8·evidence 검증
 ```
 
-Python 기반 EEEE와 TypeScript 기반 ClaimLatch를 연결하는 방법은 다음 중 하나로 정한다.
-
-1. ClaimLatch를 로컬 Node 프로세스로 실행하고 EEEE가 제한된 로컬 API를 호출한다.
-2. EEEE가 ClaimLatch CLI를 제한된 입력으로 호출하고 JSON 보고서를 받는다.
-3. 별도 로컬 어댑터 프로세스를 두고 Python·TypeScript 사이의 계약을 고정한다.
-
-추천 방향은 EEEE가 ClaimLatch의 내부 구현을 복제하지 않고, 버전이 고정된 로컬 Adapter와 JSON 계약을 통해 호출하는 방식이다. 결과와 Receipt는 EEEE SQLite의 프로젝트 Evidence와 연결한다.
+Python 기반 EEEE와 TypeScript 기반 ClaimLatch 사이의 외부 호출은 버전 고정 JSON 계약과
+제한된 loopback/process 경계로만 확장한다. EEEE는 ClaimLatch 내부 구현을 복제하지 않고,
+결과와 Receipt를 프로젝트 Evidence 및 revision에 연결한다.
 
 ### 10.5 통합 후 필수 Gate
 

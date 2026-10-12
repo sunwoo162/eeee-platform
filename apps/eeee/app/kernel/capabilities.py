@@ -103,6 +103,8 @@ class GeneralConversationCapability:
                 "qaBaselineIds": context.qa_baseline_ids,
                 "userPreferences": context.user_preferences,
                 "memoryContext": context.memory_context,
+                "conversationId": context.conversation_id,
+                "conversationHistory": context.conversation_turns,
                 "chatgptWebEnabled": self.chatgpt_web_enabled,
             },
             side_effect_level=self.descriptor.side_effect_level,
@@ -130,6 +132,7 @@ class GeneralConversationCapability:
                         'userPreferences': plan.inputs.get('userPreferences', {}),
                     }, ensure_ascii=False, sort_keys=True)}\n"
                     f"관련 기억 내용: {plan.inputs.get('memoryContext', '{}')}"
+                    f"\n최근 대화: {json.dumps(plan.inputs.get('conversationHistory', []), ensure_ascii=False)}"
                 ),
                 workspace=workspace,
                 allowed_actions=["read"], run_id=envelope_context.envelope.execution_id,

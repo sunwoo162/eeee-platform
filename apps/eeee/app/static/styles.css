@@ -10,6 +10,10 @@ body { margin: 0; background: radial-gradient(circle at top right, #223b3e, #101
 .shell { width: min(1080px, calc(100% - 2rem)); margin: 0 auto; padding: 3rem 0 5rem; }
 .hero { margin-bottom: 2rem; max-width: 700px; }
 .assistant-surface { border-color: #2d7f72; background: linear-gradient(145deg, rgba(26, 54, 60, .96), rgba(23, 30, 37, .94)); }
+.eeee-control-center { border-color: #4957a8; background: linear-gradient(145deg, rgba(35, 39, 75, .96), rgba(23, 30, 37, .94)); }
+.eeee-control-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin-top: 1rem; }
+.eeee-control-card { display: grid; gap: .35rem; min-height: 4.5rem; padding: .9rem; border: 1px solid #46506c; border-radius: 12px; background: rgba(12, 15, 23, .36); }
+.eeee-control-card span { color: #c5cbe4; overflow-wrap: anywhere; }
 .capability-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: .7rem; margin: 1rem 0; }
 .capability-card { display: grid; gap: .35rem; text-align: left; border: 1px solid #40505b; border-radius: 14px; background: #172129; color: #eef3f7; padding: 1rem; }
 .capability-card span { color: #aab7c0; font-size: .84rem; font-weight: 400; }
@@ -85,4 +89,4 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .run-history-item { background: #26343c; color: #eef3f7; }
 .run-history-item[aria-pressed="true"] { background: #71e6c2; color: #08100f; }
 .event-list, .file-list { padding-left: 1.2rem; color: #b9c4cc; }
-@media (max-width: 680px) { .hero-heading, .panel-heading, .run-columns, .snapshot-columns { display: block; } .language-picker { margin-top: 1rem; } .recent-run-filters { grid-template-columns: 1fr; } .panel-heading button { margin-bottom: 1rem; } .capability-cards { grid-template-columns: 1fr; } .project-request-row { display: grid; } .project-map-details dl { grid-template-columns: 1fr; } }
+@media (max-width: 680px) { .hero-heading, .panel-heading, .run-columns, .snapshot-columns { display: block; } .language-picker { margin-top: 1rem; } .recent-run-filters { grid-template-columns: 1fr; } .panel-heading button { margin-bottom: 1rem; } .capability-cards { grid-template-columns: 1fr; } .eeee-control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .project-request-row { display: grid; } .project-map-details dl { grid-template-columns: 1fr; } }

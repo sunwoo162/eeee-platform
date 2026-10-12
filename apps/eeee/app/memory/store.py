@@ -3,11 +3,18 @@ from __future__ import annotations
 import json
 import sqlite3
 import hashlib
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from app.memory.models import MemoryCandidate, MemoryRecord, MemoryStatus
+
+
+_CONVERSATION_SECRET_PATTERN = re.compile(
+    r"((?:api[_ -]?key|apikey|access[_ -]?token|refresh[_ -]?token|password|비밀번호|토큰|secret)\s*[:=]\s*)[^\s,]+",
+    re.IGNORECASE,
+)
 
 
 class MemoryConflictError(RuntimeError):
@@ -58,10 +65,55 @@ class MemoryStore:
                     detail_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS conversation_turns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_memory_status ON memory_records (status);
                 CREATE INDEX IF NOT EXISTS idx_memory_project ON memory_records (source_project_id);
+                CREATE INDEX IF NOT EXISTS idx_conversation_turns_lookup
+                    ON conversation_turns (conversation_id, id);
                 """
             )
+
+    def append_conversation_turn(self, conversation_id: str, role: str, content: str) -> None:
+        """Persist one local conversation turn for short-term continuity."""
+
+        conversation_id = conversation_id.strip()
+        content = _redact_conversation_content(content.strip())
+        if not conversation_id:
+            raise ValueError("conversation_id is required")
+        if role not in {"user", "assistant"}:
+            raise ValueError("conversation role must be user or assistant")
+        if not content:
+            raise ValueError("conversation content is required")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO conversation_turns "
+                "(conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                (conversation_id, role, content, _iso(_now())),
+            )
+
+    def recent_conversation_turns(
+        self, conversation_id: str, *, limit: int = 12
+    ) -> list[dict[str, str]]:
+        """Return the latest turns in chronological order for provider context."""
+
+        if limit <= 0:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT role, content FROM conversation_turns "
+                "WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+                (conversation_id, limit),
+            ).fetchall()
+        return [
+            {"role": str(row["role"]), "content": str(row["content"])}
+            for row in reversed(rows)
+        ]
 
     def save_candidate(self, candidate: MemoryCandidate) -> MemoryRecord:
         record = MemoryRecord(
@@ -158,6 +210,78 @@ class MemoryStore:
         if row is None:
             raise KeyError(f"Memory not found: {memory_id}")
         return _record_from_row(row)
+
+    def list_records(
+        self,
+        *,
+        status: MemoryStatus | str | None = None,
+        source_project_id: str | None = None,
+        query: str = "",
+        scope: dict[str, Any] | None = None,
+        limit: int = 100,
+    ) -> list[MemoryRecord]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        status_value = status.value if isinstance(status, MemoryStatus) else status
+        if status_value is not None:
+            try:
+                status_value = MemoryStatus(status_value).value
+            except ValueError as exc:
+                raise ValueError(f"Unknown memory status: {status_value}") from exc
+        clauses: list[str] = []
+        params: list[object] = []
+        if status_value is not None:
+            clauses.append("status = ?")
+            params.append(status_value)
+        if source_project_id is not None:
+            clauses.append("source_project_id = ?")
+            params.append(source_project_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as connection:
+            if query.strip() or scope:
+                rows = connection.execute(
+                    "SELECT * FROM memory_records" + where + " ORDER BY created_at DESC",
+                    params,
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM memory_records" + where + " ORDER BY created_at DESC LIMIT ?",
+                    (*params, limit),
+                ).fetchall()
+        records = [_record_from_row(row) for row in rows]
+        tokens = {token for token in query.lower().split() if token}
+        filtered: list[MemoryRecord] = []
+        for record in records:
+            if scope and any(record.scope.get(key) != value for key, value in scope.items()):
+                continue
+            haystack = (record.content + " " + " ".join(map(str, record.scope.values()))).lower()
+            if tokens and not any(token in haystack for token in tokens):
+                continue
+            filtered.append(record)
+        return filtered[:limit]
+
+    def delete(self, memory_id: str, *, actor: str, reason: str) -> MemoryRecord:
+        if not actor.strip():
+            raise MemoryPromotionError("Deletion requires an actor")
+        if not reason.strip():
+            raise MemoryPromotionError("Deletion requires a reason")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM memory_records WHERE id = ?", (memory_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Memory not found: {memory_id}")
+            record = _record_from_row(row)
+            if not record.user_editable:
+                raise MemoryPromotionError("This memory cannot be deleted by the user")
+            if record.status in {MemoryStatus.SUPERSEDED, MemoryStatus.REVOKED}:
+                raise MemoryPromotionError(
+                    f"Cannot delete {record.status.value} memory; preserve lifecycle history"
+                )
+            _append_event(connection, memory_id, "deleted", actor, {"reason": reason})
+            connection.execute("DELETE FROM memory_records WHERE id = ?", (memory_id,))
+        return record
 
     def promote(
         self,
@@ -360,3 +484,7 @@ def _iso(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _redact_conversation_content(content: str) -> str:
+    return _CONVERSATION_SECRET_PATTERN.sub(r"\1[민감정보]", content)

@@ -103,3 +103,29 @@ def test_desktop_control_plane_rejects_non_loopback_callers(tmp_path):
     response = client.get("/api/desktop/state")
 
     assert response.status_code == 403
+
+
+def test_desktop_state_exposes_the_eeee_control_center_snapshot(tmp_path):
+    application = create_app(
+        Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    )
+    with TestClient(application) as client:
+        application.state.assistant_supervisor.submit(
+            "assistant-control-center", lambda: {"ok": True}
+        )
+        preference = client.post(
+            "/api/memory/user-preference",
+            json={"key": "language", "value": "한국어"},
+        )
+        assert preference.status_code == 200
+        response = client.get("/api/desktop/state")
+
+    assert response.status_code == 200
+    control_center = response.json()["controlCenter"]
+    assert control_center["sections"] == [
+        "conversation", "activeWork", "projects", "plugins", "memory", "settings"
+    ]
+    assert any(item["requestId"] == "assistant-control-center" for item in control_center["jobs"])
+    assert control_center["memory"]["activeCount"] >= 1
+    assert control_center["plugins"] == []
+    assert control_center["verification"]["claimLatch"]["profileVersion"] == "claimlatch-v0.2.0"

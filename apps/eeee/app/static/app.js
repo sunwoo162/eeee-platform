@@ -270,6 +270,34 @@ function initializeLanguage() {
 
 initializeLanguage();
 
+async function refreshEeeeControlCenter() {
+  const status = $("#eeee-control-status");
+  if (!status) return;
+  try {
+    const snapshot = await requestJson("/api/desktop/state");
+    const control = snapshot.controlCenter || {};
+    const jobs = Array.isArray(control.jobs) ? control.jobs : [];
+    const memory = control.memory || {};
+    const plugins = Array.isArray(control.plugins) ? control.plugins : [];
+    const activeJobs = jobs.filter((job) => ["queued", "running", "paused"].includes(job.status)).length;
+    const connectedPlugins = plugins.filter((plugin) => plugin.status === "connected").length;
+    $("#eeee-active-work").textContent = `${activeJobs}개 작업`;
+    $("#eeee-memory-summary").textContent = `활성 ${memory.activeCount || 0}개 · 검토 대기 ${memory.candidateCount || 0}개`;
+    $("#eeee-plugin-summary").textContent = `${connectedPlugins}/${plugins.length}개 연결`;
+    $("#eeee-verification-summary").textContent = control.verification?.claimLatch?.status || "확인 필요";
+    status.textContent = "연결됨";
+    status.className = "status success";
+  } catch (error) {
+    status.textContent = error?.detail || "제어 센터 연결 대기";
+    status.className = "status";
+  }
+}
+
+refreshEeeeControlCenter();
+if (typeof setInterval === "function") {
+  setInterval(refreshEeeeControlCenter, 3000);
+}
+
 function setStatus(message, kind = "") {
   const status = $("#status");
   status.textContent = message;

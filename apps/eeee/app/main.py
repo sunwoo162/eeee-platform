@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.agent.local_runtime import LocalAgentRuntime, LocalConversationRuntime, OllamaBackend
-from app.agent.local_model_discovery import discover_local_model
+from app.agent.local_model_discovery import discover_fast_local_model, discover_local_model
 from app.agent.openhands_runtime import OpenHandsRuntime
 from app.agent.protocol import AgentRuntime
 from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
@@ -179,6 +179,11 @@ def create_app(
     local_model_name = app_settings.local_model or discover_local_model(
         app_settings.local_model_base_url, timeout_seconds=0.2
     )
+    local_conversation_model_name = (
+        app_settings.local_conversation_model
+        or discover_fast_local_model(app_settings.local_model_base_url, timeout_seconds=0.2)
+        or local_model_name
+    )
     runtime = agent_runtime
     if runtime is None and local_model_name:
         runtime = LocalAgentRuntime(
@@ -204,10 +209,20 @@ def create_app(
             profile_path=app_settings.assistant_profile_path,
             conversation_state_path=app_settings.data_dir / "chatgpt-assistant-conversation.json",
         )
-    if agent_runtime is not None:
-        local_general_runtime = agent_runtime
-    elif local_model_name:
-        local_general_runtime = LocalConversationRuntime(backend=runtime.backend)
+    # The general conversation lane must never inherit the project/ISEOL
+    # runtime.  ``agent_runtime`` is the project execution provider and may
+    # be ChatGPT Web; reusing it here silently turns a greeting into a slow
+    # browser request.  Keep ordinary conversation on the local fast model
+    # whenever one is installed, and let HybridAssistantRuntime use Web only
+    # for complex/tool requests or as a truthful fallback.
+    if local_conversation_model_name:
+        local_general_runtime = LocalConversationRuntime(
+            backend=OllamaBackend(
+                model=local_conversation_model_name,
+                base_url=app_settings.local_model_base_url,
+                timeout=app_settings.local_model_timeout_seconds,
+            )
+        )
     else:
         # Do not present the canned emergency lane as a real AI provider. If
         # the local model is absent, the hybrid runtime must either use the
@@ -226,6 +241,7 @@ def create_app(
         project_agent_runtime = ChatGptWebAgentRuntime(
             web_runtime=web_runtime,
             workspace_root=app_settings.workspace_root,
+            timeout_seconds=app_settings.chatgpt_web_agent_timeout_seconds,
         )
     else:
         # Do not route an unconfigured installation through OpenHands. That
@@ -314,7 +330,16 @@ def create_app(
     application.include_router(build_project_view_router(project_view))
     application.include_router(build_assistant_router(assistant_service, project_documents))
     application.include_router(build_mobile_router(mobile_bridge, assistant_service, mobile_snapshot))
-    application.include_router(build_desktop_router(coordinator, store, mobile_bridge, trust_gate))
+    application.include_router(
+        build_desktop_router(
+            coordinator,
+            store,
+            mobile_bridge,
+            trust_gate,
+            assistant_service=assistant_service,
+            plugin_host=plugin_host,
+        )
+    )
     application.include_router(
         build_api_router(
             api_flow,

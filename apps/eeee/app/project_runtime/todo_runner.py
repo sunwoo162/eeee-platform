@@ -114,8 +114,20 @@ class TodoProjectRunner:
         qa_report["qualityProfile"] = quality.model_dump(mode="json")
         qa_path.write_text(json.dumps(qa_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         artifacts = [
-            {"id": "todo-source", "path": "src", "evidence_ids": evidence_ids},
-            {"id": "todo-qa", "path": "QA_REPORT.json", "evidence_ids": evidence_ids},
+            {
+                "id": "todo-source",
+                "path": "src",
+                "evidence_ids": evidence_ids,
+                "evidence_project_id": project_id,
+                "evidence_project_revision": project_revision,
+            },
+            {
+                "id": "todo-qa",
+                "path": "QA_REPORT.json",
+                "evidence_ids": evidence_ids,
+                "evidence_project_id": project_id,
+                "evidence_project_revision": project_revision,
+            },
         ]
         return PreparedTodoRun(qa_report=qa_report, qa_report_path=str(qa_path), artifacts=artifacts)
 

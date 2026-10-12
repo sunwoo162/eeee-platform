@@ -16,11 +16,29 @@ def test_chatgpt_bridge_health_requires_connected_response(monkeypatch):
             return False
 
         def read(self, _size):
-            return b'{"status":"ok","connected":true}'
+            return b'{"status":"ok","service":"chatgpt-web-bridge","connected":true}'
 
     monkeypatch.setattr("app.desktop.runtime.urllib.request.urlopen", lambda *_args, **_kwargs: Response())
 
     assert _chatgpt_bridge_is_healthy(47831) is True
+
+
+def test_chatgpt_bridge_health_rejects_disconnected_response(monkeypatch):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            return b'{"status":"ok","service":"chatgpt-web-bridge","connected":false}'
+
+    monkeypatch.setattr("app.desktop.runtime.urllib.request.urlopen", lambda *_args, **_kwargs: Response())
+
+    assert _chatgpt_bridge_is_healthy(47831) is False
 
 
 def test_chatgpt_bridge_health_fails_closed(monkeypatch):

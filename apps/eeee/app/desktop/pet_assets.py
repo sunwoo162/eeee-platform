@@ -7,38 +7,13 @@ another full-canvas image swap.
 """
 
 PET_ASSET_TABLE = {
-    # ``left`` and ``right`` are physical keyboard hands.  The source assets
-    # use the same visual side as the physical keyboard, so keep the mapping
-    # direct: left input changes the left paw and right input changes the right
-    # paw.
+    # ``left`` and ``right`` are physical keyboard hands.  The artwork is
+    # mirrored from the user's point of view, hence the intentionally crossed
+    # legacy names in the source files.
     "left": {
         "body": "idle",
         "base": "left",
-        "press": "left_alt",
-        "paw_mask": {
-            "x_min": 417,
-            "x_max": 637,
-            "y_min": 570,
-            "y_max": 765,
-            "points": (
-                (512, 570),
-                (457, 595),
-                (422, 650),
-                (437, 705),
-                (477, 750),
-                (527, 765),
-                (582, 755),
-                (617, 725),
-                (632, 685),
-                (614, 640),
-                (572, 600),
-            ),
-        },
-    },
-    "right": {
-        "body": "idle",
-        "base": "right",
-        "press": "right_alt",
+        "press": "left_short",
         "paw_mask": {
             "x_min": 980,
             "x_max": 1275,
@@ -60,4 +35,36 @@ PET_ASSET_TABLE = {
             ),
         },
     },
+    "right": {
+        "body": "idle",
+        "base": "right",
+        "press": "right_short",
+        "paw_mask": {
+            "x_min": 417,
+            "x_max": 637,
+            "y_min": 570,
+            "y_max": 765,
+            "points": (
+                (512, 570),
+                (457, 595),
+                (422, 650),
+                (437, 705),
+                (477, 750),
+                (527, 765),
+                (582, 755),
+                (617, 725),
+                (632, 685),
+                (614, 640),
+                (572, 600),
+            ),
+        },
+    },
+}
+
+# The split resting paw exports are cropped from the same 1672x941 canvas as
+# the body. These anchors put both paws back onto the common body/keyboard
+# layer without moving the keyboard or changing the mascot footprint.
+REST_PAW_LAYER_PLACEMENTS = {
+    "paw_left_rest": (972, 442),
+    "paw_right_rest": (414, 562),
 }

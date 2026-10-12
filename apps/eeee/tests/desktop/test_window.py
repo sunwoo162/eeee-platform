@@ -382,9 +382,9 @@ def test_pet_asset_table_keeps_press_motion_modular_and_tight():
     assert right["base"] == "right"
     assert right["press"] == "right_short"
     assert left["paw_mask"]["x_max"] - left["paw_mask"]["x_min"] < 300
-    assert right["paw_mask"]["x_max"] - right["paw_mask"]["x_min"] < 300
+    assert right["paw_mask"]["x_max"] - right["paw_mask"]["x_min"] < 420
     assert left["paw_mask"]["y_min"] > 400
-    assert right["paw_mask"]["y_min"] > 520
+    assert right["paw_mask"]["y_min"] < 520
 
     # Stable body/keyboard anchors must never be inside the press layer.  If
     # they are, swapping a repeated-key pose visibly shakes the mascot.
@@ -395,8 +395,19 @@ def test_pet_asset_table_keeps_press_motion_modular_and_tight():
     assert not left_mask.contains(QPointF(900, 460))
     assert not left_mask.contains(QPointF(1100, 800))
     right_mask = window._same_paw_clip_path("right")
-    assert not right_mask.contains(QPointF(570, 535))
+    right_idle = window._source_pixmap_for_frame("idle").toImage()
+    right_pressed = window._source_pixmap_for_frame("right_press").toImage()
+    # The dedicated repeat export has a rounded paw above the keyboard; the
+    # clip must include that paw rather than the old long-finger region.
+    assert right_mask.contains(QPointF(500, 520))
+    assert not right_mask.contains(QPointF(700, 520))
     assert not right_mask.contains(QPointF(570, 800))
+    opposite_hand_diffs = sum(
+        right_idle.pixelColor(x, y) != right_pressed.pixelColor(x, y)
+        for y in range(430, 760, 20)
+        for x in range(1100, 1350, 20)
+    )
+    assert opposite_hand_diffs == 0
     window.close()
 
 

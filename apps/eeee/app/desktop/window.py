@@ -722,16 +722,27 @@ class PetWindow:
                     asset_spec = PET_ASSET_TABLE.get(base_frame)
                     if asset_spec is None:
                         return self._pet_pixmaps.get(base_frame)
-                    base = self._pet_pixmaps.get(asset_spec["body"])
-                    paw_key = asset_spec["press"] if is_press else asset_spec["base"]
-                    paw_source = self._pet_pixmaps.get(paw_key)
-                    if base is not None and paw_source is not None:
-                        composed = base.copy()
-                        paw_painter = QPainter(composed)
-                        paw_painter.setClipPath(self._same_paw_clip_path(base_frame))
-                        paw_painter.drawPixmap(0, 0, paw_source)
-                        paw_painter.end()
-                        base = composed
+                    if base_frame == "right":
+                        # The cat's right paw is on the viewer's left.  These
+                        # two source exports are complete, paired poses: the
+                        # right paw reaches the keyboard and the left paw is
+                        # visibly raised.  Compositing only the paw over idle
+                        # loses that raised-hand state and produces the
+                        # twisted/flickering right-hand result.
+                        base = self._pet_pixmaps.get(
+                            asset_spec["press"] if is_press else asset_spec["base"]
+                        )
+                    else:
+                        base = self._pet_pixmaps.get(asset_spec["body"])
+                        paw_key = asset_spec["press"] if is_press else asset_spec["base"]
+                        paw_source = self._pet_pixmaps.get(paw_key)
+                        if base is not None and paw_source is not None:
+                            composed = base.copy()
+                            paw_painter = QPainter(composed)
+                            paw_painter.setClipPath(self._same_paw_clip_path(base_frame))
+                            paw_painter.drawPixmap(0, 0, paw_source)
+                            paw_painter.end()
+                            base = composed
                 if base is None or base.isNull():
                     return base
 

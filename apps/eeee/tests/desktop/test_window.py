@@ -326,7 +326,7 @@ def test_repeated_same_hand_input_animates_without_switching_paws():
     window.close()
 
 
-def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
+def test_same_hand_press_frame_is_distinct_and_right_uses_complete_pose_pair():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
@@ -345,19 +345,14 @@ def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
     )
     right_base = window._source_pixmap_for_frame("right").toImage()
     right_pressed = window._source_pixmap_for_frame("right_press").toImage()
-    right_clip = window._same_paw_clip_path("right")
-    right_outside_diffs = sum(
-        right_base.pixelColor(x, y) != right_pressed.pixelColor(x, y)
-        for y in range(200, 400, 24)
-        for x in range(600, 1000, 24)
-        if not right_clip.contains(QPointF(x, y))
-    )
 
     assert pressed != base
     assert pressed != opposite
     assert outside_diffs == 0
     assert right_pressed != right_base
-    assert right_outside_diffs == 0
+    # The right-hand pair is a complete pose pair so the raised opposite paw
+    # remains part of both frames. The body stays unchanged at a neutral pixel.
+    assert right_base.pixelColor(800, 300) == right_pressed.pixelColor(800, 300)
     window.close()
 
 

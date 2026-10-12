@@ -284,12 +284,49 @@ async function refreshEeeeControlCenter() {
     $("#eeee-active-work").textContent = `${activeJobs}개 작업`;
     $("#eeee-memory-summary").textContent = `활성 ${memory.activeCount || 0}개 · 검토 대기 ${memory.candidateCount || 0}개`;
     $("#eeee-plugin-summary").textContent = `${connectedPlugins}/${plugins.length}개 연결`;
+    renderEeeePluginStatus(plugins);
     $("#eeee-verification-summary").textContent = control.verification?.claimLatch?.status || "확인 필요";
     status.textContent = "연결됨";
     status.className = "status success";
   } catch (error) {
     status.textContent = error?.detail || "제어 센터 연결 대기";
     status.className = "status";
+  }
+}
+
+function renderEeeePluginStatus(plugins) {
+  const list = $("#eeee-plugin-list");
+  if (!list) return;
+  list.replaceChildren();
+  if (!plugins.length) {
+    const empty = document.createElement("li");
+    empty.className = "muted";
+    empty.textContent = "설치 가능한 플러그인이 없습니다.";
+    list.append(empty);
+    return;
+  }
+  const labels = {
+    not_installed: "미설치",
+    available: "연결 필요",
+    awaiting_authentication: "연결 필요",
+    connecting: "연결 중",
+    connected: "연결됨",
+    paused: "일시정지",
+    failed: "오류",
+  };
+  for (const plugin of plugins) {
+    const item = document.createElement("li");
+    item.className = "eeee-plugin-item";
+    const name = document.createElement("strong");
+    name.textContent = plugin.name || plugin.pluginId || "플러그인";
+    const status = document.createElement("span");
+    status.className = `plugin-status plugin-status-${plugin.status || "unknown"}`;
+    status.textContent = labels[plugin.status] || plugin.status || "확인 필요";
+    const action = document.createElement("span");
+    action.className = "muted";
+    action.textContent = plugin.nextAction ? `다음: ${plugin.nextAction}` : "";
+    item.append(name, status, action);
+    list.append(item);
   }
 }
 

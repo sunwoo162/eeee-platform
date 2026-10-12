@@ -190,6 +190,26 @@ class PetWindow:
                 'PySide6 is required for the desktop shell. Install with `pip install -e ".[desktop]"`.'
             ) from exc
 
+        class _SpeechBubbleLabel(QLabel):
+            """Draw a scalable bubble asset behind dynamic response text."""
+
+            def __init__(self, bubble_pixmap, parent=None):
+                super().__init__(parent)
+                self.bubble_pixmap = bubble_pixmap
+                self.setWordWrap(True)
+                self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.setContentsMargins(30, 18, 30, 34)
+                self.setMinimumHeight(78)
+                self.setTextFormat(Qt.TextFormat.PlainText)
+
+            def paintEvent(self, event):
+                if self.bubble_pixmap is not None and not self.bubble_pixmap.isNull():
+                    painter = QPainter(self)
+                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                    painter.drawPixmap(self.rect(), self.bubble_pixmap)
+                    painter.end()
+                super().paintEvent(event)
+
         class _Window(QWidget):
             def __init__(self):
                 super().__init__()
@@ -323,10 +343,10 @@ class PetWindow:
                 self.headline.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
                 root.addWidget(self.headline)
 
-                self.detail = QLabel()
+                self.detail = _SpeechBubbleLabel(
+                    QPixmap(str(asset_dir / "cat-speech-bubble.png"))
+                )
                 self.detail.setObjectName("assistantBubble")
-                self.detail.setWordWrap(True)
-                self.detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.detail.setMinimumWidth(240)
                 self.detail.setMaximumWidth(640)
                 root.addWidget(self.detail)
@@ -407,7 +427,7 @@ class PetWindow:
 
                 self._reply_hide_timer = QTimer(self)
                 self._reply_hide_timer.setSingleShot(True)
-                self._reply_hide_timer.setInterval(8000)
+                self._reply_hide_timer.setInterval(5000)
                 self._reply_hide_timer.timeout.connect(self._hide_reply_bubble)
                 self._typing_timer = QTimer(self)
                 self._typing_timer.setInterval(24)
@@ -493,8 +513,7 @@ class PetWindow:
                     "#desktopCompanion QLabel { background: transparent; border: none; "
                     "color: #f4f3fb; }"
                     "#assistantCharacter { padding: 4px; }"
-                    "#assistantBubble { background: #fff7ef; border: 2px solid #efc28f; "
-                    "border-radius: 24px; padding: 12px 18px; color: #33281f; }"
+                    "#assistantBubble { background: transparent; border: none; color: #33281f; }"
                     "#projectStatusCard { background: #202332; border: 1px solid #373c53; "
                     "border-radius: 14px; }"
                     "#projectStatus { color: #ffffff; font-weight: 600; }"
@@ -612,15 +631,17 @@ class PetWindow:
                     _force_windows_topmost(self.command_surface)
 
             def show_command_surface(self):
-                # The pet bubble remains the only response surface. Quick
-                # Chat is only the composer anchored below the pet.
-                self.detail.show()
+                # Quick Chat lives above the pet. It reuses the same response
+                # bubble for the latest answer and places the composer below
+                # that answer, so nothing is rendered under the character.
+                self.quick_reply.setText(self.detail.text())
+                self.detail.hide()
                 self._reply_hide_timer.stop()
                 self.command_surface.show()
                 self.command_surface.adjustSize()
                 self.command_surface.move(self._command_surface_position())
                 QTimer.singleShot(0, self._reposition_command_surface)
-                self.quick_reply.hide()
+                self.quick_reply.setVisible(bool(self.quick_reply.text().strip()))
                 self.raise_()
                 self.command_surface.raise_()
                 self.command_surface.activateWindow()
@@ -670,11 +691,11 @@ class PetWindow:
 
                 centered_x = anchor.center().x() - surface_size.width() // 2
                 x = max(min_x, min(centered_x, max_x))
-                below_y = anchor.bottom() + margin
                 above_y = anchor.top() - margin - surface_size.height()
-                # The composer belongs below the pet. Only move it above when
-                # the current monitor has no room underneath.
-                y = below_y if below_y <= max_y else above_y
+                below_y = anchor.bottom() + margin
+                # The composer and latest reply belong above the pet. Only
+                # move it below when the top of the monitor has no room.
+                y = above_y if above_y >= min_y else below_y
                 y = max(min_y, min(y, max_y))
                 return QPoint(x, y)
 
@@ -964,6 +985,8 @@ class PetWindow:
                 self._typing_index = 0
                 self.detail.setText("")
                 self.quick_reply.setText("")
+                self.detail.setVisible(not self.command_surface.isVisible())
+                self.quick_reply.setVisible(False)
                 if not text:
                     return
                 self._advance_reply_typing()
@@ -979,6 +1002,8 @@ class PetWindow:
                 visible_text = self._typing_text[: self._typing_index]
                 self.detail.setText(visible_text)
                 self.quick_reply.setText(visible_text)
+                self.detail.setVisible(not self.command_surface.isVisible())
+                self.quick_reply.setVisible(self.command_surface.isVisible())
                 if self._typing_index >= len(self._typing_text):
                     self._typing_timer.stop()
                     self._schedule_reply_hide()
@@ -1212,6 +1237,9 @@ class PetWindow:
                     self._busy = True
                     self.detail.setText(busy_message)
                     self.quick_status.setText(busy_message)
+                    if self.command_surface.isVisible():
+                        self.quick_reply.setText(busy_message)
+                        self.quick_reply.show()
                     self._update_controls()
 
                 def success(payload):
@@ -1279,7 +1307,7 @@ class PetWindow:
                 self.quick_status.setText(headlines.get(view.state, view.headline))
                 self._reply_hide_timer.stop()
                 if self.command_surface.isVisible():
-                    self.detail.show()
+                    self.detail.hide()
                     self.quick_reply.hide()
                 else:
                     self.quick_reply.hide()

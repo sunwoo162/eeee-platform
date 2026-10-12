@@ -83,10 +83,11 @@ class AssistantService:
 
     def route(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
+        conversation_id: str = "desktop-default",
     ) -> AssistantRouteResult:
         request = AssistantRequest(
             raw_text=text,
-            context={"workspace": workspace},
+            context={"workspace": workspace, "conversationId": conversation_id},
             requested_capability=requested_capability,
         )
         if self.background_supervisor is not None:
@@ -97,14 +98,16 @@ class AssistantService:
                     request_id,
                     lambda: self._route_sync(
                         text, workspace, requested_capability=requested_capability,
+                        conversation_id=conversation_id,
                     ).model_dump(mode="json"),
                     input_data={
                         "text": text,
                         "workspace": workspace,
                         "requestedCapability": requested_capability,
+                        "conversationId": conversation_id,
                     },
                 )
-                return AssistantRouteResult(
+                result = AssistantRouteResult(
                     status="accepted",
                     selection=selection,
                     message="프로젝트 작업을 백그라운드에서 시작했어. 진행 상황에서 확인할 수 있어.",
@@ -116,10 +119,18 @@ class AssistantService:
                         subject_id=job_id,
                     ),
                 )
-        return self._route_sync(text, workspace, requested_capability=requested_capability)
+                self._remember_turn(conversation_id, text, result.message)
+                return result
+        result = self._route_sync(
+            text, workspace, requested_capability=requested_capability,
+            conversation_id=conversation_id,
+        )
+        self._remember_turn(conversation_id, text, result.message)
+        return result
 
     def _route_sync(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
+        conversation_id: str = "desktop-default",
     ) -> AssistantRouteResult:
         implicit_preference = extract_implicit_preference(text)
         if implicit_preference is not None:
@@ -129,7 +140,9 @@ class AssistantService:
                 scope={"source": "automatic_learning"},
             )
         envelope = self.kernel.route(
-            AssistantRequest(raw_text=text, context={"workspace": workspace},
+            AssistantRequest(
+                raw_text=text,
+                context={"workspace": workspace, "conversationId": conversation_id},
                              requested_capability=requested_capability),
             AssistantContext(),
         )
@@ -186,6 +199,13 @@ class AssistantService:
             ),
         )
 
+    def _remember_turn(self, conversation_id: str, user_text: str, assistant_text: str) -> None:
+        memory_store = getattr(self.coordinator, "memory", None)
+        if memory_store is None:
+            return
+        memory_store.append_conversation_turn(conversation_id, "user", user_text)
+        memory_store.append_conversation_turn(conversation_id, "assistant", assistant_text)
+
     def get_project_profile(self, project_id: str) -> ProjectProfile:
         return self.store.get_project_profile(project_id)
 
@@ -204,12 +224,14 @@ class AssistantService:
             text = input_data.get("text")
             workspace = input_data.get("workspace")
             requested_capability = input_data.get("requestedCapability")
+            conversation_id = input_data.get("conversationId")
             if not isinstance(text, str) or not text.strip():
                 return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
             return lambda: self._route_sync(
                 text,
                 workspace if isinstance(workspace, str) else None,
                 requested_capability=requested_capability if isinstance(requested_capability, str) else None,
+                conversation_id=conversation_id if isinstance(conversation_id, str) else "desktop-default",
             ).model_dump(mode="json")
 
         return self.background_supervisor.resume_pending(operation_factory)

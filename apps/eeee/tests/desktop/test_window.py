@@ -102,9 +102,10 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert window.status_card.isHidden()
     assert window.command_surface.isHidden()
     assert window.legacy_panel.isHidden()
+    assert window._reply_hide_timer.interval() == 5000
     window.show_command_surface()
     assert not window.command_surface.isHidden()
-    assert not window.detail.isHidden()
+    assert window.detail.isHidden()
     assert window.quick_status.isHidden()
     assert window.quick_reply.isHidden()
     window.hide_command_surface()
@@ -120,6 +121,37 @@ def test_pet_surface_is_transparent_and_compact():
     assert "background: transparent" in window.styleSheet()
     assert window.status_card.isHidden()
     assert window.legacy_panel.isHidden()
+    window.close()
+
+
+def test_speech_bubble_uses_the_generated_transparent_asset():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    bubble_pixmap = getattr(window.detail, "bubble_pixmap", None)
+
+    assert bubble_pixmap is not None
+    assert not bubble_pixmap.isNull()
+    assert "background: #fff7ef" not in window.styleSheet()
+    window.close()
+
+
+def test_quick_chat_above_pet_contains_input_and_latest_reply():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show()
+    window.move(300, 500)
+    _wait_for(app, lambda: window.isVisible())
+    window.detail.setText("이전 답변")
+
+    window.show_command_surface()
+    window._start_reply_typing("이전 답변")
+    window._reposition_command_surface()
+
+    assert window.command_surface.frameGeometry().bottom() < window.frameGeometry().top()
+    assert window.detail.isHidden()
+    assert window.quick_reply.isVisible()
+    assert window.quick_reply.text()
     window.close()
 
 
@@ -615,7 +647,7 @@ def test_quick_chat_is_anchored_to_the_pet_and_clamped_to_screen_edges():
     window.close()
 
 
-def test_quick_chat_prefers_below_the_pet_when_space_is_available():
+def test_quick_chat_prefers_above_the_pet_when_space_is_available():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
     window.show()
@@ -626,7 +658,7 @@ def test_quick_chat_prefers_below_the_pet_when_space_is_available():
     anchor = window._pet_anchor_rect()
     position = window._command_surface_position(screen, surface_size)
 
-    assert position.y() >= anchor.bottom() + 12
+    assert position.y() + surface_size.height() <= anchor.top() - 12
     assert abs(
         position.x() + surface_size.width() // 2 - anchor.center().x()
     ) <= 12

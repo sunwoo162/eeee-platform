@@ -3,11 +3,18 @@ from __future__ import annotations
 import json
 import sqlite3
 import hashlib
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from app.memory.models import MemoryCandidate, MemoryRecord, MemoryStatus
+
+
+_CONVERSATION_SECRET_PATTERN = re.compile(
+    r"((?:api[_ -]?key|apikey|access[_ -]?token|refresh[_ -]?token|password|비밀번호|토큰|secret)\s*[:=]\s*)[^\s,]+",
+    re.IGNORECASE,
+)
 
 
 class MemoryConflictError(RuntimeError):
@@ -58,10 +65,55 @@ class MemoryStore:
                     detail_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS conversation_turns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_memory_status ON memory_records (status);
                 CREATE INDEX IF NOT EXISTS idx_memory_project ON memory_records (source_project_id);
+                CREATE INDEX IF NOT EXISTS idx_conversation_turns_lookup
+                    ON conversation_turns (conversation_id, id);
                 """
             )
+
+    def append_conversation_turn(self, conversation_id: str, role: str, content: str) -> None:
+        """Persist one local conversation turn for short-term continuity."""
+
+        conversation_id = conversation_id.strip()
+        content = _redact_conversation_content(content.strip())
+        if not conversation_id:
+            raise ValueError("conversation_id is required")
+        if role not in {"user", "assistant"}:
+            raise ValueError("conversation role must be user or assistant")
+        if not content:
+            raise ValueError("conversation content is required")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO conversation_turns "
+                "(conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                (conversation_id, role, content, _iso(_now())),
+            )
+
+    def recent_conversation_turns(
+        self, conversation_id: str, *, limit: int = 12
+    ) -> list[dict[str, str]]:
+        """Return the latest turns in chronological order for provider context."""
+
+        if limit <= 0:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT role, content FROM conversation_turns "
+                "WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+                (conversation_id, limit),
+            ).fetchall()
+        return [
+            {"role": str(row["role"]), "content": str(row["content"])}
+            for row in reversed(rows)
+        ]
 
     def save_candidate(self, candidate: MemoryCandidate) -> MemoryRecord:
         record = MemoryRecord(
@@ -360,3 +412,7 @@ def _iso(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _redact_conversation_content(content: str) -> str:
+    return _CONVERSATION_SECRET_PATTERN.sub(r"\1[민감정보]", content)

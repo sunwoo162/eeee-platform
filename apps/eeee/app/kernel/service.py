@@ -312,12 +312,15 @@ class KernelService:
     def _retrieve_context(self, request: AssistantRequest, supplied: AssistantContext) -> AssistantContext:
         memories = self.memory.search(request.raw_text)
         memory_packet = self.memory_context_compiler.compile(request.raw_text, self.memory)
+        conversation_id = str(request.context.get("conversationId") or "desktop-default")
         return AssistantContext(
             memory_ids=list(dict.fromkeys([*supplied.memory_ids, *(item.id for item in memories)])),
             qa_baseline_ids=list(dict.fromkeys([
                 *supplied.qa_baseline_ids, *(item.id for item in memories if item.kind in {"qa_rule", "regression_rule"}),
             ])), user_preferences={**memory_packet.preference_values, **supplied.user_preferences},
             memory_context=memory_packet.prompt_context,
+            conversation_id=conversation_id,
+            conversation_turns=self.memory.recent_conversation_turns(conversation_id),
         )
 
     def _context_identity_error(self, request: AssistantRequest) -> str | None:

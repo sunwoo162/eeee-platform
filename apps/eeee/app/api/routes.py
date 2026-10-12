@@ -157,6 +157,9 @@ class DesignVerifyResponse(BaseModel):
 class AssistantRequestPayload(BaseModel):
     text: str = Field(min_length=1)
     workspace: str | None = None
+    conversation_id: str = Field(default="desktop-default", alias="conversationId", min_length=1, max_length=160)
+
+    model_config = {"populate_by_name": True}
 
 
 class AssistantRouteResponse(AssistantRouteResult):
@@ -340,7 +343,11 @@ def build_assistant_router(
     def route_assistant_request(payload: AssistantRequestPayload) -> AssistantRouteResponse:
         try:
             return AssistantRouteResponse.model_validate(
-                service.route(payload.text, payload.workspace).model_dump()
+                service.route(
+                    payload.text,
+                    payload.workspace,
+                    conversation_id=payload.conversation_id,
+                ).model_dump()
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

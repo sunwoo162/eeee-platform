@@ -157,7 +157,7 @@ def test_right_repeat_uses_the_same_hand_short_pose():
     assert window._typing_frame_name() == "right"
     window._typing_hand_press_count = 2
     assert window._typing_frame_name() == "right_press"
-    assert window._press_source_frame("right") == "left_alt"
+    assert window._press_source_frame("right") == "right_short"
     window.close()
 
 
@@ -168,7 +168,7 @@ def test_right_hand_uses_the_viewer_left_keyboard_pose_assets():
 
     assert (asset_dir / "cat-keyboard-left.png").is_file()
     assert (asset_dir / "cat-keyboard-left-alt.png").is_file()
-    assert window._press_source_frame("right") == "left_alt"
+    assert window._press_source_frame("right") == "right_short"
     window._typing_hand_press_count = 1
     assert window._typing_frame_name() == "left"
     window._typing_hand = "right"
@@ -330,29 +330,39 @@ def test_same_hand_press_frame_is_distinct_and_right_uses_complete_pose_pair():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
-    assert window._press_source_frame("left") == "right_alt"
-    assert window._press_source_frame("right") == "left_alt"
+    assert window._press_source_frame("left") == "left_short"
+    assert window._press_source_frame("right") == "right_short"
 
     base = window._source_pixmap_for_frame("left").toImage()
     pressed = window._source_pixmap_for_frame("left_press").toImage()
     opposite = window._source_pixmap_for_frame("right").toImage()
+    idle = window._source_pixmap_for_frame("idle").toImage()
     clip = window._same_paw_clip_path("left")
-    outside_diffs = sum(
-        base.pixelColor(x, y) != pressed.pixelColor(x, y)
+    repeat_outside_diffs = sum(
+        idle.pixelColor(x, y) != pressed.pixelColor(x, y)
         for y in range(200, 400, 24)
         for x in range(600, 1000, 24)
         if not clip.contains(QPointF(x, y))
     )
     right_base = window._source_pixmap_for_frame("right").toImage()
     right_pressed = window._source_pixmap_for_frame("right_press").toImage()
+    right_idle = window._source_pixmap_for_frame("idle").toImage()
+    right_clip = window._same_paw_clip_path("right")
+    right_repeat_outside_diffs = sum(
+        right_idle.pixelColor(x, y) != right_pressed.pixelColor(x, y)
+        for y in range(200, 400, 24)
+        for x in range(600, 1000, 24)
+        if not right_clip.contains(QPointF(x, y))
+    )
 
     assert pressed != base
     assert pressed != opposite
-    assert outside_diffs == 0
+    # First press uses the complete pose (including the raised opposite paw),
+    # while a consecutive same-hand press renders only the active short paw
+    # over the idle pose. The opposite paw therefore stays down on repeats.
+    assert repeat_outside_diffs == 0
     assert right_pressed != right_base
-    # The right-hand pair is a complete pose pair so the raised opposite paw
-    # remains part of both frames. The body stays unchanged at a neutral pixel.
-    assert right_base.pixelColor(800, 300) == right_pressed.pixelColor(800, 300)
+    assert right_repeat_outside_diffs == 0
     window.close()
 
 
@@ -362,10 +372,10 @@ def test_pet_asset_table_keeps_press_motion_modular_and_tight():
 
     assert left["body"] == "idle"
     assert left["base"] == "left"
-    assert left["press"] == "right_alt"
+    assert left["press"] == "left_short"
     assert right["body"] == "idle"
     assert right["base"] == "right"
-    assert right["press"] == "left_alt"
+    assert right["press"] == "right_short"
     assert left["paw_mask"]["x_max"] - left["paw_mask"]["x_min"] < 300
     assert right["paw_mask"]["x_max"] - right["paw_mask"]["x_min"] < 300
     assert left["paw_mask"]["y_min"] > 400

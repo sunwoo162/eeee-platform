@@ -271,6 +271,8 @@ class PetWindow:
                         "right": "cat-keyboard-left.png",
                         "left_alt": "cat-keyboard-right-alt.png",
                         "right_alt": "cat-keyboard-left-alt.png",
+                        "left_short": "cat-keyboard-left-alt.png",
+                        "right_short": "cat-keyboard-right-alt.png",
                         "gaze_left": "cat-keyboard-gaze-left.png",
                         "gaze_right": "cat-keyboard-gaze-right.png",
                     }.items()
@@ -687,11 +689,9 @@ class PetWindow:
             def _press_source_frame(self, frame: str) -> str:
                 """Return the sibling artwork for a same-paw press frame.
 
-                The logical frame names describe physical keyboard hands, but
-                the artwork filenames are mirrored relative to the viewer. The
-                alternate asset for ``left`` is therefore ``right_alt`` and
-                vice versa. These sibling assets keep the body and keyboard
-                anchored while changing only the paw's pose.
+                The first press uses a complete pose so the opposite paw is
+                visibly raised. Repeated presses use a short sibling pose
+                clipped onto idle so the opposite paw stays down.
                 """
                 spec = PET_ASSET_TABLE.get(frame)
                 return spec["press"] if spec else frame
@@ -722,19 +722,15 @@ class PetWindow:
                     asset_spec = PET_ASSET_TABLE.get(base_frame)
                     if asset_spec is None:
                         return self._pet_pixmaps.get(base_frame)
-                    if base_frame == "right":
-                        # The cat's right paw is on the viewer's left.  These
-                        # two source exports are complete, paired poses: the
-                        # right paw reaches the keyboard and the left paw is
-                        # visibly raised.  Compositing only the paw over idle
-                        # loses that raised-hand state and produces the
-                        # twisted/flickering right-hand result.
-                        base = self._pet_pixmaps.get(
-                            asset_spec["press"] if is_press else asset_spec["base"]
-                        )
+                    if not is_press:
+                        # First press: use the complete approved pose so the
+                        # opposite paw's pink pads remain visible.
+                        base = self._pet_pixmaps.get(asset_spec["base"])
                     else:
+                        # Repeat: change only the active paw over idle. The
+                        # opposite paw must stay down for same-array repeats.
                         base = self._pet_pixmaps.get(asset_spec["body"])
-                        paw_key = asset_spec["press"] if is_press else asset_spec["base"]
+                        paw_key = asset_spec["press"]
                         paw_source = self._pet_pixmaps.get(paw_key)
                         if base is not None and paw_source is not None:
                             composed = base.copy()

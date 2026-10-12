@@ -13,7 +13,7 @@ PET_ASSET_TABLE = {
     "left": {
         "body": "idle",
         "base": "left",
-        "press": "right_alt",
+        "press": "left_short",
         "paw_mask": {
             "x_min": 980,
             "x_max": 1275,
@@ -38,7 +38,7 @@ PET_ASSET_TABLE = {
     "right": {
         "body": "idle",
         "base": "right",
-        "press": "left_alt",
+        "press": "right_short",
         "paw_mask": {
             "x_min": 417,
             "x_max": 637,

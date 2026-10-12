@@ -147,6 +147,33 @@ def test_cat_keyboard_pet_assets_are_loaded_and_typing_switches_hands():
     window.close()
 
 
+def test_idle_pose_composes_both_resting_paws():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    assert not window._pet_pixmaps["paw_left_rest"].isNull()
+    assert not window._pet_pixmaps["paw_right_rest"].isNull()
+    idle = window._source_pixmap_for_frame("idle")
+    assert not idle.isNull()
+    assert idle.toImage() != window._pet_pixmaps["idle"].toImage()
+    window.close()
+
+
+def test_typing_pose_returns_to_two_paw_idle_after_five_seconds():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window._read_global_key_states = lambda: {}
+    window._typing_active = True
+    window._last_typing_frame = "right_press"
+    window._last_text_edit_at = time.monotonic() - 5.1
+
+    window._update_pet_motion()
+
+    assert window._typing_active is False
+    assert window._last_rendered_frame == "idle"
+    window.close()
+
+
 def test_right_repeat_uses_the_same_hand_short_pose():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
@@ -453,7 +480,7 @@ def test_gaze_frames_reuse_the_idle_keyboard_canvas():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
-    idle = window._pet_pixmaps["idle"].toImage()
+    idle = window._resting_pet_pixmap().toImage()
     for frame in ("gaze_left", "gaze_center", "gaze_right"):
         gaze = window._source_pixmap_for_frame(frame).toImage()
         assert gaze.copy(0, 650, idle.width(), idle.height() - 650) == idle.copy(

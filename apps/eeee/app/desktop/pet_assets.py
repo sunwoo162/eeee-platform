@@ -60,3 +60,11 @@ PET_ASSET_TABLE = {
         },
     },
 }
+
+# The split resting paw exports are cropped from the same 1672x941 canvas as
+# the body. These anchors put both paws back onto the common body/keyboard
+# layer without moving the keyboard or changing the mascot footprint.
+REST_PAW_LAYER_PLACEMENTS = {
+    "paw_left_rest": (972, 442),
+    "paw_right_rest": (414, 562),
+}

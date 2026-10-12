@@ -8,7 +8,7 @@ from app.desktop.presentation import PetPresentation
 from app.desktop.session import DesktopSession
 from app.desktop.worker import QtTaskRunner
 from app.assistant.profile import DEFAULT_PROFILE, load_profile, save_profile
-from app.desktop.pet_assets import PET_ASSET_TABLE
+from app.desktop.pet_assets import PET_ASSET_TABLE, REST_PAW_LAYER_PLACEMENTS
 
 
 def _force_windows_topmost(widget) -> None:
@@ -271,6 +271,8 @@ class PetWindow:
                         "right": "cat-keyboard-left.png",
                         "left_alt": "cat-keyboard-right-alt.png",
                         "right_alt": "cat-keyboard-left-alt.png",
+                        "paw_left_rest": "pet/paw-left-rest.png",
+                        "paw_right_rest": "pet/paw-right-rest.png",
                         "left_short": "cat-keyboard-left-alt.png",
                         # Repeated right-hand input uses the dedicated short
                         # paw export.  Do not crop the full alternate pose:
@@ -713,15 +715,29 @@ class PetWindow:
                 path.closeSubpath()
                 return path
 
+            def _resting_pet_pixmap(self):
+                """Compose the neutral pose with both front paws on keys."""
+                body = self._pet_pixmaps.get("idle")
+                if body is None or body.isNull():
+                    return body
+                composed = body.copy()
+                painter = QPainter(composed)
+                for layer_key, (x, y) in REST_PAW_LAYER_PLACEMENTS.items():
+                    layer = self._pet_pixmaps.get(layer_key)
+                    if layer is not None and not layer.isNull():
+                        painter.drawPixmap(x, y, layer)
+                painter.end()
+                return composed
+
             def _source_pixmap_for_frame(self, frame: str):
                 """Keep the keyboard fixed while changing only the eyes."""
-                base = self._pet_pixmaps.get("idle")
+                base = self._resting_pet_pixmap()
                 is_gaze = frame.startswith("gaze_")
                 is_press = frame.endswith("_press")
                 base_frame = frame.removesuffix("_press")
                 is_typing = base_frame in {"left", "right", "left_alt", "right_alt"}
                 if not is_gaze and not is_typing:
-                    return self._pet_pixmaps.get(frame)
+                    return base if frame == "idle" else self._pet_pixmaps.get(frame)
                 if is_typing:
                     asset_spec = PET_ASSET_TABLE.get(base_frame)
                     if asset_spec is None:
@@ -733,7 +749,7 @@ class PetWindow:
                     else:
                         # Repeat: change only the active paw over idle. The
                         # opposite paw must stay down for same-array repeats.
-                        base = self._pet_pixmaps.get(asset_spec["body"])
+                        base = self._resting_pet_pixmap()
                         paw_key = asset_spec["press"]
                         paw_source = self._pet_pixmaps.get(paw_key)
                         if base is not None and paw_source is not None:
@@ -920,10 +936,15 @@ class PetWindow:
                     return
 
                 self._typing_active = False
-                # Once the user has typed, keep the last hand pose instead of
-                # snapping back to the idle keyboard pose.  The eye overlay
-                # still follows the cursor through the current gaze offset.
-                self._set_pet_frame(self._last_typing_frame or gaze_frame)
+                if (
+                    self._last_text_edit_at
+                    and time.monotonic() - self._last_text_edit_at >= 5.0
+                ):
+                    self._set_pet_frame("idle")
+                else:
+                    # Keep the last hand pose briefly after typing stops so
+                    # the animation does not visibly snap between keystrokes.
+                    self._set_pet_frame(self._last_typing_frame or gaze_frame)
 
             def _start_reply_typing(self, text: str) -> None:
                 self._typing_timer.stop()

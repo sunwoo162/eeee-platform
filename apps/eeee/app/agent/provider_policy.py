@@ -41,8 +41,11 @@ class ProviderPolicy:
         else:
             if local_available:
                 return ProviderDecision("local", "simple_request")
+            # Ordinary conversation is a local-only lane.  Do not silently
+            # promote it to the slower Web/GPT lane just because local AI is
+            # unavailable; the caller must surface the unavailable state.
             if web_available:
-                return ProviderDecision("web", "local_unavailable")
+                return ProviderDecision("unavailable", "local_unavailable")
         if local_available:
             return ProviderDecision("local", "web_unavailable")
         if web_available:

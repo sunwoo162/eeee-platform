@@ -38,7 +38,15 @@ class HybridAssistantRuntime:
         fallback = self.web if decision.provider == "local" else self.local
         assert primary is not None
         response = primary.run(request)
-        if response.status not in {"unavailable"} or fallback is None:
+        # A routine turn must never silently jump to the slow Web/GPT lane
+        # just because the local model had a transient failure.  The user
+        # chose the hybrid contract: Web is for complex work, not a hidden
+        # fallback for greetings or everyday chat.
+        if (
+            response.status not in {"unavailable"}
+            or fallback is None
+            or decision.reason == "simple_request"
+        ):
             return _annotate(response, decision.provider, decision.reason)
         fallback_response = fallback.run(request)
         return _annotate(fallback_response, "web" if decision.provider == "local" else "local", "provider_fallback")

@@ -48,6 +48,9 @@ class AssistantRouteResult(BaseModel):
     plugin_id: str | None = None
     plugin_execution_id: str | None = None
     job_id: str | None = Field(default=None, alias="jobId")
+    # Expose the selected lane so the Desktop can show/debug the real route
+    # instead of making the user guess whether a turn reached Web/GPT.
+    provider: str | None = None
 
 
 class AssistantService:
@@ -167,6 +170,17 @@ class AssistantService:
         message = output.get("message", "요청을 완료하지 못했어.")
         if completed_locally:
             message = "로컬 프로젝트가 생성되고 QA/ClaimLatch 검증을 통과했어. 외부 플러그인은 선택적으로 연결할 수 있어."
+        provider = None
+        events = output.get("events")
+        if isinstance(events, list):
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                event_type = event.get("type")
+                if event_type == "provider.selected" and isinstance(event.get("provider"), str):
+                    provider = event["provider"]
+                elif event_type == "local.conversation" and isinstance(event.get("provider"), str):
+                    provider = event["provider"]
         return AssistantRouteResult(
             status=status,
             selection=CapabilitySelection.model_validate(output["selection"]),
@@ -189,6 +203,7 @@ class AssistantService:
             suggested_action=output.get("pluginRequired", {}).get("suggestedAction") if isinstance(output.get("pluginRequired"), dict) else None,
             plugin_id=output.get("pluginId"),
             plugin_execution_id=output.get("pluginExecutionId"),
+            provider=provider,
             response_verification=ResponseVerification.model_validate(
                 output.get("responseVerification", {
                     "decision": "WARN",

@@ -47,9 +47,14 @@ class Settings(BaseSettings):
     chatgpt_web_bridge_port: int = 47831
     chatgpt_web_node_path: str = "node"
     chatgpt_web_timeout_seconds: float = 120.0
+    # The bridge allows one initial agent turn plus up to two strict-parser
+    # corrections, each bounded at 45 seconds. Keep the Python request open
+    # long enough to receive the final bounded attempt.
+    chatgpt_web_agent_timeout_seconds: float = 150.0
     assistant_profile_path: Path = Field(default_factory=lambda: _user_data_root() / "profile.json")
     local_model_base_url: str = "http://127.0.0.1:11434/api/chat"
     local_model: str | None = None
+    local_conversation_model: str | None = None
     local_model_timeout_seconds: float = 120.0
     execution_mode: Literal["demo", "workspace_verify"] = "demo"
     mobile_bridge_enabled: bool = True
@@ -90,6 +95,13 @@ class Settings(BaseSettings):
     def validate_chatgpt_web_timeout(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("chatgpt_web_timeout_seconds must be positive")
+        return value
+
+    @field_validator("chatgpt_web_agent_timeout_seconds")
+    @classmethod
+    def validate_chatgpt_web_agent_timeout(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("chatgpt_web_agent_timeout_seconds must be positive")
         return value
 
     @field_validator("chatgpt_web_bridge_port")

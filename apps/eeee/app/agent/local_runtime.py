@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -100,20 +101,26 @@ class OllamaBackend:
             json={
                 "model": self.model,
                 "stream": False,
+                # Keep the small conversation model resident between turns.
+                # Without this Ollama may unload it after its idle window,
+                # making the next ordinary greeting look like a Web/GPT delay.
+                "keep_alive": "10m",
+                "options": {
+                    "num_predict": 128,
+                    "temperature": 0.4,
+                },
                 "messages": [
                     {
                         "role": "system",
                         "content": (
                             "너는 EEEE라는 한국어 개인 비서야. "
-                            "최종 답변은 반드시 자연스러운 한국어로만 작성해. "
-                            "사용자의 질문에 바로 답하고, 네가 컴퓨터 앱이나 AI라는 설명, "
-                            "정해진 안내문, JSON, 영어 문장을 출력하지 마. "
-                            "인사에는 자연스럽게 답하고, 이유를 묻는 질문에는 이유를 설명하고, "
-                            "추천을 묻는 질문에는 선택지를 제안해. "
-                            "정말 필요한 경우에만 짧게 되물어봐."
+                            "사용자에게 바로 답하고 자연스러운 한국어 1~3문장만 써. "
+                            "JSON, 영어, 내부 라우팅 설명, 정해진 안내문은 쓰지 마. "
+                            "현재 이 대화는 로컬 Ollama AI가 처리하고 있어. "
+                            "사용자가 어떤 AI를 쓰는지 물으면 GPT Web이 아니라 로컬 AI라고 사실대로 답해."
                         ),
                     },
-                    {"role": "user", "content": prompt + "\nObservations:\n" + repr(context)},
+                    {"role": "user", "content": prompt},
                 ],
             },
             timeout=self.timeout,
@@ -277,6 +284,20 @@ class LocalConversationRuntime:
         self.backend = backend
 
     def run(self, request: AgentRequest) -> AgentResult:
+        # Provider identity must not be delegated to a small local model: it
+        # can otherwise confidently invent that a Web/GPT session answered.
+        # Answer this narrow diagnostic turn deterministically while keeping
+        # all other ordinary conversation on the local model.
+        if re.search(r"\b(?:gpt|chatgpt)\b|지피티|챗gpt", request.prompt, re.IGNORECASE):
+            return AgentResult(
+                status="completed",
+                summary=(
+                    "지금 이 일반 대화는 GPT Web이 아니라 내 컴퓨터의 로컬 AI로 처리하고 있어. "
+                    "프로젝트 개발처럼 전문 작업이 필요할 때만 별도 작업 에이전트 경로를 사용할게."
+                ),
+                events=[{"type": "local.conversation", "provider": "ollama"}],
+                changed_files=[], test_commands=[], error=None,
+            )
         prompt = (
             "일반 대화만 처리해. 파일을 읽거나 바꾸지 말고, 명령을 실행하거나 프로젝트를 계획하거나 도구를 호출하지 마. "
             "아래 사용자 요청에 직접 답해. 최종 답변은 자연스러운 한국어 1~3문장으로만 작성하고, "

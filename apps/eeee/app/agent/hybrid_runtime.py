@@ -95,12 +95,26 @@ class FastLocalConversationRuntime:
                     events=[{"type": "local.fast-conversation", "provider": "builtin"}],
                     changed_files=[], test_commands=[], error=None,
                 )
+        contextual_responses = (
+            (("회의", "미팅"), "좋아, 회의 정리부터 도와줄게. 메모를 보내주면 핵심 내용과 할 일을 나눠서 정리할게."),
+            (("점심", "저녁", "메뉴", "먹을까"), "점심 메뉴를 같이 골라보자. 먹고 싶은 종류나 피하고 싶은 재료를 말해줘."),
+            (("일정", "약속", "캘린더"), "일정으로 정리해둘게. 날짜와 시간을 알려주면 놓치지 않게 다음 행동까지 정리할게."),
+            (("기억", "기억해"), "응, 앞으로 비슷한 상황에서 참고할 수 있도록 안전한 내용만 기억할게. 무엇을 기억하면 될까?"),
+        )
+        for phrases, response in contextual_responses:
+            if any(phrase in normalized for phrase in phrases):
+                return AgentResult(
+                    status="completed",
+                    summary=response,
+                    events=[{"type": "local.fast-conversation", "provider": "builtin"}],
+                    changed_files=[], test_commands=[], error=None,
+                )
         # Keep ordinary conversation local and immediate. Complex work is
         # routed to the Web/ISEOL lane by ProviderPolicy; an unknown casual
         # sentence must not unexpectedly open a slow Web conversation.
         return AgentResult(
             status="completed",
-            summary="응, 여기서 바로 대화할게. 하고 싶은 말을 편하게 말해줘.",
+            summary="응, 듣고 있어. 지금 하려는 일이나 궁금한 점을 한 문장으로 말해주면 바로 같이 정리할게.",
             events=[{"type": "local.fast-conversation.generic", "provider": "builtin"}],
             changed_files=[], test_commands=[], error=None,
         )

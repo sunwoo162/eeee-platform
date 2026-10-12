@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.assistant.models import AssistantContext, AssistantRequest, CapabilitySelection, ResponseVerification
 from app.assistant.router import CapabilityRouter
+from app.assistant.secretary import PersonalSecretary
 from app.config import Settings
 from app.coordinator.service import Coordinator
 from app.project_runtime.models import ProjectProfile
@@ -77,6 +78,7 @@ class AssistantService:
         self.background_supervisor = background_supervisor
         self.event_publisher = event_publisher
         self.document_service = document_service
+        self.secretary = PersonalSecretary()
         self.kernel = kernel or KernelService(
             router=router, coordinator=coordinator, store=store, settings=settings,
             provisioner=provisioner, event_publisher=event_publisher,
@@ -140,6 +142,12 @@ class AssistantService:
             self.coordinator.remember_user_preference(
                 implicit_preference.key,
                 implicit_preference.value,
+                scope={"source": "automatic_learning"},
+            )
+        for key, value in self.secretary.rememberable_facts(text):
+            self.coordinator.remember_user_preference(
+                key,
+                value,
                 scope={"source": "automatic_learning"},
             )
         envelope = self.kernel.route(

@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from app.assistant.models import AssistantContext, AssistantRequest, CapabilityDescriptor, CapabilityPlan
+from app.assistant.secretary import PersonalSecretary, SecretaryContext
 from app.agent.protocol import AgentRequest, AgentRuntime
 from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
 from app.config import Settings
@@ -91,6 +92,7 @@ class GeneralConversationCapability:
         self.runtime = runtime
         self.workspace_root = workspace_root or Path.cwd()
         self.chatgpt_web_enabled = chatgpt_web_enabled
+        self.secretary = PersonalSecretary()
 
     def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
         return CapabilityPlan(
@@ -124,15 +126,14 @@ class GeneralConversationCapability:
             # answer ordinary chat without being rejected by workspace safety.
             workspace.mkdir(parents=True, exist_ok=True)
             result = self.runtime.run(AgentRequest(
-                prompt=(
-                    f"사용자 요청: {plan.inputs['text']}\n"
-                    f"사용자 기억 식별자: {json.dumps({
-                        'memoryIds': plan.inputs.get('memoryIds', []),
-                        'qaBaselineIds': plan.inputs.get('qaBaselineIds', []),
-                        'userPreferences': plan.inputs.get('userPreferences', {}),
-                    }, ensure_ascii=False, sort_keys=True)}\n"
-                    f"관련 기억 내용: {plan.inputs.get('memoryContext', '{}')}"
-                    f"\n최근 대화: {json.dumps(plan.inputs.get('conversationHistory', []), ensure_ascii=False)}"
+                prompt=self.secretary.build_prompt(
+                    str(plan.inputs['text']),
+                    SecretaryContext(
+                        conversation_id=str(plan.inputs.get('conversationId', 'desktop-default')),
+                        recent_turns=list(plan.inputs.get('conversationHistory', [])),
+                        preferences=dict(plan.inputs.get('userPreferences', {})),
+                        memory_context=str(plan.inputs.get('memoryContext', '{}')),
+                    ),
                 ),
                 workspace=workspace,
                 allowed_actions=["read"], run_id=envelope_context.envelope.execution_id,

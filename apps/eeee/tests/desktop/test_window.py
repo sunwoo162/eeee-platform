@@ -147,7 +147,7 @@ def test_cat_keyboard_pet_assets_are_loaded_and_typing_switches_hands():
     window.close()
 
 
-def test_right_repeat_uses_only_the_new_short_pose_and_keeps_existing_poses():
+def test_right_repeat_uses_the_same_hand_short_pose():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
@@ -156,21 +156,18 @@ def test_right_repeat_uses_only_the_new_short_pose_and_keeps_existing_poses():
     window._typing_hand_press_count = 1
     assert window._typing_frame_name() == "right"
     window._typing_hand_press_count = 2
-    assert window._typing_frame_name() == "right_repeat"
+    assert window._typing_frame_name() == "right_press"
     assert window._press_source_frame("right") == "left_alt"
     window.close()
 
 
-def test_right_hand_has_raised_extended_and_short_extended_assets():
+def test_right_hand_uses_the_viewer_left_keyboard_pose_assets():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
     asset_dir = Path(__file__).resolve().parents[2] / "app" / "desktop" / "assets"
 
-    # The raised frame is the user-approved source. The normal pressed frame
-    # keeps the existing PR asset, while repeat uses the additive short pose.
-    assert (asset_dir / "cat-keyboard-right-raised.png").is_file()
+    assert (asset_dir / "cat-keyboard-left.png").is_file()
     assert (asset_dir / "cat-keyboard-left-alt.png").is_file()
-    assert (asset_dir / "cat-keyboard-right-repeat.png").is_file()
     assert window._press_source_frame("right") == "left_alt"
     window._typing_hand_press_count = 1
     assert window._typing_frame_name() == "left"
@@ -178,12 +175,11 @@ def test_right_hand_has_raised_extended_and_short_extended_assets():
     window._typing_hand_press_count = 1
     assert window._typing_frame_name() == "right"
     window._typing_hand_press_count = 2
-    assert window._typing_frame_name() == "right_repeat"
+    assert window._typing_frame_name() == "right_press"
     assert len({
-        (asset_dir / "cat-keyboard-right-raised.png").read_bytes(),
+        (asset_dir / "cat-keyboard-left.png").read_bytes(),
         (asset_dir / "cat-keyboard-left-alt.png").read_bytes(),
-        (asset_dir / "cat-keyboard-right-repeat.png").read_bytes(),
-    }) == 3
+    }) == 2
     window.close()
 
 
@@ -269,7 +265,7 @@ def test_repeated_keys_animate_the_same_visual_hand_until_the_physical_side_chan
     assert window._typing_frame_name() == "right"
     window._apply_global_key_states({})
     window._apply_global_key_states({0xBC: True})  # comma: same hand, pressed pose
-    assert window._typing_frame_name() == "right_repeat"
+    assert window._typing_frame_name() == "right_press"
     window.close()
 
 

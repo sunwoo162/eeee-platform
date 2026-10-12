@@ -264,13 +264,13 @@ class PetWindow:
                         # export direction; user input direction is the
                         # opposite, so keep the mapping explicit here.
                         "left": "cat-keyboard-right.png",
-                        # The approved raised-right-paw frame is a separate
-                        # source asset.  Keep the older right-hand frames
-                        # available for the extended/short states.
-                        "right": "cat-keyboard-right-raised.png",
+                        # The cat's right hand is the paw on the viewer's
+                        # left.  Keep it on the left-hand-named source export;
+                        # the logical hand name is anatomical, not viewer
+                        # relative.
+                        "right": "cat-keyboard-left.png",
                         "left_alt": "cat-keyboard-right-alt.png",
                         "right_alt": "cat-keyboard-left-alt.png",
-                        "right_repeat": "cat-keyboard-right-repeat.png",
                         "gaze_left": "cat-keyboard-gaze-left.png",
                         "gaze_right": "cat-keyboard-gaze-right.png",
                     }.items()
@@ -713,9 +713,8 @@ class PetWindow:
                 """Keep the keyboard fixed while changing only the eyes."""
                 base = self._pet_pixmaps.get("idle")
                 is_gaze = frame.startswith("gaze_")
-                is_repeat = frame.endswith("_repeat")
                 is_press = frame.endswith("_press")
-                base_frame = frame.removesuffix("_repeat").removesuffix("_press")
+                base_frame = frame.removesuffix("_press")
                 is_typing = base_frame in {"left", "right", "left_alt", "right_alt"}
                 if not is_gaze and not is_typing:
                     return self._pet_pixmaps.get(frame)
@@ -724,11 +723,7 @@ class PetWindow:
                     if asset_spec is None:
                         return self._pet_pixmaps.get(base_frame)
                     base = self._pet_pixmaps.get(asset_spec["body"])
-                    paw_key = (
-                        "right_repeat"
-                        if is_repeat and base_frame == "right"
-                        else asset_spec["press"] if is_press else asset_spec["base"]
-                    )
+                    paw_key = asset_spec["press"] if is_press else asset_spec["base"]
                     paw_source = self._pet_pixmaps.get(paw_key)
                     if base is not None and paw_source is not None:
                         composed = base.copy()
@@ -826,8 +821,6 @@ class PetWindow:
                 so Korean IME repeats (for example ``ㅇ``/physical D) animate
                 while remaining on the left paw.
                 """
-                if self._typing_hand == "right" and self._typing_hand_press_count >= 2:
-                    return "right_repeat"
                 suffix = "_press" if self._typing_hand_press_count % 2 == 0 else ""
                 return f"{self._typing_hand}{suffix}"
 

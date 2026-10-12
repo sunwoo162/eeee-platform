@@ -214,25 +214,50 @@ class AssistantService:
             raise KeyError(f"Assistant job not found: {job_id}")
         return self.background_supervisor.get(job_id)
 
+    def list_background_jobs(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
+        if self.background_supervisor is None:
+            return []
+        return self.background_supervisor.list_jobs(status=status, limit=limit)
+
+    def pause_background_job(self, job_id: str) -> dict[str, object]:
+        if self.background_supervisor is None:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return self.background_supervisor.pause(job_id)
+
+    def cancel_background_job(self, job_id: str) -> dict[str, object]:
+        if self.background_supervisor is None:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return self.background_supervisor.cancel(job_id)
+
+    def resume_background_job(self, job_id: str) -> dict[str, object]:
+        if self.background_supervisor is None:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return self.background_supervisor.resume(job_id, self._background_operation_factory)
+
+    def retry_background_job(self, job_id: str) -> dict[str, object]:
+        if self.background_supervisor is None:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return self.background_supervisor.retry(job_id, self._background_operation_factory)
+
     def resume_background_jobs(self) -> list[str]:
         if self.background_supervisor is None:
             return []
 
-        def operation_factory(job: dict[str, object]):
-            input_data = job.get("input", {})
-            input_data = input_data if isinstance(input_data, dict) else {}
-            text = input_data.get("text")
-            workspace = input_data.get("workspace")
-            requested_capability = input_data.get("requestedCapability")
-            conversation_id = input_data.get("conversationId")
-            if not isinstance(text, str) or not text.strip():
-                return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
-            return lambda: self._route_sync(
-                text,
-                workspace if isinstance(workspace, str) else None,
-                requested_capability=requested_capability if isinstance(requested_capability, str) else None,
-                conversation_id=conversation_id if isinstance(conversation_id, str) else "desktop-default",
-            ).model_dump(mode="json")
+        return self.background_supervisor.resume_pending(self._background_operation_factory)
 
-        return self.background_supervisor.resume_pending(operation_factory)
+    def _background_operation_factory(self, job: dict[str, object]):
+        input_data = job.get("input", {})
+        input_data = input_data if isinstance(input_data, dict) else {}
+        text = input_data.get("text")
+        workspace = input_data.get("workspace")
+        requested_capability = input_data.get("requestedCapability")
+        conversation_id = input_data.get("conversationId")
+        if not isinstance(text, str) or not text.strip():
+            return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
+        return lambda: self._route_sync(
+            text,
+            workspace if isinstance(workspace, str) else None,
+            requested_capability=requested_capability if isinstance(requested_capability, str) else None,
+            conversation_id=conversation_id if isinstance(conversation_id, str) else "desktop-default",
+        ).model_dump(mode="json")
 

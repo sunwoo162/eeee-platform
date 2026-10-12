@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.api.service import ApiFlowService
 from app.assistant.models import CapabilitySelection
 from app.assistant.service import AssistantRouteResult, AssistantService
+from app.assistant.background import JobTransitionError
 from app.coordinator.service import Coordinator
 from app.domain.errors import ApprovalError
 from app.design.references import DesignService, ReferencePack
@@ -358,7 +359,44 @@ def build_assistant_router(
 
     @router.get("/assistant/jobs/{job_id}")
     def get_assistant_job(job_id: str) -> dict[str, object]:
-        return service.get_background_job(job_id)
+        try:
+            return service.get_background_job(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/assistant/jobs")
+    def list_assistant_jobs(
+        status: str | None = Query(default=None, max_length=40),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> list[dict[str, object]]:
+        try:
+            return service.list_background_jobs(status=status, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _job_action(action: Callable[[str], dict[str, object]], job_id: str) -> dict[str, object]:
+        try:
+            return action(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobTransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/assistant/jobs/{job_id}/pause")
+    def pause_assistant_job(job_id: str) -> dict[str, object]:
+        return _job_action(service.pause_background_job, job_id)
+
+    @router.post("/assistant/jobs/{job_id}/resume")
+    def resume_assistant_job(job_id: str) -> dict[str, object]:
+        return _job_action(service.resume_background_job, job_id)
+
+    @router.post("/assistant/jobs/{job_id}/cancel")
+    def cancel_assistant_job(job_id: str) -> dict[str, object]:
+        return _job_action(service.cancel_background_job, job_id)
+
+    @router.post("/assistant/jobs/{job_id}/retry")
+    def retry_assistant_job(job_id: str) -> dict[str, object]:
+        return _job_action(service.retry_background_job, job_id)
 
     @router.post(
         "/projects/{project_id}/documents/sync",

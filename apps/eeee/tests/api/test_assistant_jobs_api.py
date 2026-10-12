@@ -17,3 +17,24 @@ def test_assistant_job_status_is_available_from_desktop_api(tmp_path):
     assert response.json()["requestId"] == "assistant-request-api"
     assert response.json()["status"] in {"queued", "running", "completed"}
 
+
+def test_assistant_jobs_can_be_listed_and_completed_job_cannot_be_cancelled(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    application = create_app(settings)
+    with TestClient(application) as client:
+        job_id = application.state.assistant_supervisor.submit(
+            "assistant-request-api-list", lambda: {"status": "accepted"}
+        )
+        listed = client.get("/api/assistant/jobs?status=completed")
+        assert listed.status_code == 200
+        assert isinstance(listed.json(), list)
+
+        for _ in range(100):
+            status = client.get(f"/api/assistant/jobs/{job_id}").json()["status"]
+            if status == "completed":
+                break
+        response = client.post(f"/api/assistant/jobs/{job_id}/cancel")
+
+    assert response.status_code == 409
+    assert "completed" in response.json()["detail"]
+

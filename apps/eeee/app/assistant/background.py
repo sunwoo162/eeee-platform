@@ -17,6 +17,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+class JobTransitionError(RuntimeError):
+    """A durable assistant job cannot make the requested state transition."""
+
+
 class BackgroundExecutionSupervisor:
     """Run accepted assistant work outside the request thread.
 
@@ -31,6 +35,7 @@ class BackgroundExecutionSupervisor:
         self.store = store
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="eeee-job")
         self._futures: dict[str, Future[None]] = {}
+        self._operations: dict[str, Callable[[], dict[str, Any]]] = {}
         self._lock = Lock()
 
     def submit(
@@ -39,6 +44,8 @@ class BackgroundExecutionSupervisor:
     ) -> str:
         job_id = f"assistant-job-{uuid4().hex}"
         self._create(job_id, request_id, input_data or {})
+        with self._lock:
+            self._operations[job_id] = operation
         future = self._pool.submit(self._run, job_id, operation)
         with self._lock:
             self._futures[job_id] = future
@@ -63,6 +70,51 @@ class BackgroundExecutionSupervisor:
             "updatedAt": row["updated_at"],
         }
 
+    def list_jobs(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        with self.store._connect() as connection:
+            if status is None:
+                rows = connection.execute(
+                    "SELECT job_id FROM assistant_jobs ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT job_id FROM assistant_jobs WHERE status = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (status, limit),
+                ).fetchall()
+        return [self.get(str(row["job_id"])) for row in rows]
+
+    def pause(self, job_id: str) -> dict[str, object]:
+        return self._transition(job_id, "paused", {"queued", "running", "paused"})
+
+    def cancel(self, job_id: str) -> dict[str, object]:
+        return self._transition(job_id, "cancelled", {"queued", "running", "paused", "cancelled"})
+
+    def resume(
+        self,
+        job_id: str,
+        operation_factory: Callable[[dict[str, object]], Callable[[], dict[str, Any]]] | None = None,
+    ) -> dict[str, object]:
+        return self._restart(
+            job_id,
+            expected={"paused"},
+            operation_factory=operation_factory,
+        )
+
+    def retry(
+        self,
+        job_id: str,
+        operation_factory: Callable[[dict[str, object]], Callable[[], dict[str, Any]]] | None = None,
+    ) -> dict[str, object]:
+        return self._restart(
+            job_id,
+            expected={"failed", "cancelled"},
+            operation_factory=operation_factory,
+        )
+
     def shutdown(self, *, wait: bool = True) -> None:
         self._pool.shutdown(wait=wait, cancel_futures=False)
 
@@ -80,9 +132,12 @@ class BackgroundExecutionSupervisor:
                     "UPDATE assistant_jobs SET status = 'queued', error = NULL, updated_at = ? WHERE job_id = ?",
                     (_now(), row["job_id"]),
                 )
-            future = self._pool.submit(self._run, row["job_id"], operation_factory({
+            operation = operation_factory({
                 "jobId": row["job_id"], "requestId": row["request_id"], "input": input_data,
-            }))
+            })
+            with self._lock:
+                self._operations[row["job_id"]] = operation
+            future = self._pool.submit(self._run, row["job_id"], operation)
             with self._lock:
                 self._futures[row["job_id"]] = future
             resumed.append(row["job_id"])
@@ -99,13 +154,68 @@ class BackgroundExecutionSupervisor:
             )
 
     def _run(self, job_id: str, operation: Callable[[], dict[str, Any]]) -> None:
+        if self.get(job_id)["status"] in {"paused", "cancelled"}:
+            return
         self._update(job_id, "running")
         try:
             result = operation()
         except Exception as exc:
-            self._update(job_id, "failed", error=str(exc).strip() or type(exc).__name__)
+            if self.get(job_id)["status"] not in {"paused", "cancelled"}:
+                self._update(job_id, "failed", error=str(exc).strip() or type(exc).__name__)
             return
-        self._update(job_id, "completed", result=result)
+        if self.get(job_id)["status"] not in {"paused", "cancelled"}:
+            self._update(job_id, "completed", result=result)
+
+    def _transition(self, job_id: str, target: str, allowed: set[str]) -> dict[str, object]:
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT status FROM assistant_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Assistant job not found: {job_id}")
+            current = str(row["status"])
+            if current not in allowed:
+                raise JobTransitionError(
+                    f"Assistant job {job_id} cannot transition from {current} to {target}"
+                )
+            if current != target:
+                connection.execute(
+                    "UPDATE assistant_jobs SET status = ?, updated_at = ? WHERE job_id = ?",
+                    (target, _now(), job_id),
+                )
+        return self.get(job_id)
+
+    def _restart(
+        self,
+        job_id: str,
+        *,
+        expected: set[str],
+        operation_factory: Callable[[dict[str, object]], Callable[[], dict[str, Any]]] | None,
+    ) -> dict[str, object]:
+        job = self.get(job_id)
+        status = str(job["status"])
+        if status not in expected:
+            raise JobTransitionError(
+                f"Assistant job {job_id} cannot restart from {status}"
+            )
+        with self._lock:
+            operation = self._operations.get(job_id)
+        if operation is None and operation_factory is not None:
+            operation = operation_factory(job)
+        if operation is None:
+            raise JobTransitionError(f"Assistant job {job_id} has no resumable operation")
+        with self.store._connect() as connection:
+            connection.execute(
+                "UPDATE assistant_jobs SET status = 'queued', result_json = NULL, "
+                "error = NULL, updated_at = ? WHERE job_id = ?",
+                (_now(), job_id),
+            )
+        with self._lock:
+            self._operations[job_id] = operation
+        future = self._pool.submit(self._run, job_id, operation)
+        with self._lock:
+            self._futures[job_id] = future
+        return self.get(job_id)
 
     def _update(
         self, job_id: str, status: str, *, result: dict[str, Any] | None = None,

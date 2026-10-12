@@ -275,10 +275,11 @@ class PetWindow:
                         "paw_right_rest": "pet/paw-right-rest.png",
                         "left_short": "cat-keyboard-left-alt.png",
                         # Repeated right-hand input uses the dedicated short
-                        # paw export.  Do not crop the full alternate pose:
-                        # its long resting paw becomes a stray finger.
-                        "right_repeat": "cat-keyboard-right-repeat.png",
-                        "right_short": "cat-keyboard-right-repeat.png",
+                        # paw on the viewer's right.  The old repeat export
+                        # was the opposite-side paw, so clipping it into this
+                        # frame produced a broken keyboard-shaped patch.
+                        "right_repeat": "cat-keyboard-right-short-press.png",
+                        "right_short": "cat-keyboard-right-short-press.png",
                         "gaze_left": "cat-keyboard-gaze-left.png",
                         "gaze_right": "cat-keyboard-gaze-right.png",
                     }.items()
@@ -747,18 +748,29 @@ class PetWindow:
                         # opposite paw's pink pads remain visible.
                         base = self._pet_pixmaps.get(asset_spec["base"])
                     else:
-                        # Repeat: change only the active paw over idle. The
-                        # opposite paw must stay down for same-array repeats.
-                        base = self._resting_pet_pixmap()
-                        paw_key = asset_spec["press"]
-                        paw_source = self._pet_pixmaps.get(paw_key)
-                        if base is not None and paw_source is not None:
-                            composed = base.copy()
-                            paw_painter = QPainter(composed)
-                            paw_painter.setClipPath(self._same_paw_clip_path(base_frame))
-                            paw_painter.drawPixmap(0, 0, paw_source)
-                            paw_painter.end()
-                            base = composed
+                        if base_frame == "right":
+                            # The right short-paw export is a complete
+                            # canvas, but it was rendered from a slightly
+                            # different keyboard composition than the idle
+                            # canvas.  Clipping it onto idle therefore leaks
+                            # shifted keyboard lines and creates a broken
+                            # paw.  Keep the approved full frame intact until
+                            # a hand-only asset with common canvas geometry is
+                            # available.
+                            base = self._pet_pixmaps.get(asset_spec["press"])
+                        else:
+                            # Repeat: change only the active paw over idle. The
+                            # opposite paw must stay down for same-array repeats.
+                            base = self._resting_pet_pixmap()
+                            paw_key = asset_spec["press"]
+                            paw_source = self._pet_pixmaps.get(paw_key)
+                            if base is not None and paw_source is not None:
+                                composed = base.copy()
+                                paw_painter = QPainter(composed)
+                                paw_painter.setClipPath(self._same_paw_clip_path(base_frame))
+                                paw_painter.drawPixmap(0, 0, paw_source)
+                                paw_painter.end()
+                                base = composed
                 if base is None or base.isNull():
                     return base
 

@@ -523,6 +523,8 @@ def build_desktop_router(
     store: SQLiteStore,
     bridge: MobileBridge,
     trust_gate: TrustGate,
+    assistant_service: AssistantService | None = None,
+    plugin_host: PluginHost | None = None,
 ) -> APIRouter:
     """Expose the local Desktop control-plane without leaking bridge secrets."""
 
@@ -545,6 +547,32 @@ def build_desktop_router(
             "projectState": None,
             "events": events[-20:],
             "latestEventCursor": int(events[-1]["cursor"]) if events else 0,
+        }
+        active_memories = coordinator.memory.list_records(status=MemoryStatus.ACTIVE, limit=500)
+        candidate_memories = coordinator.memory.list_records(status=MemoryStatus.CANDIDATE, limit=500)
+        jobs = assistant_service.list_background_jobs(limit=20) if assistant_service is not None else []
+        plugins = []
+        if plugin_host is not None:
+            plugins = [
+                {
+                    "pluginId": registration.plugin_id,
+                    "version": registration.manifest_version,
+                    "status": registration.status,
+                    "updatedAt": registration.updated_at,
+                }
+                for registration in plugin_host.list()
+            ]
+        snapshot["controlCenter"] = {
+            "sections": [
+                "conversation", "activeWork", "projects", "plugins", "memory", "settings"
+            ],
+            "jobs": jobs,
+            "memory": {
+                "activeCount": len(active_memories),
+                "candidateCount": len(candidate_memories),
+            },
+            "plugins": plugins,
+            "verification": {"claimLatch": trust_gate.health_payload()},
         }
         if project_id is not None:
             snapshot["projectProfile"] = store.get_project_profile(project_id).model_dump(

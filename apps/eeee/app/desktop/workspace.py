@@ -64,6 +64,10 @@ class WorkspaceWindow:
                 self.status.setWordWrap(True)
                 self.status.setStyleSheet("font-size: 14px; padding: 14px; background: #202332; border-radius: 12px;")
                 content.addWidget(self.status)
+                self.control_center = QLabel()
+                self.control_center.setWordWrap(True)
+                self.control_center.setStyleSheet("color: #aeb5ce; padding: 10px; background: #181a24; border-radius: 10px;")
+                content.addWidget(self.control_center)
                 self.map_title = QLabel("프로젝트 실행 조직도" if language == "ko" else "Project execution map")
                 self.map_title.setStyleSheet("font-size: 18px; font-weight: 600;")
                 content.addWidget(self.map_title)
@@ -97,6 +101,23 @@ class WorkspaceWindow:
                     if self.language == "ko"
                     else f"Status: {state}\n{message}\nProject: {project_id or 'none'}"
                 )
+                control_center = snapshot.get("controlCenter")
+                if isinstance(control_center, dict):
+                    jobs = control_center.get("jobs", [])
+                    memory = control_center.get("memory", {})
+                    plugins = control_center.get("plugins", [])
+                    active_jobs = sum(
+                        1 for job in jobs
+                        if isinstance(job, dict) and job.get("status") in {"queued", "running", "paused"}
+                    )
+                    active_count = memory.get("activeCount", 0) if isinstance(memory, dict) else 0
+                    candidate_count = memory.get("candidateCount", 0) if isinstance(memory, dict) else 0
+                    self.control_center.setText(
+                        f"활성 작업 {active_jobs}개 · 활성 기억 {active_count}개 · "
+                        f"검토 대기 기억 {candidate_count}개 · 플러그인 {len(plugins)}개"
+                    )
+                else:
+                    self.control_center.setText("EEEE 제어 센터 정보를 불러오는 중이야.")
                 self._render_map(project_id if isinstance(project_id, str) else None)
                 events = snapshot.get("events")
                 if isinstance(events, list) and events:

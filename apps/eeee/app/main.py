@@ -314,7 +314,16 @@ def create_app(
     application.include_router(build_project_view_router(project_view))
     application.include_router(build_assistant_router(assistant_service, project_documents))
     application.include_router(build_mobile_router(mobile_bridge, assistant_service, mobile_snapshot))
-    application.include_router(build_desktop_router(coordinator, store, mobile_bridge, trust_gate))
+    application.include_router(
+        build_desktop_router(
+            coordinator,
+            store,
+            mobile_bridge,
+            trust_gate,
+            assistant_service=assistant_service,
+            plugin_host=plugin_host,
+        )
+    )
     application.include_router(
         build_api_router(
             api_flow,

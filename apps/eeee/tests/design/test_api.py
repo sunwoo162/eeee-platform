@@ -36,6 +36,24 @@ def test_design_reference_api_persists_pack_and_tokens(tmp_path):
     assert "Collect reference pack" in client.get("/").text
 
 
+def test_home_surface_is_an_eeee_control_center_not_a_development_only_prompt(tmp_path):
+    client = TestClient(
+        create_app(
+            Settings(
+                data_dir=tmp_path / "data",
+                workspace_root=tmp_path / "workspaces",
+            )
+        )
+    )
+
+    page = client.get("/").text
+
+    assert 'id="eeee-control-center"' in page
+    assert 'id="eeee-active-work"' in page
+    assert 'id="eeee-memory-summary"' in page
+    assert "Ready for a development request" not in page
+
+
 def test_design_reference_pack_survives_application_restart(tmp_path):
     settings = Settings(
         data_dir=tmp_path / "data",

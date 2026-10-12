@@ -18,6 +18,11 @@ class WorkspaceClient:
             "message": "QA 검증 중",
             "projectId": "project-todo",
             "events": [{"kind": "qa.started"}],
+            "controlCenter": {
+                "jobs": [{"status": "running", "requestId": "request-1"}],
+                "memory": {"activeCount": 2, "candidateCount": 1},
+                "plugins": [],
+            },
         }
 
     def open_project(self, project_id):
@@ -43,4 +48,5 @@ def test_workspace_is_a_desktop_control_center_and_renders_project_map():
     assert window.map_tree.topLevelItem(0).child(0).text(0) == "독립 QA"
     assert window.map_tree.topLevelItem(0).child(0).text(1) == "▶ active"
     assert "QA 검증 중" in window.status.text()
+    assert "활성 기억 2개" in window.control_center.text()
     window.close()

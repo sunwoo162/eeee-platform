@@ -60,6 +60,12 @@ class RouteClient(SlowClient):
         return {"status": "completed", "message": "요청을 받았어요."}
 
 
+class SlowInitialRefreshClient(RouteClient):
+    def get_state(self):
+        time.sleep(0.2)
+        return super().get_state()
+
+
 def _wait_for(app: QApplication, predicate) -> None:
     deadline = time.monotonic() + 3
     while not predicate() and time.monotonic() < deadline:
@@ -168,6 +174,28 @@ def test_quick_chat_sends_from_both_paw_controls_and_greets_user():
     window.assistant_paw_left.click()
     _wait_for(app, lambda: client.routed_text == "안녕")
     assert client.routed_text == "안녕"
+
+    window.assistant_input.setText("다시 보내기")
+    window.assistant_paw_right.click()
+    _wait_for(app, lambda: client.routed_text == "다시 보내기")
+    assert client.routed_text == "다시 보내기"
+    window.close()
+
+
+def test_paw_send_controls_are_pink_centered_and_not_blocked_by_initial_refresh():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowInitialRefreshClient())
+    window.show_command_surface()
+    app.processEvents()
+
+    assert window.assistant_paw_left.paw_color.name() == "#ef7f9d"
+    assert window.assistant_paw_right.paw_color.name() == "#ef7f9d"
+    assert window.assistant_input.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert window.assistant_paw_left.geometry().center().x() < window.assistant_input.geometry().center().x()
+    assert window.assistant_input.geometry().center().x() < window.assistant_paw_right.geometry().center().x()
+    assert window.assistant_input.isEnabled()
+    assert window.assistant_paw_left.isEnabled()
+    assert window.assistant_paw_right.isEnabled()
     window.close()
 
 

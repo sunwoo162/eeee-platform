@@ -160,7 +160,7 @@ class PetWindow:
         on_open_chatgpt=None,
     ):
         try:
-            from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, QSize, QTimer, Qt
+            from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSettings, QSize, QTimer, Qt
             from PySide6.QtGui import (
                 QAction,
                 QColor,
@@ -224,6 +224,40 @@ class PetWindow:
                     painter.drawPixmap(self.rect(), self.bubble_pixmap)
                     painter.end()
                 super().paintEvent(event)
+
+        class _PawSendButton(QPushButton):
+            """A compact pink paw control that keeps the send affordance visible."""
+
+            def __init__(self, parent=None):
+                super().__init__("🐾", parent)
+                self.paw_color = QColor("#ef7f9d")
+                self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                self.setAccessibleName("보내기")
+
+            def paintEvent(self, event):
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(Qt.PenStyle.NoPen)
+                color = self.paw_color if self.isEnabled() else QColor("#b77b8c")
+                painter.setBrush(color)
+                center = self.rect().center()
+                scale = min(self.width(), self.height()) / 42.0
+                cx = center.x()
+                cy = center.y() + 5 * scale
+                pad_w = 17 * scale
+                pad_h = 13 * scale
+                painter.drawEllipse(
+                    QRectF(cx - pad_w / 2, cy - pad_h / 2, pad_w, pad_h)
+                )
+                toe_radius = 4 * scale
+                for dx, dy in ((-9, -9), (-3, -13), (4, -13), (10, -8)):
+                    painter.drawEllipse(
+                        QPointF(cx + dx * scale, cy + dy * scale),
+                        toe_radius,
+                        toe_radius,
+                    )
+                painter.end()
 
         class _Window(QWidget):
             def __init__(self):
@@ -412,7 +446,7 @@ class PetWindow:
                 # Keep Quick Chat compact enough to feel attached to the pet.
                 # Without a width cap, Qt lets a long response expand the
                 # tool window and pushes it far away from the character.
-                self.command_surface.setFixedWidth(340)
+                self.command_surface.setFixedWidth(360)
                 command_layout = QVBoxLayout(self.command_surface)
                 command_layout.setContentsMargins(30, 20, 30, 36)
                 self.quick_status = QLabel()
@@ -423,29 +457,33 @@ class PetWindow:
                 self.quick_reply.setObjectName("quickReply")
                 self.quick_reply.setWordWrap(True)
                 command_layout.addWidget(self.quick_reply)
-                assistant_row = QHBoxLayout()
+                self.assistant_row = QHBoxLayout()
+                self.assistant_row.setContentsMargins(0, 0, 0, 0)
+                self.assistant_row.setSpacing(8)
+                self.assistant_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.assistant_input = QLineEdit()
                 self.assistant_input.setObjectName("assistantComposer")
                 self.assistant_input.setMinimumWidth(0)
-                self.assistant_input.setMaximumWidth(220)
+                self.assistant_input.setMaximumWidth(200)
+                self.assistant_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.assistant_input.installEventFilter(self)
-                self.assistant_paw_left = QPushButton("🐾")
+                self.assistant_paw_left = _PawSendButton()
                 self.assistant_paw_left.setObjectName("sendPawLeft")
-                self.assistant_paw_left.setFixedSize(34, 34)
+                self.assistant_paw_left.setFixedSize(40, 40)
                 self.assistant_paw_left.clicked.connect(self._route_assistant)
-                self.assistant_paw_right = QPushButton("🐾")
+                self.assistant_paw_right = _PawSendButton()
                 self.assistant_paw_right.setObjectName("sendPawRight")
-                self.assistant_paw_right.setFixedSize(34, 34)
+                self.assistant_paw_right.setFixedSize(40, 40)
                 self.assistant_paw_right.clicked.connect(self._route_assistant)
                 # Keep the historical attribute for callers/tests; the
                 # visible control is now a paw send button, not a text button.
                 self.assistant_button = self.assistant_paw_right
                 self.assistant_input.returnPressed.connect(self._route_assistant)
                 self.assistant_input.textEdited.connect(self._on_user_typing)
-                assistant_row.addWidget(self.assistant_paw_left)
-                assistant_row.addWidget(self.assistant_input)
-                assistant_row.addWidget(self.assistant_paw_right)
-                command_layout.addLayout(assistant_row)
+                self.assistant_row.addWidget(self.assistant_paw_left)
+                self.assistant_row.addWidget(self.assistant_input)
+                self.assistant_row.addWidget(self.assistant_paw_right)
+                command_layout.addLayout(self.assistant_row)
                 self.command_surface.installEventFilter(self)
                 self._app.installEventFilter(self)
 
@@ -563,9 +601,9 @@ class PetWindow:
                     "padding: 0 4px; color: #33281f; }"
                     "#quickChat QLineEdit { background: transparent; padding: 6px 8px; "
                     "border: none; color: #33281f; selection-background-color: #f4c58e; }"
-                    "#quickChat QPushButton { background: transparent; padding: 2px; "
-                    "border: none; color: #33281f; font-size: 18px; }"
-                    "#quickChat QPushButton:hover { background: transparent; color: #6b4a2d; }"
+                    "#quickChat QPushButton { background: transparent; padding: 0px; "
+                    "border: none; color: #33281f; }"
+                    "#quickChat QPushButton:hover { background: transparent; }"
                     "#quickChat QPushButton:pressed { background: transparent; }"
                 )
                 self._apply_language()
@@ -580,7 +618,9 @@ class PetWindow:
                     self._render({"state": "blocked", "message": initial_error})
                 else:
                     self._timer.start(5000)
-                    self.refresh()
+                    # The first status fetch must not lock the Quick Chat
+                    # composer; it is background state, not a user action.
+                    self.refresh(silent=True)
 
             def eventFilter(self, watched, event):
                 assistant_input = getattr(self, "assistant_input", None)
@@ -1359,7 +1399,10 @@ class PetWindow:
                     if isinstance(project_state, dict)
                     else payload
                 )
-                self._render_desktop_status(status_payload)
+                if not self.current_state and not self.command_surface.isVisible():
+                    self._render(status_payload)
+                else:
+                    self._render_desktop_status(status_payload)
 
             def _render_desktop_status(self, payload: dict[str, object]) -> None:
                 project_id = payload.get("projectId")

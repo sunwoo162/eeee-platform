@@ -97,7 +97,8 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert window.assistant_input.objectName() == "assistantComposer"
     assert window.detail.objectName() == "assistantBubble"
     _wait_for(app, lambda: window.current_state.get("state") == "idle")
-    assert window.detail.text() == ""
+    _wait_for(app, lambda: window.detail.text() == "안녕하세요! 오늘은 무엇을 해볼까요?")
+    assert window.detail.text() == "안녕하세요! 오늘은 무엇을 해볼까요?"
     assert window.headline.isHidden()
     assert window.status_card.isHidden()
     assert window.command_surface.isHidden()
@@ -107,7 +108,8 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert not window.command_surface.isHidden()
     assert window.detail.isHidden()
     assert window.quick_status.isHidden()
-    assert window.quick_reply.isHidden()
+    assert window.quick_reply.text() == "안녕하세요! 오늘은 무엇을 해볼까요?"
+    assert window.quick_reply.isVisible()
     window.hide_command_surface()
     assert not window.detail.isHidden()
     window.close()
@@ -146,6 +148,26 @@ def test_quick_chat_uses_the_same_speech_bubble_asset_without_legacy_pills():
     assert not quick_bubble_pixmap.isNull()
     assert "#fff7ef" not in window.command_surface.styleSheet()
     assert "#efc28f" not in window.command_surface.styleSheet()
+    window.close()
+
+
+def test_quick_chat_sends_from_both_paw_controls_and_greets_user():
+    app = QApplication.instance() or QApplication([])
+    client = RouteClient()
+    window = PetWindow(client)
+    _wait_for(app, lambda: not window._busy)
+    window.show_command_surface()
+
+    assert window.assistant_input.placeholderText() == "무엇을 해볼까요?"
+    assert window.assistant_paw_left.text() == "🐾"
+    assert window.assistant_paw_right.text() == "🐾"
+    _wait_for(app, lambda: window.quick_reply.text() == "안녕하세요! 오늘은 무엇을 해볼까요?")
+    assert window.quick_reply.text() == "안녕하세요! 오늘은 무엇을 해볼까요?"
+
+    window.assistant_input.setText("안녕")
+    window.assistant_paw_left.click()
+    _wait_for(app, lambda: client.routed_text == "안녕")
+    assert client.routed_text == "안녕"
     window.close()
 
 

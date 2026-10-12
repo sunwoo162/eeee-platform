@@ -40,7 +40,7 @@ _DESKTOP_TEXT = {
         "window_title": "EEEE • Gleave",
         "language": "언어",
         "ready": "준비됨",
-        "start_hint": "",
+        "start_hint": "안녕하세요! 오늘은 무엇을 해볼까요?",
         "project_none": "프로젝트: 선택되지 않음",
         "runtime_none": "실행 프로필: 선택되지 않음",
         "runtime_prefix": "실행 프로필",
@@ -49,8 +49,8 @@ _DESKTOP_TEXT = {
         "configuration_prefix": "추가 설정 필요",
         "claim_checking": "ClaimLatch: 확인 중",
         "mobile_available": "모바일 브리지: 데스크톱에서 연결 가능",
-        "assistant_placeholder": "EEEE에게 다음 할 일을 물어보세요…",
-        "ask": "EEEE에게 묻기",
+        "assistant_placeholder": "무엇을 해볼까요?",
+        "ask": "🐾",
         "pairing": "휴대폰 연결 코드",
         "pairing_none": "연결 코드 없음",
         "events_none": "최근 EEEE 이벤트 없음",
@@ -81,7 +81,7 @@ _DESKTOP_TEXT = {
         "window_title": "EEEE • Gleave",
         "language": "Language",
         "ready": "Ready",
-        "start_hint": "",
+        "start_hint": "Hello! What shall we do today?",
         "project_none": "Project: none selected",
         "runtime_none": "Runtime profile: none selected",
         "runtime_prefix": "Runtime profile",
@@ -90,8 +90,8 @@ _DESKTOP_TEXT = {
         "configuration_prefix": "Configuration needed",
         "claim_checking": "ClaimLatch: checking",
         "mobile_available": "Mobile bridge: available from Desktop",
-        "assistant_placeholder": "Ask EEEE what to do next…",
-        "ask": "Ask EEEE",
+        "assistant_placeholder": "What shall we do?",
+        "ask": "🐾",
         "pairing": "Pair phone",
         "pairing_none": "No pairing code issued",
         "events_none": "No recent EEEE events",
@@ -426,17 +426,25 @@ class PetWindow:
                 assistant_row = QHBoxLayout()
                 self.assistant_input = QLineEdit()
                 self.assistant_input.setObjectName("assistantComposer")
-                self.assistant_input.setMinimumWidth(190)
-                self.assistant_input.setMaximumWidth(210)
+                self.assistant_input.setMinimumWidth(0)
+                self.assistant_input.setMaximumWidth(220)
                 self.assistant_input.installEventFilter(self)
-                self.assistant_button = QPushButton()
-                self.assistant_button.setObjectName("primaryAction")
-                self.assistant_button.setFixedWidth(108)
-                self.assistant_button.clicked.connect(self._route_assistant)
+                self.assistant_paw_left = QPushButton("🐾")
+                self.assistant_paw_left.setObjectName("sendPawLeft")
+                self.assistant_paw_left.setFixedSize(34, 34)
+                self.assistant_paw_left.clicked.connect(self._route_assistant)
+                self.assistant_paw_right = QPushButton("🐾")
+                self.assistant_paw_right.setObjectName("sendPawRight")
+                self.assistant_paw_right.setFixedSize(34, 34)
+                self.assistant_paw_right.clicked.connect(self._route_assistant)
+                # Keep the historical attribute for callers/tests; the
+                # visible control is now a paw send button, not a text button.
+                self.assistant_button = self.assistant_paw_right
                 self.assistant_input.returnPressed.connect(self._route_assistant)
                 self.assistant_input.textEdited.connect(self._on_user_typing)
+                assistant_row.addWidget(self.assistant_paw_left)
                 assistant_row.addWidget(self.assistant_input)
-                assistant_row.addWidget(self.assistant_button)
+                assistant_row.addWidget(self.assistant_paw_right)
                 command_layout.addLayout(assistant_row)
                 self.command_surface.installEventFilter(self)
                 self._app.installEventFilter(self)
@@ -555,9 +563,10 @@ class PetWindow:
                     "padding: 0 4px; color: #33281f; }"
                     "#quickChat QLineEdit { background: transparent; padding: 6px 8px; "
                     "border: none; color: #33281f; selection-background-color: #f4c58e; }"
-                    "#quickChat QPushButton { background: transparent; padding: 6px 8px; "
-                    "border: none; color: #33281f; font-weight: 600; }"
+                    "#quickChat QPushButton { background: transparent; padding: 2px; "
+                    "border: none; color: #33281f; font-size: 18px; }"
                     "#quickChat QPushButton:hover { background: transparent; color: #6b4a2d; }"
+                    "#quickChat QPushButton:pressed { background: transparent; }"
                 )
                 self._apply_language()
                 self._timer = QTimer(self)
@@ -651,7 +660,13 @@ class PetWindow:
                 # Quick Chat lives above the pet. It reuses the same response
                 # bubble for the latest answer and places the composer below
                 # that answer, so nothing is rendered under the character.
-                self.quick_reply.setText(self.detail.text())
+                latest_reply = self.detail.text().strip()
+                if latest_reply in {
+                    self._text("connecting"),
+                    self._text("assistant_busy"),
+                }:
+                    latest_reply = ""
+                self.quick_reply.setText(latest_reply or self._text("start_hint"))
                 self.detail.hide()
                 self._reply_hide_timer.stop()
                 self.command_surface.show()
@@ -1183,7 +1198,9 @@ class PetWindow:
                 self.setWindowTitle(f"{self.profile_name} • Gleave")
                 self.language_label.setText(self._text("language"))
                 self.assistant_input.setPlaceholderText(self._text("assistant_placeholder"))
-                self.assistant_button.setText(self._text("ask"))
+                for paw_button in (self.assistant_paw_left, self.assistant_paw_right):
+                    paw_button.setText(self._text("ask"))
+                    paw_button.setToolTip("보내기" if self.language == "ko" else "Send")
                 self.pairing_button.setText(self._text("pairing"))
                 self.pairing_status.setText(self._text("pairing_none"))
                 self.workspace_button.setText(self._text("open_workspace"))
@@ -1219,7 +1236,8 @@ class PetWindow:
                 self.request_input.setEnabled(not self._busy)
                 self.request_button.setEnabled(not self._busy)
                 self.assistant_input.setEnabled(not self._busy)
-                self.assistant_button.setEnabled(not self._busy)
+                self.assistant_paw_left.setEnabled(not self._busy)
+                self.assistant_paw_right.setEnabled(not self._busy)
                 self.candidate_select.setEnabled(not self._busy)
                 self.approve_button.setEnabled(
                     not self._busy and view.show_approval and self.candidate_select.count() > 0
@@ -1308,7 +1326,7 @@ class PetWindow:
                 headlines = _DESKTOP_TEXT[self.language]["headline"]
                 self.headline.setText(headlines.get(view.state, view.headline))
                 detail = view.detail
-                if view.state == "idle" and detail == "Ready for a development request":
+                if view.state == "idle":
                     detail = self._text("start_hint")
                 self.quick_status.setText(headlines.get(view.state, view.headline))
                 self._reply_hide_timer.stop()

@@ -417,4 +417,3 @@
   git add <affected-source-or-test-files>
   git commit -m "fix: address plugin platform verification finding"
   ```
-

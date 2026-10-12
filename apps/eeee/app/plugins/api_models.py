@@ -38,4 +38,3 @@ class PluginHealthView(BaseModel):
     status: str
     code: str
     reason: str
-

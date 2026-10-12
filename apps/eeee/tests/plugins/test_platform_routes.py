@@ -88,4 +88,3 @@ def test_malformed_user_scope_is_rejected(tmp_path) -> None:
         "/api/plugins/notion/connection", headers={"X-EEEE-User-Id": "../other-user"}
     )
     assert response.status_code == 400
-

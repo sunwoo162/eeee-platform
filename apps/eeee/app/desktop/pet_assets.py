@@ -40,33 +40,22 @@ PET_ASSET_TABLE = {
         "base": "right",
         "press": "right_short",
         "paw_mask": {
-            # The logical right hand is the paw on the viewer's right.  The
-            # previous mask targeted the opposite paw and included a large
-            # section of the keyboard, which exposed the full-canvas repeat
-            # asset as a broken polygon on consecutive right-hand presses.
-            "x_min": 1020,
-            "x_max": 1275,
-            "y_min": 500,
-            "y_max": 750,
+            "x_min": 417,
+            "x_max": 637,
+            "y_min": 570,
+            "y_max": 765,
             "points": (
-                # Follow just outside the short-paw silhouette so its black
-                # outline is not cut by the clip. Keep the lower edge tight
-                # enough that keyboard rows remain owned by the stable base.
-                (1030, 675),
-                (1035, 615),
-                (1055, 575),
-                (1095, 535),
-                (1140, 510),
-                (1200, 515),
-                (1250, 540),
-                (1270, 580),
-                (1265, 630),
-                (1235, 670),
-                (1200, 710),
-                (1160, 730),
-                (1115, 735),
-                (1070, 720),
-                (1035, 690),
+                (512, 570),
+                (457, 595),
+                (422, 650),
+                (437, 705),
+                (477, 750),
+                (527, 765),
+                (582, 755),
+                (617, 725),
+                (632, 685),
+                (614, 640),
+                (572, 600),
             ),
         },
     },

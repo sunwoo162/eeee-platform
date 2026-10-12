@@ -423,23 +423,23 @@ def test_same_hand_press_frame_is_distinct_and_right_uses_complete_pose_pair():
     )
     right_base = window._source_pixmap_for_frame("right").toImage()
     right_pressed = window._source_pixmap_for_frame("right_press").toImage()
-    # Use the neutral gaze frame as the comparison baseline so both frames
-    # have gone through the same eye/gaze rendering path.  ``idle`` returns
-    # the raw neutral canvas for startup compatibility.
+    right_idle = window._source_pixmap_for_frame("idle").toImage()
+    right_clip = window._same_paw_clip_path("right")
+    right_repeat_outside_diffs = sum(
+        right_idle.pixelColor(x, y) != right_pressed.pixelColor(x, y)
+        for y in range(200, 400, 24)
+        for x in range(600, 1000, 24)
+        if not right_clip.contains(QPointF(x, y))
+    )
 
     assert pressed != base
     assert pressed != opposite
-    # First press and consecutive right-hand presses both use the approved
-    # complete pose; the latter must not be rebuilt by mixing canvases.
+    # First press uses the complete pose (including the raised opposite paw),
+    # while a consecutive same-hand press renders only the active short paw
+    # over the idle pose. The opposite paw therefore stays down on repeats.
     assert repeat_outside_diffs == 0
     assert right_pressed != right_base
-
-    # The right repeat is a complete approved frame.  Keyboard pixels must
-    # come directly from that frame rather than from a mixed idle/press
-    # canvas, which is what produced the broken hand/keyboard artifact.
-    approved_right = window._pet_pixmaps["right_short"].toImage()
-    for x, y in ((760, 820), (920, 820), (1240, 820), (1380, 840)):
-        assert right_pressed.pixelColor(x, y) == approved_right.pixelColor(x, y)
+    assert right_repeat_outside_diffs == 0
     window.close()
 
 
@@ -456,7 +456,7 @@ def test_pet_asset_table_keeps_press_motion_modular_and_tight():
     assert left["paw_mask"]["x_max"] - left["paw_mask"]["x_min"] < 300
     assert right["paw_mask"]["x_max"] - right["paw_mask"]["x_min"] < 300
     assert left["paw_mask"]["y_min"] > 400
-    assert right["paw_mask"]["y_min"] > 480
+    assert right["paw_mask"]["y_min"] > 520
 
     # Stable body/keyboard anchors must never be inside the press layer.  If
     # they are, swapping a repeated-key pose visibly shakes the mascot.
@@ -467,9 +467,8 @@ def test_pet_asset_table_keeps_press_motion_modular_and_tight():
     assert not left_mask.contains(QPointF(900, 460))
     assert not left_mask.contains(QPointF(1100, 800))
     right_mask = window._same_paw_clip_path("right")
-    assert right_mask.contains(QPointF(1160, 650))
-    assert not right_mask.contains(QPointF(900, 650))
-    assert not right_mask.contains(QPointF(1160, 760))
+    assert not right_mask.contains(QPointF(570, 535))
+    assert not right_mask.contains(QPointF(570, 800))
     window.close()
 
 

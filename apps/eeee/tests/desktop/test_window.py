@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -157,6 +158,32 @@ def test_right_repeat_uses_only_the_new_short_pose_and_keeps_existing_poses():
     window._typing_hand_press_count = 2
     assert window._typing_frame_name() == "right_repeat"
     assert window._press_source_frame("right") == "left_alt"
+    window.close()
+
+
+def test_right_hand_has_raised_extended_and_short_extended_assets():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    asset_dir = Path(__file__).resolve().parents[2] / "app" / "desktop" / "assets"
+
+    # The raised frame is the user-approved source. The normal pressed frame
+    # keeps the existing PR asset, while repeat uses the additive short pose.
+    assert (asset_dir / "cat-keyboard-right-raised.png").is_file()
+    assert (asset_dir / "cat-keyboard-left-alt.png").is_file()
+    assert (asset_dir / "cat-keyboard-right-repeat.png").is_file()
+    assert window._press_source_frame("right") == "left_alt"
+    window._typing_hand_press_count = 1
+    assert window._typing_frame_name() == "left"
+    window._typing_hand = "right"
+    window._typing_hand_press_count = 1
+    assert window._typing_frame_name() == "right"
+    window._typing_hand_press_count = 2
+    assert window._typing_frame_name() == "right_repeat"
+    assert len({
+        (asset_dir / "cat-keyboard-right-raised.png").read_bytes(),
+        (asset_dir / "cat-keyboard-left-alt.png").read_bytes(),
+        (asset_dir / "cat-keyboard-right-repeat.png").read_bytes(),
+    }) == 3
     window.close()
 
 

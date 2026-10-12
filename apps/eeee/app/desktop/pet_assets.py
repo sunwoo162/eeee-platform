@@ -7,12 +7,13 @@ another full-canvas image swap.
 """
 
 PET_ASSET_TABLE = {
-    # Each frame is a complete pose. The active hand is on the keyboard and
-    # the opposite hand is raised; *_press is the compact repeat pose.
+    # ``left`` and ``right`` are physical keyboard hands.  The artwork is
+    # mirrored from the user's point of view, hence the intentionally crossed
+    # legacy names in the source files.
     "left": {
         "body": "idle",
         "base": "left",
-        "press": "left_alt",
+        "press": "right_alt",
         "paw_mask": {
             "x_min": 980,
             "x_max": 1275,
@@ -37,7 +38,7 @@ PET_ASSET_TABLE = {
     "right": {
         "body": "idle",
         "base": "right",
-        "press": "right_alt",
+        "press": "left_alt",
         "paw_mask": {
             "x_min": 417,
             "x_max": 637,

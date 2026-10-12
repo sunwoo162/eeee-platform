@@ -147,7 +147,7 @@ def test_cat_keyboard_pet_assets_are_loaded_and_typing_switches_hands():
     window.close()
 
 
-def test_right_repeat_uses_the_named_short_typing_pose():
+def test_right_repeat_uses_only_the_new_short_pose_and_keeps_existing_poses():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
@@ -156,37 +156,34 @@ def test_right_repeat_uses_the_named_short_typing_pose():
     window._typing_hand_press_count = 1
     assert window._typing_frame_name() == "right"
     window._typing_hand_press_count = 2
-    assert window._typing_frame_name() == "right_press"
-    assert window._press_source_frame("right") == "right_alt"
+    assert window._typing_frame_name() == "right_repeat"
+    assert window._press_source_frame("right") == "left_alt"
     window.close()
 
 
-def test_five_runtime_pet_assets_have_explicit_names():
+def test_right_hand_has_raised_extended_and_short_extended_assets():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
     asset_dir = Path(__file__).resolve().parents[2] / "app" / "desktop" / "assets"
 
-    asset_names = (
-        "cat-keyboard-idle.png",
-        "cat-keyboard-left-typing.png",
-        "cat-keyboard-left-typing-short.png",
-        "cat-keyboard-right-typing.png",
-        "cat-keyboard-right-typing-short.png",
-    )
-    assert all((asset_dir / name).is_file() for name in asset_names)
-    assert window._press_source_frame("left") == "left_alt"
-    assert window._press_source_frame("right") == "right_alt"
+    # The raised frame is the user-approved source. The normal pressed frame
+    # keeps the existing PR asset, while repeat uses the additive short pose.
+    assert (asset_dir / "cat-keyboard-right-raised.png").is_file()
+    assert (asset_dir / "cat-keyboard-left-alt.png").is_file()
+    assert (asset_dir / "cat-keyboard-right-repeat.png").is_file()
+    assert window._press_source_frame("right") == "left_alt"
     window._typing_hand_press_count = 1
     assert window._typing_frame_name() == "left"
     window._typing_hand = "right"
     window._typing_hand_press_count = 1
     assert window._typing_frame_name() == "right"
     window._typing_hand_press_count = 2
-    assert window._typing_frame_name() == "right_press"
+    assert window._typing_frame_name() == "right_repeat"
     assert len({
-        (asset_dir / name).read_bytes()
-        for name in asset_names
-    }) == 5
+        (asset_dir / "cat-keyboard-right-raised.png").read_bytes(),
+        (asset_dir / "cat-keyboard-left-alt.png").read_bytes(),
+        (asset_dir / "cat-keyboard-right-repeat.png").read_bytes(),
+    }) == 3
     window.close()
 
 
@@ -272,7 +269,7 @@ def test_repeated_keys_animate_the_same_visual_hand_until_the_physical_side_chan
     assert window._typing_frame_name() == "right"
     window._apply_global_key_states({})
     window._apply_global_key_states({0xBC: True})  # comma: same hand, pressed pose
-    assert window._typing_frame_name() == "right_press"
+    assert window._typing_frame_name() == "right_repeat"
     window.close()
 
 
@@ -337,8 +334,8 @@ def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
-    assert window._press_source_frame("left") == "left_alt"
-    assert window._press_source_frame("right") == "right_alt"
+    assert window._press_source_frame("left") == "right_alt"
+    assert window._press_source_frame("right") == "left_alt"
 
     base = window._source_pixmap_for_frame("left").toImage()
     pressed = window._source_pixmap_for_frame("left_press").toImage()
@@ -374,10 +371,10 @@ def test_pet_asset_table_keeps_press_motion_modular_and_tight():
 
     assert left["body"] == "idle"
     assert left["base"] == "left"
-    assert left["press"] == "left_alt"
+    assert left["press"] == "right_alt"
     assert right["body"] == "idle"
     assert right["base"] == "right"
-    assert right["press"] == "right_alt"
+    assert right["press"] == "left_alt"
     assert left["paw_mask"]["x_max"] - left["paw_mask"]["x_min"] < 300
     assert right["paw_mask"]["x_max"] - right["paw_mask"]["x_min"] < 300
     assert left["paw_mask"]["y_min"] > 400

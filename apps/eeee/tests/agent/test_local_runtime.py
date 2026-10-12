@@ -98,10 +98,35 @@ def test_ollama_backend_adapts_conversational_finish_response(monkeypatch, tmp_p
     assert result.actions[0].kind == "finish"
 
 
+def test_ollama_backend_plain_conversation_does_not_request_json(monkeypatch, tmp_path):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "점심은 가볍게 국수나 샌드위치가 좋겠어요."}}
+
+    calls = []
+    monkeypatch.setattr(
+        "app.agent.local_runtime.httpx.post",
+        lambda *args, **kwargs: (calls.append((args, kwargs)) or Response()),
+    )
+
+    result = OllamaBackend(model="qwen2.5:1.5b").complete_text(
+        "오늘 점심 뭐 먹을까?", workspace=tmp_path, context=[]
+    )
+
+    payload = calls[0][1]["json"]
+    assert result == "점심은 가볍게 국수나 샌드위치가 좋겠어요."
+    assert payload["stream"] is False
+    assert "format" not in payload
+    assert "JSON" in payload["messages"][0]["content"]
+
+
 def test_local_conversation_lane_returns_text_without_executing_actions(tmp_path):
     class ConversationBackend:
         def complete(self, prompt, *, workspace, context):
-            assert "ordinary conversation only" in prompt
+            assert "일반 대화만 처리해" in prompt
             return LocalModelResponse(
                 summary="도와줄 수 있는 일을 함께 정리해볼게.",
                 actions=[LocalAction(kind="run", argv=["not-used"])],
@@ -116,3 +141,23 @@ def test_local_conversation_lane_returns_text_without_executing_actions(tmp_path
     assert result.summary == "도와줄 수 있는 일을 함께 정리해볼게."
     assert result.changed_files == []
     assert result.test_commands == []
+
+
+def test_local_conversation_lane_uses_plain_text_backend_when_available(tmp_path):
+    class PlainTextBackend:
+        def __init__(self):
+            self.prompts = []
+
+        def complete_text(self, prompt, *, workspace, context):
+            self.prompts.append(prompt)
+            return "그럴 수 있어. 수면과 식사 상태부터 같이 확인해보자."
+
+    backend = PlainTextBackend()
+    result = LocalConversationRuntime(backend=backend).run(
+        AgentRequest("내가 왜 피곤한지 설명해줘.", tmp_path, [], "conversation-plain")
+    )
+
+    assert result.status == "completed"
+    assert result.summary == "그럴 수 있어. 수면과 식사 상태부터 같이 확인해보자."
+    assert "Return exactly one JSON object" not in backend.prompts[0]
+    assert "일반 대화만 처리해" in backend.prompts[0]

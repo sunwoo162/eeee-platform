@@ -273,6 +273,10 @@ export async function startEeeeChatGptWebBridge(options: { host?: string; port?:
       const input = JSON.parse(await readBody(request)) as ChatRequest;
       return json(response, 200, await queuedChat(input));
     } catch (error) {
+      // Do not advertise a stale conversation as connected. The Desktop
+      // runtime uses this health bit to discard an orphaned bridge/browser
+      // pair before the next start, instead of reusing it indefinitely.
+      state.conversationRef = undefined;
       const message = error instanceof Error ? error.message : "ChatGPT Web bridge failed";
       const failureClass = typeof error === "object" && error !== null && "failureClass" in error
         ? (error as { failureClass?: unknown }).failureClass

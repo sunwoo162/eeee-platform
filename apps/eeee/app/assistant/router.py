@@ -87,7 +87,7 @@ class CapabilityRouter:
         if not candidates:
             if any(
                 phrase in normalized
-                for phrase in ("이거", "저거", "해줘", "해 줘", "do it", "that")
+                for phrase in ("이거", "저거", "do it", "that")
             ):
                 candidates = [
                     CapabilityCandidate(

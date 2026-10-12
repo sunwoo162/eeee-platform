@@ -93,6 +93,42 @@ class OllamaBackend:
                 }
         return LocalModelResponse.model_validate(decoded)
 
+    def complete_text(self, prompt: str, *, workspace: Path, context: list[dict[str, object]]) -> str:
+        """Run a plain conversational turn without the tool-loop JSON contract."""
+        response = httpx.post(
+            self.base_url,
+            json={
+                "model": self.model,
+                "stream": False,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "너는 EEEE라는 한국어 개인 비서야. "
+                            "최종 답변은 반드시 자연스러운 한국어로만 작성해. "
+                            "사용자의 질문에 바로 답하고, 네가 컴퓨터 앱이나 AI라는 설명, "
+                            "정해진 안내문, JSON, 영어 문장을 출력하지 마. "
+                            "인사에는 자연스럽게 답하고, 이유를 묻는 질문에는 이유를 설명하고, "
+                            "추천을 묻는 질문에는 선택지를 제안해. "
+                            "정말 필요한 경우에만 짧게 되물어봐."
+                        ),
+                    },
+                    {"role": "user", "content": prompt + "\nObservations:\n" + repr(context)},
+                ],
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        message = payload.get("message", {}) if isinstance(payload, dict) else {}
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("local conversation response did not contain message.content")
+        cleaned = content.strip()
+        if "</think>" in cleaned:
+            cleaned = cleaned.rsplit("</think>", 1)[1].strip()
+        return cleaned or content.strip()
+
 
 class LocalAgentRuntime:
     """Let a local model reason while EEEE owns all side effects and evidence."""
@@ -242,23 +278,30 @@ class LocalConversationRuntime:
 
     def run(self, request: AgentRequest) -> AgentResult:
         prompt = (
-            "You are EEEE, a natural Korean desktop assistant. This is ordinary conversation only. "
-            "Do not read or change files, run commands, plan a project, or call tools. "
-            "Answer the user's message directly and helpfully. If the user asks what you can do, "
-            "briefly explain EEEE's capabilities. Do not refuse ordinary safe questions. "
-            "Return exactly one JSON object with no extra keys: "
-            '{"summary":"your natural Korean reply","actions":[{"kind":"finish"}],"done":true,"next_prompt":null}. '
-            f"User message: {request.prompt}"
+            "일반 대화만 처리해. 파일을 읽거나 바꾸지 말고, 명령을 실행하거나 프로젝트를 계획하거나 도구를 호출하지 마. "
+            "아래 사용자 요청에 직접 답해. 최종 답변은 자연스러운 한국어 1~3문장으로만 작성하고, "
+            "영어·JSON·내부 라우팅 설명·'추가 정보가 필요합니다' 같은 정해진 안내문은 쓰지 마. "
+            "사용자가 무엇을 할 수 있냐고 물으면 EEEE의 능력을 짧게 설명하고, 인사에는 자연스럽게 답해. "
+            f"사용자 요청: {request.prompt}"
         )
         try:
-            response = self.backend.complete(prompt, workspace=request.workspace, context=[])
+            complete_text = getattr(self.backend, "complete_text", None)
+            if callable(complete_text):
+                summary = complete_text(prompt, workspace=request.workspace, context=[])
+                if not isinstance(summary, str) or not summary.strip():
+                    raise ValueError("local conversation response was empty")
+            else:
+                # Keep the small scripted backend contract used by tests and
+                # alternate local adapters while Ollama uses plain text above.
+                response = self.backend.complete(prompt, workspace=request.workspace, context=[])
+                summary = response.summary
         except Exception as exc:
             return AgentResult(
                 status="unavailable", summary="Local conversation provider failed",
                 events=[], changed_files=[], test_commands=[], error=str(exc),
             )
         return AgentResult(
-            status="completed", summary=response.summary,
+            status="completed", summary=summary.strip(),
             events=[{"type": "local.conversation", "provider": "ollama"}],
             changed_files=[], test_commands=[], error=None,
         )

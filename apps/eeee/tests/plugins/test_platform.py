@@ -1,0 +1,101 @@
+from datetime import datetime, timezone
+
+from app.plugins.connectors import ConnectorConnection, ConnectorHealth
+from app.plugins.credentials import MemoryCredentialStore
+from app.plugins.platform import PluginPlatformService
+from app.storage.sqlite import SQLiteStore
+from app.config import Settings
+from app.main import create_app
+from fastapi.testclient import TestClient
+
+
+class FakeConnector:
+    plugin_id = "notion"
+
+    def __init__(self, healthy: bool = True):
+        self.healthy = healthy
+        self.connections = []
+
+    def connect(self, user_id, credential, approved_permissions):
+        self.connections.append((user_id, dict(credential), set(approved_permissions)))
+        return ConnectorConnection(
+            user_id=user_id, plugin_id=self.plugin_id,
+            approved_permissions=frozenset(approved_permissions), client=object(),
+        )
+
+    def disconnect(self, connection):
+        return None
+
+    def health(self, connection):
+        return ConnectorHealth(
+            status="healthy" if self.healthy else "unavailable",
+            code="healthy" if self.healthy else "provider_unavailable",
+            reason="ok" if self.healthy else "provider down",
+        )
+
+    def invoke(self, connection, action, value):
+        return {"status": "completed", "action": action, "value": value}
+
+
+def _platform(tmp_path, connector):
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    return PluginPlatformService(
+        store, credentials=MemoryCredentialStore(), connectors={"notion": connector}
+    )
+
+
+def test_platform_hides_optional_capability_until_install_connect_and_health(tmp_path) -> None:
+    connector = FakeConnector()
+    platform = _platform(tmp_path, connector)
+
+    assert platform.capabilities("user-a") == []
+    assert platform.install("notion").status == "available"
+    assert platform.capabilities("user-a") == []
+
+    connected = platform.connect(
+        "user-a", "notion", {"pages.read"}, {"token": "secret"}, "A workspace"
+    )
+
+    assert connected.status == "connected"
+    assert [item.id for item in platform.capabilities("user-a")] == ["plugin:notion:pages"]
+    assert "secret" not in connected.model_dump_json()
+
+
+def test_platform_isolates_users_and_disconnect_removes_capability(tmp_path) -> None:
+    platform = _platform(tmp_path, FakeConnector())
+    platform.install("notion")
+    platform.connect("user-a", "notion", {"pages.read"}, {"token": "secret-a"}, None)
+
+    assert platform.capabilities("user-b") == []
+    platform.disconnect("user-a", "notion")
+    assert platform.capabilities("user-a") == []
+
+
+def test_platform_marks_provider_failure_and_does_not_expose_capability(tmp_path) -> None:
+    platform = _platform(tmp_path, FakeConnector(healthy=False))
+    platform.install("notion")
+
+    failed = platform.connect("user-a", "notion", {"pages.read"}, {"token": "secret"}, None)
+
+    assert failed.status == "failed"
+    assert failed.last_error == "provider_unavailable"
+    assert platform.capabilities("user-a") == []
+
+
+def test_application_distinguishes_optional_installation_from_connection_requirement(tmp_path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+    )
+    application = create_app(settings)
+    client = TestClient(application)
+
+    not_installed = client.post("/api/assistant/route", json={"text": "노션에 회의록 저장해줘"})
+    assert not_installed.status_code == 200
+    assert "설치" in (not_installed.json().get("suggested_action") or "")
+
+    application.state.plugin_platform.install("notion")
+    awaiting_connection = client.post("/api/assistant/route", json={"text": "노션에 회의록 저장해줘"})
+    assert awaiting_connection.status_code == 200
+    assert "연결" in (awaiting_connection.json().get("suggested_action") or "")

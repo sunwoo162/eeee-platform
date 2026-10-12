@@ -21,6 +21,7 @@ from app.runtime.store import ExecutionStore, StaleProjectRevision
 from app.storage.sqlite import SQLiteStore
 from app.trust.gate import TrustGate
 from app.plugins.host import PluginHost
+from app.plugins.platform import PluginPlatformService
 
 
 class KernelService:
@@ -32,6 +33,7 @@ class KernelService:
         document_service: Any | None = None, planning_service: PlanningService | None = None,
         agent_runtime: AgentRuntime | None = None, general_runtime: AgentRuntime | None = None,
         chatgpt_web_enabled: bool = False, plugin_host: PluginHost | None = None,
+        plugin_platform: PluginPlatformService | None = None,
     ) -> None:
         self.router = router
         self.coordinator = coordinator
@@ -40,6 +42,7 @@ class KernelService:
         self.memory_context_compiler = MemoryContextCompiler()
         self.trust_gate = trust_gate or coordinator.trust_gate or TrustGate(None, mode="advisory")
         self.plugin_host = plugin_host
+        self.plugin_platform = plugin_platform
         self.executions = ExecutionStore(store)
         planning_service = planning_service or PlanningService(store)
         self.event_bus = event_bus or LocalEventBus()
@@ -127,6 +130,28 @@ class KernelService:
             retrieved = self._retrieve_context(request, context)
             handler = registered.handler
             if handler is None:
+                if self.plugin_platform is not None and selection.capability_id == "plugin:notion:pages":
+                    platform_execution = self.plugin_platform.invoke(
+                        "local-user", selection.capability_id,
+                        {"text": request.raw_text, "context": request.context},
+                    )
+                    platform_status = platform_execution.status
+                    platform_output = {
+                        "status": "completed" if platform_status == ExecutionStatus.COMPLETED else platform_status.value,
+                        "message": "플러그인 작업이 완료됐어." if platform_status == ExecutionStatus.COMPLETED
+                        else platform_execution.error.message if platform_execution.error else "플러그인 작업이 완료되지 않았어.",
+                        "pluginId": selection.capability_id.split(":", 2)[1],
+                        "pluginExecutionId": platform_execution.execution_id,
+                        "claimLatchPolicy": registered.descriptor.claim_latch_policy,
+                    }
+                    return self._finish_route(
+                        parent,
+                        CapabilityOutcome(
+                            platform_output,
+                            ExecutionStatus.COMPLETED if platform_status == ExecutionStatus.COMPLETED else ExecutionStatus.BLOCKED,
+                        ),
+                        selection,
+                    )
                 if self.plugin_host is None or not selection.capability_id.startswith("plugin:"):
                     raise RuntimeError("Capability implementation is unavailable")
                 plugin_id, plugin_execution = self.plugin_host.invoke_capability(

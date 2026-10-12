@@ -264,7 +264,10 @@ class PetWindow:
                         # export direction; user input direction is the
                         # opposite, so keep the mapping explicit here.
                         "left": "cat-keyboard-right.png",
-                        "right": "cat-keyboard-left.png",
+                        # The approved raised-right-paw frame is a separate
+                        # source asset.  Keep the older right-hand frames
+                        # available for the extended/short states.
+                        "right": "cat-keyboard-right-raised.png",
                         "left_alt": "cat-keyboard-right-alt.png",
                         "right_alt": "cat-keyboard-left-alt.png",
                         "right_repeat": "cat-keyboard-right-repeat.png",

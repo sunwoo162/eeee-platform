@@ -294,7 +294,9 @@ async function refreshEeeeControlCenter() {
 }
 
 refreshEeeeControlCenter();
-setInterval(refreshEeeeControlCenter, 3000);
+if (typeof setInterval === "function") {
+  setInterval(refreshEeeeControlCenter, 3000);
+}
 
 function setStatus(message, kind = "") {
   const status = $("#status");

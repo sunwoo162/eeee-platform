@@ -48,11 +48,18 @@ The imported source revisions and exclusions are recorded in repository-manifest
 
 ## Current status
 
-The first local vertical slice is implemented. The completed P0 path includes:
+The first local vertical slice is implemented. The verified core path includes:
 
 1. ClaimLatch local Adapter with versioned envelopes and durable audit records.
 2. EEEE persistent memory storage, retrieval, promotion, and stale-outcome rejection.
 3. ISEOL independent QA planning, executable evidence ledger, stale-revision checks, and release gate.
+4. Durable assistant jobs that survive UI restart, with pause, resume, retry, and cancel controls.
+5. Safe memory inspection/deletion with audit events and a desktop/web control-center snapshot.
+6. Release artifact path, revision, UTF-8, evidence, and ClaimLatch gate checks.
+
+This status refers to the local core only. Optional external plugins, hosted providers, and the
+full ISEOL Agent organization runtime are separate integration scopes and are not silently treated
+as complete.
 
 The approved redesign adds the extensible EEEE capability registry and unified Project Runtime foundation. See [`docs/architecture/eeee-platform.md`](docs/architecture/eeee-platform.md) for the target boundary and [`docs/superpowers/plans/2026-10-06-eeee-personal-assistant-platform-plan.md`](docs/superpowers/plans/2026-10-06-eeee-personal-assistant-platform-plan.md) for the implementation sequence.
 
@@ -87,6 +94,16 @@ Run the focused unified verification, or the full EEEE suite:
 .\scripts\verify-all.ps1
 .\scripts\verify-all.ps1 -Full
 ```
+
+For the core product acceptance gate on Windows, run:
+
+```powershell
+.\scripts\verify-core-product.ps1
+```
+
+The `scripts/verify-core-product.ps1` command runs the durable job, memory, desktop control-center, release-manifest, and core
+project-flow tests, checks tracked text files as strict UTF-8, and fails on `git diff --check`.
+It is the minimum evidence required before calling the local core release-ready.
 
 No hosted login or central server is required. Optional Notion, mobile, calendar, and future channel adapters connect to the local core. Never commit `.env`, credentials, runtime databases, `node_modules`, virtual environments, `dist`, or `__pycache__`.
 

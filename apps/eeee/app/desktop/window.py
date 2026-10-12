@@ -264,13 +264,13 @@ class PetWindow:
                         # export direction; user input direction is the
                         # opposite, so keep the mapping explicit here.
                         "left": "cat-keyboard-right.png",
-                        # The approved raised-right-paw frame is a separate
-                        # source asset.  Keep the older right-hand frames
-                        # available for the extended/short states.
-                        "right": "cat-keyboard-right-raised.png",
-                        "left_alt": "cat-keyboard-right-alt.png",
-                        "right_alt": "cat-keyboard-left-alt.png",
-                        "right_repeat": "cat-keyboard-right-repeat.png",
+                        # Each typing frame is a complete pose: the active
+                        # hand is on the keyboard and the opposite hand is
+                        # raised. The short pose is used for repeated input.
+                        "left": "cat-keyboard-left-typing.png",
+                        "right": "cat-keyboard-right-typing.png",
+                        "left_alt": "cat-keyboard-left-typing-short.png",
+                        "right_alt": "cat-keyboard-right-typing-short.png",
                         "gaze_left": "cat-keyboard-gaze-left.png",
                         "gaze_right": "cat-keyboard-gaze-right.png",
                     }.items()
@@ -687,11 +687,9 @@ class PetWindow:
             def _press_source_frame(self, frame: str) -> str:
                 """Return the sibling artwork for a same-paw press frame.
 
-                The logical frame names describe physical keyboard hands, but
-                the artwork filenames are mirrored relative to the viewer. The
-                alternate asset for ``left`` is therefore ``right_alt`` and
-                vice versa. These sibling assets keep the body and keyboard
-                anchored while changing only the paw's pose.
+                The logical frame names describe physical keyboard hands. Each
+                alternate asset is the compact pose for that same hand, so the
+                opposite raised hand stays part of the complete frame.
                 """
                 spec = PET_ASSET_TABLE.get(frame)
                 return spec["press"] if spec else frame
@@ -724,11 +722,7 @@ class PetWindow:
                     if asset_spec is None:
                         return self._pet_pixmaps.get(base_frame)
                     base = self._pet_pixmaps.get(asset_spec["body"])
-                    paw_key = (
-                        "right_repeat"
-                        if is_repeat and base_frame == "right"
-                        else asset_spec["press"] if is_press else asset_spec["base"]
-                    )
+                    paw_key = asset_spec["press"] if is_press else asset_spec["base"]
                     paw_source = self._pet_pixmaps.get(paw_key)
                     if base is not None and paw_source is not None:
                         composed = base.copy()
@@ -826,8 +820,6 @@ class PetWindow:
                 so Korean IME repeats (for example ``ㅇ``/physical D) animate
                 while remaining on the left paw.
                 """
-                if self._typing_hand == "right" and self._typing_hand_press_count >= 2:
-                    return "right_repeat"
                 suffix = "_press" if self._typing_hand_press_count % 2 == 0 else ""
                 return f"{self._typing_hand}{suffix}"
 

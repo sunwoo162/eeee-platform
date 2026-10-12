@@ -44,6 +44,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "EEEE core pytest verification failed."
     }
+    & node --test tests/ui_project_map.js
+    if ($LASTEXITCODE -ne 0) {
+        throw "EEEE static UI verification failed."
+    }
 } finally {
     Pop-Location
 }

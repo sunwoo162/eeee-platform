@@ -128,10 +128,13 @@ class BackgroundExecutionSupervisor:
         for row in rows:
             input_data = json.loads(row["input_json"])
             with self.store._connect() as connection:
-                connection.execute(
-                    "UPDATE assistant_jobs SET status = 'queued', error = NULL, updated_at = ? WHERE job_id = ?",
+                cursor = connection.execute(
+                    "UPDATE assistant_jobs SET status = 'queued', error = NULL, updated_at = ? "
+                    "WHERE job_id = ? AND status IN ('queued', 'running')",
                     (_now(), row["job_id"]),
                 )
+            if cursor.rowcount != 1:
+                continue
             operation = operation_factory({
                 "jobId": row["job_id"], "requestId": row["request_id"], "input": input_data,
             })
@@ -154,34 +157,43 @@ class BackgroundExecutionSupervisor:
             )
 
     def _run(self, job_id: str, operation: Callable[[], dict[str, Any]]) -> None:
-        if self.get(job_id)["status"] in {"paused", "cancelled"}:
+        # Claim the queued job atomically. A separate read followed by an
+        # unconditional write lets pause/cancel be overwritten by this worker.
+        if not self._update_if_current(job_id, "running", expected={"queued"}):
             return
-        self._update(job_id, "running")
         try:
             result = operation()
         except Exception as exc:
-            if self.get(job_id)["status"] not in {"paused", "cancelled"}:
-                self._update(job_id, "failed", error=str(exc).strip() or type(exc).__name__)
+            self._update_if_current(
+                job_id,
+                "failed",
+                expected={"running"},
+                error=str(exc).strip() or type(exc).__name__,
+            )
             return
-        if self.get(job_id)["status"] not in {"paused", "cancelled"}:
-            self._update(job_id, "completed", result=result)
+        self._update_if_current(job_id, "completed", expected={"running"}, result=result)
 
     def _transition(self, job_id: str, target: str, allowed: set[str]) -> dict[str, object]:
+        allowed_placeholders = ", ".join("?" for _ in allowed)
         with self.store._connect() as connection:
-            row = connection.execute(
-                "SELECT status FROM assistant_jobs WHERE job_id = ?", (job_id,)
-            ).fetchone()
-            if row is None:
-                raise KeyError(f"Assistant job not found: {job_id}")
-            current = str(row["status"])
-            if current not in allowed:
+            cursor = connection.execute(
+                "UPDATE assistant_jobs SET status = ?, updated_at = ? "
+                "WHERE job_id = ? AND status IN (" + allowed_placeholders + ")",
+                (target, _now(), job_id, *sorted(allowed)),
+            )
+            if cursor.rowcount != 1:
+                row = connection.execute(
+                    "SELECT status FROM assistant_jobs WHERE job_id = ?", (job_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError(f"Assistant job not found: {job_id}")
+                current = str(row["status"])
+                if current not in allowed:
+                    raise JobTransitionError(
+                        f"Assistant job {job_id} cannot transition from {current} to {target}"
+                    )
                 raise JobTransitionError(
-                    f"Assistant job {job_id} cannot transition from {current} to {target}"
-                )
-            if current != target:
-                connection.execute(
-                    "UPDATE assistant_jobs SET status = ?, updated_at = ? WHERE job_id = ?",
-                    (target, _now(), job_id),
+                    f"Assistant job {job_id} changed before it could transition to {target}"
                 )
         return self.get(job_id)
 
@@ -204,12 +216,18 @@ class BackgroundExecutionSupervisor:
             operation = operation_factory(job)
         if operation is None:
             raise JobTransitionError(f"Assistant job {job_id} has no resumable operation")
+        expected_placeholders = ", ".join("?" for _ in expected)
         with self.store._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 "UPDATE assistant_jobs SET status = 'queued', result_json = NULL, "
-                "error = NULL, updated_at = ? WHERE job_id = ?",
-                (_now(), job_id),
+                "error = NULL, updated_at = ? WHERE job_id = ? AND status IN ("
+                + expected_placeholders + ")",
+                (_now(), job_id, *sorted(expected)),
             )
+            if cursor.rowcount != 1:
+                raise JobTransitionError(
+                    f"Assistant job {job_id} changed before it could restart"
+                )
         with self._lock:
             self._operations[job_id] = operation
         future = self._pool.submit(self._run, job_id, operation)
@@ -217,15 +235,22 @@ class BackgroundExecutionSupervisor:
             self._futures[job_id] = future
         return self.get(job_id)
 
-    def _update(
-        self, job_id: str, status: str, *, result: dict[str, Any] | None = None,
+    def _update_if_current(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        expected: set[str],
+        result: dict[str, Any] | None = None,
         error: str | None = None,
-    ) -> None:
+    ) -> bool:
+        expected_placeholders = ", ".join("?" for _ in expected)
         with self.store._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 "UPDATE assistant_jobs SET status = ?, result_json = ?, error = ?, updated_at = ? "
-                "WHERE job_id = ?",
+                "WHERE job_id = ? AND status IN (" + expected_placeholders + ")",
                 (status, json.dumps(result, ensure_ascii=False) if result is not None else None,
-                 error, _now(), job_id),
+                 error, _now(), job_id, *sorted(expected)),
             )
+        return cursor.rowcount == 1
 

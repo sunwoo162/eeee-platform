@@ -828,6 +828,20 @@ def test_short_reply_bubble_is_hidden_after_its_display_window():
     window.close()
 
 
+def test_hiding_a_hidden_pet_does_not_lose_timer_restore_state():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show()
+    app.processEvents()
+    window.hide_to_tray()
+    window.hide_to_tray()
+    window.restore_from_tray()
+
+    assert window._pet_motion_timer.isActive()
+    assert window._topmost_timer.isActive()
+    window.close()
+
+
 def test_outside_click_closes_quick_chat_but_pet_click_does_not():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())

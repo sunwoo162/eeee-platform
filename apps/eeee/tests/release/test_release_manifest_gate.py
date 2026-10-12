@@ -96,6 +96,39 @@ def test_release_manifest_blocks_artifact_without_evidence() -> None:
         build_release_manifest(**_input(artifacts=[_artifact("source", "src", [])]))
 
 
+def test_release_manifest_blocks_whitespace_only_qa_evidence() -> None:
+    values = _input()
+    values["qa_report"] = {
+        **values["qa_report"],
+        "evidenceIds": ["   "],
+    }
+
+    with pytest.raises(ValueError, match="QA evidence is missing"):
+        build_release_manifest(**values)
+
+
+def test_release_manifest_blocks_non_list_qa_evidence() -> None:
+    values = _input()
+    values["qa_report"] = {
+        **values["qa_report"],
+        "evidenceIds": "evidence-string",
+    }
+
+    with pytest.raises(ValueError, match="QA evidence contains invalid values"):
+        build_release_manifest(**values)
+
+
+def test_release_manifest_blocks_claimlatch_without_report_id() -> None:
+    values = _input()
+    values["claim_latch"] = {
+        "decision": "PASS",
+        "receiptId": "receipt-1",
+    }
+
+    with pytest.raises(ValueError, match="ClaimLatch release verification did not PASS"):
+        build_release_manifest(**values)
+
+
 def test_release_manifest_blocks_missing_artifact_path(tmp_path) -> None:
     with pytest.raises(ValueError, match="artifact path does not exist"):
         build_release_manifest(**_input(workspace=str(tmp_path)))

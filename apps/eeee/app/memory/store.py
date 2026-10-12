@@ -238,10 +238,16 @@ class MemoryStore:
             params.append(source_project_id)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM memory_records" + where + " ORDER BY created_at DESC LIMIT ?",
-                (*params, 500 if (query.strip() or scope) else limit),
-            ).fetchall()
+            if query.strip() or scope:
+                rows = connection.execute(
+                    "SELECT * FROM memory_records" + where + " ORDER BY created_at DESC",
+                    params,
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM memory_records" + where + " ORDER BY created_at DESC LIMIT ?",
+                    (*params, limit),
+                ).fetchall()
         records = [_record_from_row(row) for row in rows]
         tokens = {token for token in query.lower().split() if token}
         filtered: list[MemoryRecord] = []

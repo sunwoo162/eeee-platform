@@ -1059,6 +1059,9 @@ class PetWindow:
                     return
                 self._closing = True
                 self._timer.stop()
+                self._topmost_timer.stop()
+                self._pet_motion_timer.stop()
+                self._typing_timer.stop()
                 self._reply_hide_timer.stop()
                 self._app.removeEventFilter(self)
                 self._task_runner.shutdown()
@@ -1096,10 +1099,40 @@ class PetWindow:
                     self.restore_from_tray()
 
             def hide_to_tray(self):
+                if self.isHidden():
+                    return
+                # A hidden tray pet does not need animation, topmost polling,
+                # refresh polling, or reply typing. Pausing these timers keeps
+                # multiple hidden test/app windows from competing for the UI
+                # event loop; restore_from_tray resumes them.
+                self._tray_ui_timers_were_active = {
+                    "refresh": self._timer.isActive(),
+                    "topmost": self._topmost_timer.isActive(),
+                    "motion": self._pet_motion_timer.isActive(),
+                    "typing": self._typing_timer.isActive(),
+                    "reply_hide": self._reply_hide_timer.isActive(),
+                }
+                self._timer.stop()
+                self._topmost_timer.stop()
+                self._pet_motion_timer.stop()
+                self._typing_timer.stop()
+                self._reply_hide_timer.stop()
+                self.command_surface.hide()
                 self.hide()
 
             def restore_from_tray(self):
                 self.showNormal()
+                active = getattr(self, "_tray_ui_timers_were_active", {})
+                if active.get("motion"):
+                    self._pet_motion_timer.start()
+                if active.get("topmost"):
+                    self._topmost_timer.start()
+                if active.get("refresh"):
+                    self._timer.start(5000)
+                if active.get("typing"):
+                    self._typing_timer.start()
+                if active.get("reply_hide"):
+                    self._reply_hide_timer.start()
                 self.raise_()
                 self.activateWindow()
 

@@ -32,6 +32,15 @@ class BackgroundDesktopClient(FakeDesktopClient):
         return self.job
 
 
+class SynchronousProjectResponseClient(FakeDesktopClient):
+    def route_assistant(self, text, workspace=None):
+        return {
+            "status": "blocked",
+            "project_id": "project-1",
+            "message": "프로젝트 설정이 더 필요해.",
+        }
+
+
 def test_session_refreshes_selected_project_and_keeps_last_snapshot():
     client = FakeDesktopClient()
     session = DesktopSession(client)
@@ -117,3 +126,27 @@ def test_session_does_not_present_blocked_background_result_as_completed():
 
     assert finished["state"] == "blocked"
     assert "외부 연결" in finished["message"]
+
+
+def test_session_keeps_synchronous_project_blocked_response_visible():
+    session = DesktopSession(SynchronousProjectResponseClient())
+
+    snapshot = session.route("프로젝트 설정 확인")
+
+    assert snapshot["state"] == "blocked"
+    assert snapshot["message"] == "프로젝트 설정이 더 필요해."
+
+
+def test_session_keeps_synchronous_configuration_response_blocked():
+    client = SynchronousProjectResponseClient()
+    client.route_assistant = lambda text, workspace=None: {
+        "status": "awaiting_configuration",
+        "project_id": "project-1",
+        "message": "외부 연결 설정이 필요해.",
+    }
+    session = DesktopSession(client)
+
+    snapshot = session.route("로그인 Todo 프로젝트")
+
+    assert snapshot["state"] == "blocked"
+    assert snapshot["message"] == "외부 연결 설정이 필요해."

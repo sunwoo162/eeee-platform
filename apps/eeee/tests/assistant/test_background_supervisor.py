@@ -206,10 +206,11 @@ def test_paused_job_stays_paused_after_restart_until_explicit_resume(tmp_path):
     store.init()
     first = BackgroundExecutionSupervisor(store, max_workers=1)
     try:
-        job_id = first.submit(
+        job_id = "assistant-job-paused-restart"
+        first._create(
+            job_id,
             "assistant-request-paused-restart",
-            lambda: {"id": "must-wait"},
-            input_data={"text": "paused"},
+            {"text": "paused"},
         )
         assert first.pause(job_id)["status"] == "paused"
     finally:

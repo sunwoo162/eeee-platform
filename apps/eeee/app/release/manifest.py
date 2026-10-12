@@ -53,10 +53,23 @@ def build_release_manifest(
         reasons.append("QA report is stale")
     if qa_report.get("status") != "PASS" or qa_report.get("independent") is not True:
         reasons.append("independent QA did not PASS")
-    qa_evidence = [item for item in qa_report.get("evidenceIds", []) if isinstance(item, str) and item]
+    raw_qa_evidence = qa_report.get("evidenceIds")
+    qa_evidence = (
+        [item.strip() for item in raw_qa_evidence if isinstance(item, str) and item.strip()]
+        if isinstance(raw_qa_evidence, list)
+        else []
+    )
+    if not isinstance(raw_qa_evidence, list) or any(
+        not isinstance(item, str) or not item.strip() for item in raw_qa_evidence
+    ):
+        reasons.append("QA evidence contains invalid values")
     if not qa_evidence:
         reasons.append("QA evidence is missing")
-    if claim_latch.get("decision") != "PASS" or not claim_latch.get("receiptId"):
+    if (
+        claim_latch.get("decision") != "PASS"
+        or not claim_latch.get("receiptId")
+        or not claim_latch.get("claimLatchReportId")
+    ):
         reasons.append("ClaimLatch release verification did not PASS")
     try:
         parsed_artifacts = [ReleaseArtifact.model_validate(item) for item in artifacts]

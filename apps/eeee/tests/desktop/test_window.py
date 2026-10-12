@@ -109,8 +109,8 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert window.assistant_input.objectName() == "assistantComposer"
     assert window.detail.objectName() == "assistantBubble"
     _wait_for(app, lambda: window.current_state.get("state") == "idle")
-    _wait_for(app, lambda: window.detail.text() == "안녕하세요! 오늘은 무엇을 해볼까요?")
-    assert window.detail.text() == "안녕하세요! 오늘은 무엇을 해볼까요?"
+    _wait_for(app, lambda: window.detail.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?")
+    assert window.detail.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?"
     assert window.headline.isHidden()
     assert window.status_card.isHidden()
     assert window.command_surface.isHidden()
@@ -120,7 +120,7 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert not window.command_surface.isHidden()
     assert window.detail.isHidden()
     assert window.quick_status.isHidden()
-    assert window.quick_reply.text() == "안녕하세요! 오늘은 무엇을 해볼까요?"
+    assert window.quick_reply.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?"
     assert window.quick_reply.isVisible()
     window.hide_command_surface()
     assert not window.detail.isHidden()
@@ -170,9 +170,9 @@ def test_quick_chat_sends_with_enter_and_greets_user():
     _wait_for(app, lambda: not window._busy)
     window.show_command_surface()
 
-    assert window.assistant_input.placeholderText() == "무엇을 해볼까요?"
-    _wait_for(app, lambda: window.quick_reply.text() == "안녕하세요! 오늘은 무엇을 해볼까요?")
-    assert window.quick_reply.text() == "안녕하세요! 오늘은 무엇을 해볼까요?"
+    assert window.assistant_input.placeholderText() == ""
+    _wait_for(app, lambda: window.quick_reply.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?")
+    assert window.quick_reply.text() == "안녕하세요! 오늘은 어떤 일을 도와드릴까요?"
 
     window.assistant_input.setText("안녕")
     window.assistant_input.returnPressed.emit()
@@ -725,8 +725,8 @@ def test_quick_chat_is_anchored_to_the_pet_and_clamped_to_screen_edges():
     assert position.x() >= screen.left() + 12
     assert position.x() + surface_size.width() <= screen.right() - 11
     assert (
-        position.y() >= anchor.bottom() + 12
-        or position.y() + surface_size.height() <= anchor.top() - 12
+        position.y() >= anchor.bottom() + 4
+        or position.y() + surface_size.height() <= anchor.top() - 4
     )
     window.close()
 
@@ -742,7 +742,7 @@ def test_quick_chat_prefers_above_the_pet_when_space_is_available():
     anchor = window._pet_anchor_rect()
     position = window._command_surface_position(screen, surface_size)
 
-    assert position.y() + surface_size.height() <= anchor.top() - 12
+    assert position.y() + surface_size.height() <= anchor.top() - 4
     assert abs(
         position.x() + surface_size.width() // 2 - anchor.center().x()
     ) <= 12

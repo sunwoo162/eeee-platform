@@ -40,7 +40,7 @@ _DESKTOP_TEXT = {
         "window_title": "EEEE • Gleave",
         "language": "언어",
         "ready": "준비됨",
-        "start_hint": "안녕하세요! 오늘은 무엇을 해볼까요?",
+        "start_hint": "안녕하세요! 오늘은 어떤 일을 도와드릴까요?",
         "project_none": "프로젝트: 선택되지 않음",
         "runtime_none": "실행 프로필: 선택되지 않음",
         "runtime_prefix": "실행 프로필",
@@ -49,7 +49,7 @@ _DESKTOP_TEXT = {
         "configuration_prefix": "추가 설정 필요",
         "claim_checking": "ClaimLatch: 확인 중",
         "mobile_available": "모바일 브리지: 데스크톱에서 연결 가능",
-        "assistant_placeholder": "무엇을 해볼까요?",
+        "assistant_placeholder": "",
         "pairing": "휴대폰 연결 코드",
         "pairing_none": "연결 코드 없음",
         "events_none": "최근 EEEE 이벤트 없음",
@@ -80,7 +80,7 @@ _DESKTOP_TEXT = {
         "window_title": "EEEE • Gleave",
         "language": "Language",
         "ready": "Ready",
-        "start_hint": "Hello! What shall we do today?",
+        "start_hint": "Hello! What can I help with today?",
         "project_none": "Project: none selected",
         "runtime_none": "Runtime profile: none selected",
         "runtime_prefix": "Runtime profile",
@@ -89,7 +89,7 @@ _DESKTOP_TEXT = {
         "configuration_prefix": "Configuration needed",
         "claim_checking": "ClaimLatch: checking",
         "mobile_available": "Mobile bridge: available from Desktop",
-        "assistant_placeholder": "What shall we do?",
+        "assistant_placeholder": "",
         "pairing": "Pair phone",
         "pairing_none": "No pairing code issued",
         "events_none": "No recent EEEE events",
@@ -267,7 +267,8 @@ class PetWindow:
 
                 root = QVBoxLayout(self)
                 root.setContentsMargins(22, 18, 22, 20)
-                root.setSpacing(12)
+                # Keep the speech bubble visually attached to the pet.
+                root.setSpacing(4)
 
                 language_row_widget = QWidget()
                 language_row = QHBoxLayout(language_row_widget)
@@ -700,7 +701,7 @@ class PetWindow:
 
             def _command_surface_position(self, screen_rect=None, surface_size=None):
                 """Place Quick Chat next to the pet, clamped to the usable screen."""
-                margin = 12
+                margin = 4
                 anchor = self._pet_anchor_rect()
                 if screen_rect is None:
                     screen = self.screen()

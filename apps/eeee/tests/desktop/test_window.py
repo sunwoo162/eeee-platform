@@ -146,12 +146,18 @@ def test_cat_keyboard_pet_assets_are_loaded_and_typing_switches_hands():
     window.close()
 
 
-def test_pet_asset_table_keeps_each_logical_hand_on_its_matching_side():
-    assert PET_ASSET_TABLE["left"]["base"] == "left"
-    assert PET_ASSET_TABLE["left"]["press"] == "left_alt"
-    assert PET_ASSET_TABLE["right"]["base"] == "right"
-    assert PET_ASSET_TABLE["right"]["press"] == "right_alt"
-    assert PET_ASSET_TABLE["left"]["paw_mask"]["x_max"] < PET_ASSET_TABLE["right"]["paw_mask"]["x_min"]
+def test_right_repeat_uses_only_the_new_short_pose_and_keeps_existing_poses():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    assert window._typing_hand == "left"
+    window._typing_hand = "right"
+    window._typing_hand_press_count = 1
+    assert window._typing_frame_name() == "right"
+    window._typing_hand_press_count = 2
+    assert window._typing_frame_name() == "right_repeat"
+    assert window._press_source_frame("right") == "left_alt"
+    window.close()
 
 
 def test_every_pet_frame_stays_inside_the_compact_character_bounds():
@@ -236,7 +242,7 @@ def test_repeated_keys_animate_the_same_visual_hand_until_the_physical_side_chan
     assert window._typing_frame_name() == "right"
     window._apply_global_key_states({})
     window._apply_global_key_states({0xBC: True})  # comma: same hand, pressed pose
-    assert window._typing_frame_name() == "right_press"
+    assert window._typing_frame_name() == "right_repeat"
     window.close()
 
 
@@ -301,8 +307,8 @@ def test_same_hand_press_frame_is_distinct_but_uses_the_same_paw_asset():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
 
-    assert window._press_source_frame("left") == "left_alt"
-    assert window._press_source_frame("right") == "right_alt"
+    assert window._press_source_frame("left") == "right_alt"
+    assert window._press_source_frame("right") == "left_alt"
 
     base = window._source_pixmap_for_frame("left").toImage()
     pressed = window._source_pixmap_for_frame("left_press").toImage()
@@ -338,26 +344,26 @@ def test_pet_asset_table_keeps_press_motion_modular_and_tight():
 
     assert left["body"] == "idle"
     assert left["base"] == "left"
-    assert left["press"] == "left_alt"
+    assert left["press"] == "right_alt"
     assert right["body"] == "idle"
     assert right["base"] == "right"
-    assert right["press"] == "right_alt"
+    assert right["press"] == "left_alt"
     assert left["paw_mask"]["x_max"] - left["paw_mask"]["x_min"] < 300
     assert right["paw_mask"]["x_max"] - right["paw_mask"]["x_min"] < 300
-    assert left["paw_mask"]["y_min"] > 520
-    assert right["paw_mask"]["y_min"] > 400
+    assert left["paw_mask"]["y_min"] > 400
+    assert right["paw_mask"]["y_min"] > 520
 
     # Stable body/keyboard anchors must never be inside the press layer.  If
     # they are, swapping a repeated-key pose visibly shakes the mascot.
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())
     left_mask = window._same_paw_clip_path("left")
-    assert left_mask.contains(QPointF(570, 650))
+    assert left_mask.contains(QPointF(1160, 540))
     assert not left_mask.contains(QPointF(900, 460))
-    assert not left_mask.contains(QPointF(570, 800))
+    assert not left_mask.contains(QPointF(1100, 800))
     right_mask = window._same_paw_clip_path("right")
-    assert right_mask.contains(QPointF(1160, 600))
-    assert not right_mask.contains(QPointF(900, 460))
+    assert not right_mask.contains(QPointF(570, 535))
+    assert not right_mask.contains(QPointF(570, 800))
     window.close()
 
 

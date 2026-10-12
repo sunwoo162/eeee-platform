@@ -332,6 +332,11 @@ def test_same_hand_press_frame_is_distinct_and_right_uses_complete_pose_pair():
 
     assert window._press_source_frame("left") == "left_short"
     assert window._press_source_frame("right") == "right_short"
+    # The repeated right-hand pose must come from the dedicated short-paw
+    # export, never from the full alternate pose that contains the long paw.
+    assert window._pet_pixmaps["right_short"].toImage() == window._pet_pixmaps[
+        "right_repeat"
+    ].toImage()
 
     base = window._source_pixmap_for_frame("left").toImage()
     pressed = window._source_pixmap_for_frame("left_press").toImage()

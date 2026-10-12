@@ -272,7 +272,11 @@ class PetWindow:
                         "left_alt": "cat-keyboard-right-alt.png",
                         "right_alt": "cat-keyboard-left-alt.png",
                         "left_short": "cat-keyboard-left-alt.png",
-                        "right_short": "cat-keyboard-right-alt.png",
+                        # Repeated right-hand input uses the dedicated short
+                        # paw export.  Do not crop the full alternate pose:
+                        # its long resting paw becomes a stray finger.
+                        "right_repeat": "cat-keyboard-right-repeat.png",
+                        "right_short": "cat-keyboard-right-repeat.png",
                         "gaze_left": "cat-keyboard-gaze-left.png",
                         "gaze_right": "cat-keyboard-gaze-right.png",
                     }.items()

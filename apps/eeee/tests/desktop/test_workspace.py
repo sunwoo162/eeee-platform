@@ -21,7 +21,7 @@ class WorkspaceClient:
             "controlCenter": {
                 "jobs": [{"status": "running", "requestId": "request-1"}],
                 "memory": {"activeCount": 2, "candidateCount": 1},
-                "plugins": [],
+                "plugins": [{"pluginId": "notion", "name": "Notion", "status": "not_installed"}],
             },
         }
 
@@ -58,6 +58,8 @@ def test_workspace_is_a_desktop_control_center_and_renders_project_map():
     assert window.map_tree.topLevelItem(0).child(0).text(1) == "▶ active"
     assert "QA 검증 중" in window.status.text()
     assert "활성 기억 2개" in window.control_center.text()
+    assert "Notion: 설치 필요" in window.control_center.text()
+    assert "not_installed" not in window.control_center.text()
     window.close()
 
 

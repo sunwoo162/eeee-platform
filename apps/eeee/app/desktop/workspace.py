@@ -119,7 +119,7 @@ class WorkspaceWindow:
                     active_count = memory.get("activeCount", 0) if isinstance(memory, dict) else 0
                     candidate_count = memory.get("candidateCount", 0) if isinstance(memory, dict) else 0
                     plugin_labels = [
-                        f"{item.get('pluginId', 'plugin')}: {item.get('status', 'unknown')}"
+                        self._plugin_label(item)
                         for item in plugins if isinstance(item, dict)
                     ]
                     self.control_center.setText(
@@ -136,6 +136,36 @@ class WorkspaceWindow:
                     self.events.setText(("최근 이벤트: " if self.language == "ko" else "Recent events: ") + " · ".join(labels))
                 else:
                     self.events.setText("최근 이벤트 없음" if self.language == "ko" else "No recent events")
+
+            def _plugin_label(self, plugin: dict[str, object]) -> str:
+                name = plugin.get("name") or plugin.get("pluginId") or (
+                    "플러그인" if self.language == "ko" else "Plugin"
+                )
+                status = str(plugin.get("status", "unknown"))
+                labels = {
+                    "ko": {
+                        "not_installed": "설치 필요",
+                        "awaiting_authentication": "연결 필요",
+                        "connecting": "연결 중",
+                        "connected": "연결됨",
+                        "paused": "일시정지",
+                        "failed": "오류",
+                        "disabled": "설정 필요",
+                        "available": "사용 가능",
+                    },
+                    "en": {
+                        "not_installed": "Install required",
+                        "awaiting_authentication": "Connect required",
+                        "connecting": "Connecting",
+                        "connected": "Connected",
+                        "paused": "Paused",
+                        "failed": "Error",
+                        "disabled": "Configuration required",
+                        "available": "Available",
+                    },
+                }
+                status_label = labels.get(self.language, labels["en"]).get(status, "Unknown")
+                return f"{name}: {status_label}"
 
             def _render_map(self, project_id: str | None):
                 self.map_tree.clear()

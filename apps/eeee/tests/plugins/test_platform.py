@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from app.plugins.connectors import ConnectorConnection, ConnectorHealth
 from app.plugins.credentials import MemoryCredentialStore
 from app.plugins.platform import PluginPlatformService
@@ -35,6 +37,10 @@ class FakeConnector:
 
     def invoke(self, connection, action, value):
         return {"status": "completed", "action": action, "value": value}
+
+
+class GenericFakeConnector(FakeConnector):
+    plugin_id = "gmail"
 
 
 def _platform(tmp_path, connector):
@@ -115,6 +121,32 @@ def test_failed_reconnect_keeps_existing_healthy_credential(tmp_path) -> None:
     assert platform.connections.get("user-a", "notion").credential_ref == old_connection.credential_ref
     assert credentials.get(old_connection.credential_ref) == '{"token": "old-secret"}'
     assert all("new-secret" not in value for value in credentials._values.values())
+
+
+def test_unconfigured_catalog_connector_is_disabled_and_not_installable(tmp_path) -> None:
+    platform = _platform(tmp_path, FakeConnector())
+
+    assert platform.status("gmail", "user-a") == "disabled"
+    with pytest.raises(RuntimeError, match="connector is unavailable"):
+        platform.install("gmail")
+
+
+def test_connected_first_party_provider_projects_action_capabilities_and_invokes_action(tmp_path) -> None:
+    connector = GenericFakeConnector()
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store, credentials=MemoryCredentialStore(), connectors={"gmail": connector}
+    )
+    platform.install("gmail")
+    platform.connect("user-a", "gmail", {"mail.read"}, {"access_token": "secret"}, "Work")
+
+    capabilities = platform.capabilities("user-a")
+
+    assert [item.id for item in capabilities] == ["plugin:gmail:mail.list"]
+    result = platform.invoke("user-a", "plugin:gmail:mail.list", {"query": "unread"})
+    assert result.status == "completed"
+    assert result.output["action"] == "mail.list"
 
 
 def test_application_distinguishes_optional_installation_from_connection_requirement(tmp_path) -> None:

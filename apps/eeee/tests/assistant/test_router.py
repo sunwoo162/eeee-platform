@@ -97,6 +97,14 @@ def test_known_optional_plugin_request_is_not_misreported_as_general_conversatio
     assert result.required_plugin_name == "Notion"
 
 
+def test_known_first_party_plugin_request_suggests_installation() -> None:
+    result = router().select(AssistantRequest(raw_text="Gmail에서 안 읽은 메일 찾아줘"))
+
+    assert result.status == "plugin_required"
+    assert result.required_plugin_id == "gmail"
+    assert result.required_plugin_name == "Gmail"
+
+
 def test_registered_explicit_capability_overrides_keyword_scoring() -> None:
     result = router().select(
         AssistantRequest(

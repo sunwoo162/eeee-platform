@@ -123,7 +123,7 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     assert window.quick_reply.text() == ""
     assert not window.quick_reply.isVisible()
     window.hide_command_surface()
-    assert not window.detail.isHidden()
+    assert window.reply_surface.isHidden()
     window.close()
 
 
@@ -247,7 +247,9 @@ def test_quick_chat_above_pet_contains_input_and_latest_reply():
     window._reposition_command_surface()
 
     anchor = window._pet_anchor_rect()
-    tail_offset = window._speech_bubble_tail_offset(window.command_surface.size())
+    tail_offset = window._speech_bubble_tail_offset(
+        window.command_surface, window.command_surface.size()
+    )
     assert abs(
         window.command_surface.frameGeometry().top()
         + tail_offset.y()
@@ -756,7 +758,7 @@ def test_quick_chat_is_anchored_to_the_pet_and_clamped_to_screen_edges():
     surface_size = QSize(320, 180)
     position = window._command_surface_position(screen, surface_size)
     anchor = window._pet_anchor_rect()
-    tail_offset = window._speech_bubble_tail_offset(surface_size)
+    tail_offset = window._speech_bubble_tail_offset(window.command_surface, surface_size)
 
     assert position.x() >= screen.left() + 12
     assert position.x() + surface_size.width() <= screen.right() - 11
@@ -778,7 +780,7 @@ def test_quick_chat_prefers_above_the_pet_when_space_is_available():
     anchor = window._pet_anchor_rect()
     position = window._command_surface_position(screen, surface_size)
 
-    tail_offset = window._speech_bubble_tail_offset(surface_size)
+    tail_offset = window._speech_bubble_tail_offset(window.command_surface, surface_size)
     assert abs(
         position.y() + tail_offset.y()
         - (anchor.top() + round(anchor.height() * 0.34))
@@ -801,12 +803,36 @@ def test_quick_chat_bubble_tail_tracks_the_cat_head_not_the_window_frame():
     position = window._command_surface_position(screen, surface_size)
     character_top_left = window.character.mapToGlobal(window.character.rect().topLeft())
     character_rect = QRect(character_top_left, window.character.size())
-    tail_offset = window._speech_bubble_tail_offset(surface_size)
+    tail_offset = window._speech_bubble_tail_offset(window.command_surface, surface_size)
     expected_tail_x = character_rect.left() + round(character_rect.width() * 0.44)
     expected_tail_y = character_rect.top() + round(character_rect.height() * 0.34)
 
     assert abs(position.x() + tail_offset.x() - expected_tail_x) <= 2
     assert abs(position.y() + tail_offset.y() - expected_tail_y) <= 2
+    window.close()
+
+
+def test_normal_reply_bubble_uses_the_cat_eye_anchor():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show()
+    window.move(200, 220)
+    window._render({"state": "completed", "message": "완료했어."})
+    _wait_for(app, lambda: window.reply_surface.isVisible())
+
+    anchor = window._pet_anchor_rect()
+    surface_size = window.reply_surface.size()
+    position = window._reply_surface_position()
+    tail_offset = window._speech_bubble_tail_offset(window.reply_surface, surface_size)
+
+    assert abs(
+        position.x() + tail_offset.x()
+        - (anchor.left() + round(anchor.width() * 0.44))
+    ) <= 12
+    assert abs(
+        position.y() + tail_offset.y()
+        - (anchor.top() + round(anchor.height() * 0.34))
+    ) <= 2
     window.close()
 
 
@@ -878,12 +904,12 @@ def test_short_reply_bubble_is_hidden_after_its_display_window():
     window = PetWindow(SlowClient())
     _wait_for(app, lambda: window.current_state.get("state") == "idle")
     window._render({"state": "completed", "message": "완료했어."})
-    assert not window.detail.isHidden()
+    assert not window.reply_surface.isHidden()
 
     window._reply_hide_timer.setInterval(20)
     window._reply_hide_timer.stop()
     window._schedule_reply_hide()
-    _wait_for(app, lambda: window.detail.isHidden())
+    _wait_for(app, lambda: window.reply_surface.isHidden())
 
     assert window.detail.isHidden()
     window.close()

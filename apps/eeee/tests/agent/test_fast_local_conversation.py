@@ -40,3 +40,19 @@ def test_builtin_local_lane_handles_acknowledgements_without_repeating_listening
 
     assert result.status == "completed"
     assert result.summary != "응, 듣고 있어."
+
+
+def test_builtin_local_lane_matches_only_the_current_request_in_a_secretary_prompt():
+    prompt = (
+        "너는 EEEE라는 개인 비서야. 사용자가 무엇을 할 수 있냐고 물으면 능력을 설명해.\n"
+        '최근 대화: [{"role":"user","content":"회의 정리해줘"}]\n'
+        "현재 사용자 요청: 오늘 기분이 조금 가라앉았어"
+    )
+
+    result = FastLocalConversationRuntime().run(
+        AgentRequest(prompt, Path("."), [], "run-context-1")
+    )
+
+    assert result.status == "completed"
+    assert "기본 대화부터" not in result.summary
+    assert "듣고 있어" in result.summary

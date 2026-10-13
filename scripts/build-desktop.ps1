@@ -28,6 +28,11 @@ if (-not (Test-Path -LiteralPath $executable)) {
     throw "Gleave Desktop executable was not produced at $executable."
 }
 
+$selfTest = Start-Process -FilePath $executable -ArgumentList "--self-test" -Wait -PassThru -NoNewWindow
+if ($selfTest.ExitCode -ne 0) {
+    throw "Gleave Desktop packaged runtime self-test failed with code $($selfTest.ExitCode)."
+}
+
 $guiTest = Start-Process -FilePath $executable -ArgumentList "--gui-self-test" -Wait -PassThru
 if ($guiTest.ExitCode -ne 0) {
     throw "Gleave Desktop GUI import self-test failed with code $($guiTest.ExitCode)."

@@ -275,6 +275,28 @@ def test_many_line_reply_bubble_grows_with_the_text():
     window.close()
 
 
+def test_reply_bubble_size_hint_allocates_text_area_before_the_tail():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window._timer.stop()
+    window._typing_timer.stop()
+    width = 360
+
+    for line_count in (2, 10):
+        text = "\n".join(f"응답 {index}" for index in range(line_count))
+        window.reply_surface.setText(text)
+        expected_height = window.reply_surface.heightForWidth(width)
+
+        assert window.reply_surface.sizeHint().height() >= expected_height
+        window.reply_surface.resize(width, 1)
+        window.reply_surface.show()
+        window.reply_surface.adjustSize()
+        app.processEvents()
+        assert window.reply_surface.height() >= expected_height
+
+    window.close()
+
+
 def test_idle_assistant_reply_is_not_replaced_by_greeting():
     app = QApplication.instance() or QApplication([])
     client = ClarificationClient()

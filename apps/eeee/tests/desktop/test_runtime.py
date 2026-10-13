@@ -21,7 +21,7 @@ def test_resolves_chrome_from_common_windows_install_path(monkeypatch, tmp_path)
     assert _resolve_browser_executable(None) == str(chrome)
 
 
-def test_chatgpt_browser_is_minimized_for_normal_runtime(monkeypatch, tmp_path):
+def test_chatgpt_browser_is_headless_for_normal_runtime(monkeypatch, tmp_path):
     launched = []
     launch_kwargs = []
 
@@ -53,8 +53,8 @@ def test_chatgpt_browser_is_minimized_for_normal_runtime(monkeypatch, tmp_path):
 
     runtime._launch_chatgpt_browser()
 
-    assert "--start-minimized" in launched[0]
-    assert "--headless=new" not in launched[0]
+    assert "--headless=new" in launched[0]
+    assert "--start-minimized" not in launched[0]
     assert launch_kwargs[0]["creationflags"] == subprocess.CREATE_NO_WINDOW
 
 

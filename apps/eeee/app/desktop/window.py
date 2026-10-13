@@ -826,7 +826,7 @@ class PetWindow:
 
             def _initial_pet_position(self, screen_rect, window_size):
                 """Return the stable first-launch position in the screen corner."""
-                margin = 24
+                margin = 8
                 return QPoint(
                     screen_rect.right() - window_size.width() - margin + 1,
                     screen_rect.bottom() - window_size.height() - margin + 1,
@@ -1152,6 +1152,8 @@ class PetWindow:
                 self._last_text_edit_at = time.monotonic() if text else 0.0
                 if not self._typing_active:
                     self._typing_frame = 0
+                if self.command_surface.isVisible():
+                    self._schedule_reply_hide()
                 self._update_pet_motion()
 
             def _hand_for_key_code(self, code: int) -> str:
@@ -1324,11 +1326,10 @@ class PetWindow:
                     self._schedule_reply_hide()
 
             def _schedule_reply_hide(self):
-                # A long-running task is acknowledged in the bubble, then the
-                # bubble gets out of the user's way. Progress remains in the
-                # workspace/status model; it must not occupy the desktop for
-                # the entire duration of a project or plugin run.
-                if self.detail.text().strip():
+                # A visible reply or empty composer is temporary UI. Keep the
+                # bubble out of the user's way after five seconds of inactivity
+                # while allowing typing to restart the same countdown.
+                if self.detail.text().strip() or self.command_surface.isVisible():
                     self._reply_hide_timer.start()
                 else:
                     self._reply_hide_timer.stop()

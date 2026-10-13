@@ -356,6 +356,20 @@ def test_quick_chat_starts_with_only_a_centered_composer():
     window.close()
 
 
+def test_empty_quick_chat_closes_after_inactivity_timeout():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    window._reply_hide_timer.setInterval(20)
+    window._reply_hide_timer.stop()
+
+    window._schedule_reply_hide()
+    _wait_for(app, lambda: window.command_surface.isHidden())
+
+    assert window.command_surface.isHidden()
+    window.close()
+
+
 def test_quick_chat_send_switches_from_composer_to_one_centered_reply():
     app = QApplication.instance() or QApplication([])
     client = SlowRouteClient()
@@ -438,7 +452,7 @@ def test_initial_pet_position_is_bottom_right_of_the_available_screen():
 
     position = window._initial_pet_position(QRect(0, 0, 800, 600), QSize(180, 108))
 
-    assert position == QPoint(596, 468)
+    assert position == QPoint(612, 484)
     window.close()
 
 

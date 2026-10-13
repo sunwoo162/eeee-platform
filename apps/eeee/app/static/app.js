@@ -297,6 +297,41 @@ async function refreshEeeeControlCenter() {
 function renderEeeePluginStatus(plugins) {
   const list = $("#eeee-plugin-list");
   if (!list) return;
+  list.__eeeePlugins = plugins;
+  if (!list.dataset.bound) {
+    list.dataset.bound = "true";
+    list.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-plugin-id]");
+      if (!button) return;
+      const plugin = (list.__eeeePlugins || []).find((item) => item.pluginId === button.dataset.pluginId);
+      if (!plugin) return;
+      button.disabled = true;
+      try {
+        if (plugin.nextAction === "install") {
+          await requestJson(`/api/plugins/${encodeURIComponent(plugin.pluginId)}/install`, { method: "POST" });
+        } else if (["connect", "reconnect"].includes(plugin.nextAction)) {
+          const popup = typeof window !== "undefined" && typeof window.open === "function"
+            ? window.open("about:blank", "_blank", "noopener,noreferrer")
+            : null;
+          const result = await requestJson(`/api/plugins/${encodeURIComponent(plugin.pluginId)}/oauth/start`, {
+            method: "POST",
+            body: JSON.stringify({ approvedPermissions: plugin.permissions || [] }),
+          });
+          if (popup) popup.location.href = result.authorizationUrl;
+          else if (typeof window !== "undefined") window.location.href = result.authorizationUrl;
+        } else if (plugin.nextAction === "resume") {
+          await requestJson(`/api/plugins/${encodeURIComponent(plugin.pluginId)}/resume`, { method: "POST" });
+        }
+        await refreshEeeeControlCenter();
+      } catch (error) {
+        const status = $("#eeee-control-status");
+        status.textContent = error?.detail || "플러그인 연결에 실패했습니다.";
+        status.className = "status error";
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
   list.replaceChildren();
   if (!plugins.length) {
     const empty = document.createElement("li");
@@ -325,7 +360,17 @@ function renderEeeePluginStatus(plugins) {
     const action = document.createElement("span");
     action.className = "muted";
     action.textContent = plugin.nextAction ? `다음: ${plugin.nextAction}` : "";
-    item.append(name, status, action);
+    const nextActionLabels = { install: "설치", connect: "연결", reconnect: "다시 연결", resume: "재개" };
+    if (nextActionLabels[plugin.nextAction]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "plugin-action";
+      button.dataset.pluginId = plugin.pluginId || "";
+      button.textContent = nextActionLabels[plugin.nextAction];
+      item.append(name, status, button);
+    } else {
+      item.append(name, status, action);
+    }
     list.append(item);
   }
 }

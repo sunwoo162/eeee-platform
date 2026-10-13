@@ -788,6 +788,10 @@ def build_desktop_router(
                     "pluginId": entry.id,
                     "name": entry.name,
                     "version": entry.version,
+                    "description": entry.description,
+                    "authMode": entry.auth_mode,
+                    "permissions": entry.permissions,
+                    "installSource": entry.install_source,
                     "status": status,
                     "nextAction": {
                         "not_installed": "install",

@@ -15,5 +15,8 @@ def test_web_control_center_has_plugin_status_surface(tmp_path) -> None:
 
     assert 'id="eeee-plugin-list"' in page
     assert "renderEeeePluginStatus" in script
+    assert "/oauth/start" in script
+    assert "approvedPermissions" in script
+    assert "plugin-action" in script
     assert "awaiting_authentication" in script
     assert ".eeee-plugin-item" in styles

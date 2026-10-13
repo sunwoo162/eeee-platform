@@ -235,13 +235,11 @@ class PetWindow:
                     + self._base_contents_margins[1]
                     + self._base_contents_margins[3]
                 )
-                # QTextDocument reports the line box tightly.  QLabel still
-                # needs generous vertical room for Korean glyph
-                # ascenders/descenders, especially when a two-line reply is
-                # shown while the tail padding is applied.  The old 96px
-                # minimum left only a thin 31px body, which clipped the text
-                # even though the document measurement technically fit.
-                body_height += 24
+                # QTextDocument reports the line box tightly.  Reserve one
+                # font line of breathing room for glyph ascenders/descenders,
+                # while keeping the total height proportional to the measured
+                # wrapped text instead of imposing a fixed body height.
+                body_height += max(1, self.fontMetrics().lineSpacing())
                 return int(body_height / self._TAIL_Y_RATIO + 0.9999)
 
             def heightForWidth(self, width):

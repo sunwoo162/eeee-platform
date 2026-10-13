@@ -38,3 +38,13 @@ def test_catalog_rejects_blank_or_duplicate_permission_ids() -> None:
 def test_unknown_catalog_plugin_is_not_silently_created() -> None:
     with pytest.raises(KeyError):
         PluginCatalog().get("unknown")
+
+
+def test_catalog_includes_first_party_connector_candidates() -> None:
+    ids = {entry.id for entry in PluginCatalog().list()}
+
+    assert {
+        "gmail", "google-calendar", "google-drive", "google-contacts",
+        "github", "figma", "slack", "linear", "todoist",
+        "outlook-email", "outlook-calendar", "notion",
+    }.issubset(ids)

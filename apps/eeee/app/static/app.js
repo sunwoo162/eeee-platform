@@ -348,6 +348,7 @@ function renderEeeePluginStatus(plugins) {
     connected: "연결됨",
     paused: "일시정지",
     failed: "오류",
+    disabled: "설정 필요",
   };
   for (const plugin of plugins) {
     const item = document.createElement("li");

@@ -49,6 +49,48 @@ def test_openapi_connector_health_and_invoke_use_declared_operations() -> None:
     assert transport.calls[-1][0] == "GET"
 
 
+def test_openapi_connector_interpolates_path_parameters_from_value() -> None:
+    transport = FakeHttpTransport(FakeResponse(200, {"ok": True}))
+    connector = HttpOpenApiConnector(
+        "github",
+        base_url="https://api.example",
+        transport=transport,
+        operations={
+            "pull_requests.write": HttpOperation(
+                method="POST", path="/repos/{owner}/{repo}/pulls", permission="pull_requests.write"
+            )
+        },
+    )
+    connection = connector.connect("user-a", {"access_token": "secret"}, {"pull_requests.write"})
+
+    connector.invoke(
+        connection,
+        "pull_requests.write",
+        {"owner": "octo", "repo": "hello-world", "title": "fix"},
+    )
+
+    assert transport.calls[-1][1] == "https://api.example/repos/octo/hello-world/pulls"
+    assert transport.calls[-1][3] == {"title": "fix"}
+
+
+def test_openapi_connector_rejects_missing_or_non_scalar_path_parameters() -> None:
+    transport = FakeHttpTransport(FakeResponse(200, {"ok": True}))
+    connector = HttpOpenApiConnector(
+        "figma",
+        base_url="https://api.example",
+        transport=transport,
+        operations={
+            "files.get": HttpOperation(method="GET", path="/files/{file_key}", permission="files.read")
+        },
+    )
+    connection = connector.connect("user-a", {"access_token": "secret"}, {"files.read"})
+
+    with pytest.raises(ValueError, match="file_key"):
+        connector.invoke(connection, "files.get", {})
+    with pytest.raises(ValueError, match="file_key"):
+        connector.invoke(connection, "files.get", {"file_key": {"nested": True}})
+
+
 def test_openapi_connector_blocks_missing_permission_and_maps_provider_errors() -> None:
     transport = FakeHttpTransport(FakeResponse(403, {"error": "forbidden"}))
     connector = HttpOpenApiConnector(

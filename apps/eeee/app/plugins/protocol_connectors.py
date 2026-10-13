@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from typing import Literal, Protocol
+from urllib.parse import quote
+import re
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.plugins.connectors import ConnectorConnection, ConnectorHealth, PluginConnector
@@ -12,6 +15,16 @@ from app.plugins.connectors import ConnectorConnection, ConnectorHealth, PluginC
 
 class HttpTransport(Protocol):
     def request(self, method: str, url: str, *, headers: Mapping[str, str], json=None): ...
+
+
+class HttpxTransport:
+    def __init__(self, *, timeout_seconds: float = 20.0) -> None:
+        self.timeout_seconds = timeout_seconds
+
+    def request(self, method: str, url: str, *, headers: Mapping[str, str], json=None):
+        return httpx.request(
+            method, url, headers=dict(headers), json=json, timeout=self.timeout_seconds
+        )
 
 
 class HttpOperation(BaseModel):
@@ -74,11 +87,12 @@ class HttpOpenApiConnector:
             raise KeyError(f"unknown connector action: {action}")
         if operation.permission not in connection.approved_permissions:
             raise PermissionError(f"permission is required: {operation.permission}")
+        path, body = _render_operation_path(operation.path, value)
         response = self.transport.request(
             operation.method,
-            f"{self.base_url}{operation.path}",
+            f"{self.base_url}{path}",
             headers=self._headers(connection),
-            json=value,
+            json=body,
         )
         health = _health_from_status(self.plugin_id, response.status_code)
         if health.status != "healthy":
@@ -159,3 +173,22 @@ def _health_from_status(plugin_id: str, status_code: int) -> ConnectorHealth:
     if status_code >= 500:
         return ConnectorHealth(status="unavailable", code="provider_unavailable", reason="provider is temporarily unavailable")
     return ConnectorHealth(status="unhealthy", code="provider_error", reason=f"{plugin_id} provider returned HTTP {status_code}")
+
+
+_PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _render_operation_path(path: str, value: Mapping[str, object]) -> tuple[str, dict[str, object]]:
+    """Substitute declared path parameters and keep the request body clean."""
+
+    parameters = set(_PATH_PARAMETER.findall(path))
+    body = dict(value)
+    for parameter in parameters:
+        if parameter not in value:
+            raise ValueError(f"path parameter is required: {parameter}")
+        raw = value[parameter]
+        if not isinstance(raw, (str, int, float, bool)):
+            raise ValueError(f"path parameter must be scalar: {parameter}")
+        path = path.replace("{" + parameter + "}", quote(str(raw), safe=""))
+        body.pop(parameter, None)
+    return path, body

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     notion_parent_page_id: str | None = None
     notion_api_base: str = "https://api.notion.com"
     notion_api_version: str = "2026-03-11"
+    plugin_provider_config_json: str | None = None
     iseol_bridge_token: str | None = None
     claim_latch_adapter_url: str | None = None
     claim_latch_auto_start: bool = True

@@ -54,6 +54,7 @@ from app.plugins.host import PluginHost
 from app.plugins.notion_connector import NotionConnector
 from app.plugins.oauth import HttpOAuthTransport, OAuthBroker, OAuthProviderConfig
 from app.plugins.platform import PluginPlatformService
+from app.plugins.providers import build_provider_connectors, load_provider_configs
 from app.storage.sqlite import SQLiteStore
 from app.trust.gate import TrustGate
 from app.trust.pipeline import TrustPipeline
@@ -69,6 +70,13 @@ def create_app(
     oauth_configs: Mapping[str, OAuthProviderConfig] | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings()
+    configured_provider_configs = load_provider_configs(app_settings.plugin_provider_config_json)
+    provider_connectors = build_provider_connectors(configured_provider_configs)
+    configured_oauth_configs: dict[str, OAuthProviderConfig] = {
+        plugin_id: config.oauth
+        for plugin_id, config in configured_provider_configs.items()
+    }
+    configured_oauth_configs.update(oauth_configs or {})
     application = FastAPI(title=app_settings.app_name)
     store = SQLiteStore(app_settings.data_dir / "state.sqlite3")
     store.init()
@@ -107,7 +115,7 @@ def create_app(
                     api_version=app_settings.notion_api_version,
                 )
             )
-        },
+        } | provider_connectors,
     )
     configured_oauth_broker = oauth_broker or OAuthBroker(HttpOAuthTransport())
     capability_router = CapabilityRouter(
@@ -328,7 +336,7 @@ def create_app(
     application.state.plugin_host = plugin_host
     application.state.plugin_platform = plugin_platform
     application.state.oauth_broker = configured_oauth_broker
-    application.state.oauth_configs = dict(oauth_configs or {})
+    application.state.oauth_configs = dict(configured_oauth_configs)
 
     def mobile_snapshot(project_id: str | None) -> dict[str, object]:
         snapshot: dict[str, object] = {
@@ -383,7 +391,7 @@ def create_app(
             plugin_host,
             plugin_platform,
             oauth_broker=configured_oauth_broker,
-            oauth_configs=oauth_configs or {},
+            oauth_configs=configured_oauth_configs,
         )
     )
     static_dir = Path(__file__).parent / "static"

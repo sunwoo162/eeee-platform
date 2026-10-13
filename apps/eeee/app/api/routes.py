@@ -261,6 +261,7 @@ def build_plugin_router(
                 "connected": "open",
                 "failed": "reconnect",
                 "paused": "resume",
+                "disabled": "configure",
             }.get(status, "connect")
             views.append(PluginCatalogView(
                 id=entry.id, name=entry.name, version=entry.version,
@@ -279,6 +280,8 @@ def build_plugin_router(
             return platform.install(plugin_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.delete("/{plugin_id}/install", status_code=204)
     def uninstall_plugin(plugin_id: str) -> Response:
@@ -800,6 +803,7 @@ def build_desktop_router(
                         "connected": "open",
                         "failed": "reconnect",
                         "paused": "resume",
+                        "disabled": "configure",
                     }.get(status, "connect"),
                     "approvedPermissions": _platform_permissions(plugin_platform, entry.id),
                 })

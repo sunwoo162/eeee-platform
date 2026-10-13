@@ -40,6 +40,7 @@ class OAuthAuthorizationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     authorization_url: str
+    state: str
     expires_at: datetime
 
 
@@ -134,6 +135,15 @@ class _OAuthSession:
         self.account_label = account_label
 
 
+class _OAuthTerminal:
+    def __init__(self, *, user_id: str, plugin_id: str, state: str, result: str, error: str | None = None) -> None:
+        self.user_id = user_id
+        self.plugin_id = plugin_id
+        self.state = state
+        self.result = result
+        self.error = error
+
+
 class OAuthBroker:
     def __init__(
         self,
@@ -149,6 +159,7 @@ class OAuthBroker:
         self._transport = transport
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._sessions: dict[str, _OAuthSession] = {}
+        self._terminal: dict[str, _OAuthTerminal] = {}
 
     def start(
         self,
@@ -186,8 +197,43 @@ class OAuthBroker:
         separator = "&" if "?" in config.authorization_endpoint else "?"
         return OAuthAuthorizationRequest(
             authorization_url=f"{config.authorization_endpoint}{separator}{query}",
+            state=state,
             expires_at=expires_at,
         )
+
+    def status(self, state: str, *, plugin_id: str) -> dict[str, str | None]:
+        terminal = self._terminal.get(state)
+        if terminal is not None and terminal.plugin_id == plugin_id:
+            return {"pluginId": plugin_id, "state": terminal.result, "error": terminal.error}
+        session = self._sessions.get(state)
+        if session is not None and session.plugin_id == plugin_id:
+            if session.expires_at <= self._clock():
+                self._sessions.pop(state, None)
+                self._terminal[state] = _OAuthTerminal(
+                    user_id=session.user_id, plugin_id=plugin_id, state=state,
+                    result="expired", error="oauth_expired"
+                )
+                return {"pluginId": plugin_id, "state": "expired", "error": "oauth_expired"}
+            return {"pluginId": plugin_id, "state": "pending", "error": None}
+        return {"pluginId": plugin_id, "state": "unknown", "error": None}
+
+    def mark_failed(self, state: str, plugin_id: str, error: str = "oauth_connection_failed") -> None:
+        user_id = self._owner(state, plugin_id) or "local-user"
+        self._terminal[state] = _OAuthTerminal(
+            user_id=user_id, plugin_id=plugin_id, state=state, result="failed", error=error
+        )
+
+    def owner(self, state: str, *, plugin_id: str) -> str | None:
+        return self._owner(state, plugin_id)
+
+    def _owner(self, state: str, plugin_id: str) -> str | None:
+        session = self._sessions.get(state)
+        if session is not None and session.plugin_id == plugin_id:
+            return session.user_id
+        terminal = self._terminal.get(state)
+        if terminal is not None and terminal.plugin_id == plugin_id:
+            return terminal.user_id
+        return None
 
     def complete(
         self,
@@ -203,18 +249,41 @@ class OAuthBroker:
             raise OAuthStateMismatch("OAuth state is invalid")
         self._sessions.pop(state, None)
         if session.expires_at <= self._clock():
+            self._terminal[state] = _OAuthTerminal(
+                user_id=session.user_id, plugin_id=plugin_id, state=state, result="expired", error="oauth_expired"
+            )
             raise OAuthStateMismatch("OAuth state has expired")
         if error == "access_denied":
+            self._terminal[state] = _OAuthTerminal(
+                user_id=session.user_id, plugin_id=plugin_id, state=state, result="cancelled", error="oauth_cancelled"
+            )
             raise OAuthCancelled("OAuth authorization was cancelled")
         if error:
+            self._terminal[state] = _OAuthTerminal(
+                user_id=session.user_id, plugin_id=plugin_id, state=state, result="failed", error="oauth_provider_error"
+            )
             raise OAuthError(f"OAuth provider returned {error}")
         if not code:
+            self._terminal[state] = _OAuthTerminal(
+                user_id=session.user_id, plugin_id=plugin_id, state=state, result="failed", error="oauth_code_missing"
+            )
             raise OAuthError("OAuth callback did not include an authorization code")
-        credential = self._transport.exchange_code(
-            session.config,
-            code=code,
-            code_verifier=session.verifier,
-            redirect_uri=session.redirect_uri,
+        try:
+            credential = self._transport.exchange_code(
+                session.config,
+                code=code,
+                code_verifier=session.verifier,
+                redirect_uri=session.redirect_uri,
+            )
+        except Exception as exc:
+            self._terminal[state] = _OAuthTerminal(
+                user_id=session.user_id, plugin_id=plugin_id, state=state, result="failed", error="oauth_token_exchange_failed"
+            )
+            if isinstance(exc, OAuthError):
+                raise
+            raise OAuthError("OAuth token exchange failed") from exc
+        self._terminal[state] = _OAuthTerminal(
+            user_id=session.user_id, plugin_id=plugin_id, state=state, result="completed"
         )
         return OAuthCompletion(
             user_id=session.user_id,

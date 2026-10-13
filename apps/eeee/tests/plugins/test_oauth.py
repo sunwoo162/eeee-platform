@@ -43,6 +43,7 @@ def test_start_builds_pkce_authorization_url_without_exposing_verifier() -> None
     assert query["code_challenge_method"] == ["S256"]
     assert query["code_challenge"]
     assert "code_verifier" not in result.authorization_url
+    assert result.state == query["state"][0]
     assert result.expires_at > datetime.now(timezone.utc)
 
 
@@ -64,6 +65,7 @@ def test_complete_exchanges_code_and_consumes_one_time_session() -> None:
     assert credential.approved_permissions == frozenset({"mail.read"})
     assert credential.account_label == "Work"
     assert transport.calls[0][1] == "auth-code"
+    assert broker.status(state, plugin_id="gmail")["state"] == "completed"
     with pytest.raises(OAuthStateMismatch):
         broker.complete(user_id="user-a", plugin_id="gmail", state=state, code="again")
 
@@ -104,3 +106,19 @@ def test_cancel_does_not_exchange_or_leak_a_credential() -> None:
             code=None, error="access_denied",
         )
     assert transport.calls == []
+    assert broker.status(state, plugin_id="gmail")["state"] == "cancelled"
+
+
+def test_status_rejects_a_state_for_another_plugin_without_revealing_session_data() -> None:
+    broker = OAuthBroker(FakeOAuthTransport(), ttl_seconds=300)
+    request = broker.start(
+        user_id="user-a", plugin_id="gmail", config=_config(),
+        redirect_uri="http://127.0.0.1:49152/oauth/callback",
+    )
+    state = request.state
+
+    assert broker.status(state, plugin_id="notion") == {
+        "pluginId": "notion",
+        "state": "unknown",
+        "error": None,
+    }

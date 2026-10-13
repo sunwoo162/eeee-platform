@@ -143,6 +143,42 @@ class PluginPlatformService:
         except KeyError:
             return "awaiting_authentication"
 
+    def begin_oauth(
+        self,
+        user_id: str,
+        plugin_id: str,
+        approved_permissions: set[str],
+        account_label: str | None,
+    ) -> None:
+        """Record an in-flight OAuth attempt without storing a provider secret."""
+        entry = self.catalog_source.get(plugin_id)
+        if not self.installations.is_installed(plugin_id):
+            raise RuntimeError("plugin must be installed before connecting")
+        if entry.connector not in self.connectors:
+            raise RuntimeError(f"plugin connector is unavailable: {entry.connector}")
+        if not approved_permissions or not approved_permissions.issubset(set(entry.permissions)):
+            raise PermissionError("plugin permission approval is invalid")
+        try:
+            prior = self.connections.get(user_id, plugin_id)
+        except KeyError:
+            prior = None
+        self.connections.save(PluginConnection(
+            userId=user_id, pluginId=plugin_id, status="connecting",
+            approvedPermissions=sorted(approved_permissions),
+            credentialRef=prior.credential_ref if prior else None,
+            accountLabel=account_label, updatedAt=_now(),
+        ))
+
+    def fail_oauth(self, user_id: str, plugin_id: str, error: str) -> None:
+        try:
+            connection = self.connections.get(user_id, plugin_id)
+        except KeyError:
+            return
+        self.connections.save(connection.model_copy(update={
+            "status": "failed", "last_health": "unavailable", "last_error": error,
+            "updated_at": _now(),
+        }))
+
     def connect(
         self,
         user_id: str,

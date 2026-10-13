@@ -67,6 +67,11 @@ def test_oauth_start_and_callback_connect_user_without_returning_tokens(tmp_path
     body = started.json()
     assert body["pluginId"] == "notion"
     assert "oauth-secret" not in started.text
+    pending = client.get(
+        "/api/plugins/notion/connection",
+        headers={"X-EEEE-User-Id": "user-a"},
+    )
+    assert pending.json()["status"] == "connecting"
     query = parse_qs(urlparse(body["authorizationUrl"]).query)
     state = query["state"][0]
     assert "code_verifier" not in body["authorizationUrl"]
@@ -76,8 +81,19 @@ def test_oauth_start_and_callback_connect_user_without_returning_tokens(tmp_path
         params={"state": state, "code": "authorization-code"},
     )
     assert callback.status_code == 200
-    assert callback.json()["status"] == "connected"
+    assert callback.headers["content-type"].startswith("text/html")
+    assert "연결" in callback.text
     assert "oauth-secret" not in callback.text
+
+    oauth_status = client.get(
+        "/api/plugins/notion/oauth/status",
+        params={"state": state},
+        headers={"X-EEEE-User-Id": "user-a"},
+    )
+    assert oauth_status.status_code == 200
+    assert oauth_status.json() == {
+        "pluginId": "notion", "state": "completed", "error": None
+    }
 
     connection = client.get(
         "/api/plugins/notion/connection", headers={"X-EEEE-User-Id": "user-a"}
@@ -111,3 +127,28 @@ def test_oauth_requires_installation_and_configuration(tmp_path) -> None:
         json={"approvedPermissions": ["pages.read"]},
     )
     assert response.status_code == 503
+
+
+def test_oauth_cancel_returns_friendly_page_and_terminal_status(tmp_path) -> None:
+    client = TestClient(_application(tmp_path))
+    assert client.post("/api/plugins/notion/install").status_code == 200
+    started = client.post(
+        "/api/plugins/notion/oauth/start",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"approvedPermissions": ["pages.read"]},
+    )
+    state = parse_qs(urlparse(started.json()["authorizationUrl"]).query)["state"][0]
+
+    callback = client.get(
+        "/api/plugins/notion/oauth/callback",
+        params={"state": state, "error": "access_denied"},
+    )
+    assert callback.status_code == 200
+    assert callback.headers["content-type"].startswith("text/html")
+    assert "취소" in callback.text
+    assert client.get(
+        "/api/plugins/notion/oauth/status", params={"state": state}
+    ).json()["state"] == "cancelled"
+    assert client.get(
+        "/api/plugins/notion/connection", headers={"X-EEEE-User-Id": "user-a"}
+    ).json()["status"] == "failed"

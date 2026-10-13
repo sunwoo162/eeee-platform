@@ -235,6 +235,27 @@ def test_bubble_text_is_black_and_centered_without_a_height_cap():
     window.close()
 
 
+def test_two_line_korean_bubble_keeps_glyphs_inside_the_body():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    text = "안녕하세요! 무엇을\n도와드릴까요?"
+
+    window.reply_surface.setText(text)
+    window.reply_surface.show()
+    window.reply_surface.adjustSize()
+    app.processEvents()
+
+    margins = window.reply_surface.contentsMargins()
+    body_height = window.reply_surface.height() - margins.top() - margins.bottom()
+    line_height = window.reply_surface.fontMetrics().lineSpacing()
+
+    # The bubble image has a transparent tail area below the text body. Keep
+    # enough extra room for two Korean glyph rows so their ascenders/descenders
+    # cannot be clipped when the label is rendered at its minimum height.
+    assert body_height >= line_height * 2 + 8
+    window.close()
+
+
 def test_idle_assistant_reply_is_not_replaced_by_greeting():
     app = QApplication.instance() or QApplication([])
     client = ClarificationClient()

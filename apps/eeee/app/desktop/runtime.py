@@ -349,10 +349,11 @@ class EmbeddedApiRuntime:
             "https://chatgpt.com/",
         ]
         if not visible:
-            # ChatGPT Web does not expose a stable authenticated composer in
-            # Chromium headless mode. Keep one real browser session, but keep
-            # its window out of the user's way during normal operation.
-            command.insert(1, "--start-minimized")
+            # The assistant must never cover the user's active window during
+            # normal operation. Keep the persisted profile and CDP session,
+            # but run Chromium without a desktop window. Explicit login uses
+            # the same profile with a visible browser below.
+            command.insert(1, "--headless=new")
         self._chatgpt_browser = subprocess.Popen(
             command,
             **_background_process_kwargs(),

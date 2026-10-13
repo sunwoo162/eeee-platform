@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEventLoop, QPoint, QPointF, QRect, QSize, Qt
+from PySide6.QtGui import QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -898,6 +899,69 @@ def test_normal_reply_bubble_uses_the_cat_eye_anchor():
         - (anchor.left() + round(anchor.width() * 0.44))
     ) <= 12
     assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
+    window.close()
+
+
+def test_long_reply_bubble_reserves_space_above_the_tail_for_all_text():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    text = (
+        "긴 답변입니다. 사용자님의 요청에 따라 필요한 작업을 수행하고 현재 상태와 "
+        "다음 단계를 자세히 안내해 드립니다. 이 내용은 여러 줄로 표시되어도 "
+        "말풍선 안에서 전부 보여야 합니다."
+    )
+
+    window.reply_surface.setText(text)
+    window.reply_surface.show()
+    window.reply_surface.adjustSize()
+    app.processEvents()
+
+    document = QTextDocument()
+    document.setDocumentMargin(0)
+    document.setDefaultFont(window.reply_surface.font())
+    document.setTextWidth(
+        window.reply_surface.width()
+        - window.reply_surface.contentsMargins().left()
+        - window.reply_surface.contentsMargins().right()
+    )
+    document.setPlainText(text)
+    actual_body_height = window.reply_surface.height() - sum(
+        (
+            window.reply_surface.contentsMargins().top(),
+            window.reply_surface.contentsMargins().bottom(),
+        )
+    )
+
+    assert actual_body_height >= document.size().height()
+    window.close()
+
+
+def test_quick_chat_long_reply_reserves_space_above_the_tail():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    text = (
+        "긴 답변입니다. 사용자님의 요청에 따라 필요한 작업을 수행하고 현재 상태와 "
+        "다음 단계를 자세히 안내해 드립니다. 이 내용은 여러 줄로 표시되어도 "
+        "말풍선 안에서 전부 보여야 합니다."
+    )
+
+    window.show_command_surface()
+    window._set_quick_chat_mode("reply", text)
+    window.command_surface.adjustSize()
+    app.processEvents()
+
+    layout = window.command_surface.layout()
+    assert layout.hasHeightForWidth()
+    layout_height = window.command_surface._base_layout_height_for_width(
+        window.command_surface.width()
+    )
+    tail_safe_body_height = round(
+        window.command_surface.height()
+        * window.command_surface._TAIL_Y_RATIO
+    )
+
+    assert tail_safe_body_height >= layout_height
+    assert window.quick_reply.geometry().bottom() <= tail_safe_body_height
     window.close()
 
 

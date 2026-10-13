@@ -121,6 +121,9 @@ _DESKTOP_TEXT = {
 }
 
 
+_SPEECH_BUBBLE_TAIL_Y_RATIO = 764 / 887
+
+
 # Virtual-key codes grouped by physical QWERTY position.  The boundary is
 # between T/Y, G/H, and B/N, matching the user's left/right keyboard split.
 _LEFT_HAND_KEY_CODES = frozenset(
@@ -169,6 +172,7 @@ class PetWindow:
                 QPainter,
                 QPainterPath,
                 QPixmap,
+                QTextDocument,
             )
             from PySide6.QtWidgets import (
                 QComboBox,
@@ -193,6 +197,8 @@ class PetWindow:
         class _SpeechBubbleLabel(QLabel):
             """Draw a scalable bubble asset behind dynamic response text."""
 
+            _TAIL_Y_RATIO = _SPEECH_BUBBLE_TAIL_Y_RATIO
+
             def __init__(self, bubble_pixmap, parent=None):
                 super().__init__(parent)
                 self.bubble_pixmap = bubble_pixmap
@@ -201,9 +207,58 @@ class PetWindow:
                 # Keep the text centered in the drawable body of the bubble;
                 # the old bottom-heavy margins made short replies appear
                 # above the bubble and visually detached from the cat.
-                self.setContentsMargins(30, 26, 30, 26)
+                self._base_contents_margins = (30, 26, 30, 26)
+                self.setContentsMargins(*self._base_contents_margins)
                 self.setMinimumHeight(96)
                 self.setTextFormat(Qt.TextFormat.PlainText)
+
+            def _wrapped_text_height(self, width):
+                """Measure the text using the label's actual wrapped width."""
+                content_width = max(
+                    1,
+                    width
+                    - self._base_contents_margins[0]
+                    - self._base_contents_margins[2],
+                )
+                document = QTextDocument()
+                document.setDocumentMargin(0)
+                document.setDefaultFont(self.font())
+                document.setTextWidth(content_width)
+                document.setPlainText(self.text())
+                return document.size().height()
+
+            def _tail_safe_height(self, width):
+                """Leave the image tail below the text's drawable body."""
+                text_height = self._wrapped_text_height(width)
+                body_height = (
+                    text_height
+                    + self._base_contents_margins[1]
+                    + self._base_contents_margins[3]
+                )
+                return int(body_height / self._TAIL_Y_RATIO + 0.9999)
+
+            def heightForWidth(self, width):
+                regular_height = super().heightForWidth(width)
+                return max(
+                    regular_height,
+                    self.minimumHeight(),
+                    self._tail_safe_height(width),
+                )
+
+            def resizeEvent(self, event):
+                super().resizeEvent(event)
+                tail_padding = round(self.height() * (1 - self._TAIL_Y_RATIO))
+                left, top, right, bottom = self._base_contents_margins
+                target_margins = (left, top, right, bottom + tail_padding)
+                margins = self.contentsMargins()
+                current_margins = (
+                    margins.left(),
+                    margins.top(),
+                    margins.right(),
+                    margins.bottom(),
+                )
+                if current_margins != target_margins:
+                    self.setContentsMargins(*target_margins)
 
             def paintEvent(self, event):
                 if self.bubble_pixmap is not None and not self.bubble_pixmap.isNull():
@@ -216,9 +271,84 @@ class PetWindow:
         class _SpeechBubbleFrame(QFrame):
             """Use the same cat bubble as the only Quick Chat surface."""
 
+            _TAIL_Y_RATIO = _SPEECH_BUBBLE_TAIL_Y_RATIO
+
             def __init__(self, bubble_pixmap, parent=None):
                 super().__init__(parent)
                 self.bubble_pixmap = bubble_pixmap
+                self._base_layout_margins = None
+
+            def setBaseLayoutMargins(self, margins):
+                self._base_layout_margins = (
+                    margins.left(),
+                    margins.top(),
+                    margins.right(),
+                    margins.bottom(),
+                )
+                self._apply_tail_padding()
+
+            def _current_layout_margins(self):
+                layout = self.layout()
+                if layout is None:
+                    return None
+                margins = layout.contentsMargins()
+                return (
+                    margins.left(),
+                    margins.top(),
+                    margins.right(),
+                    margins.bottom(),
+                )
+
+            def _base_layout_height_for_width(self, width):
+                layout = self.layout()
+                if layout is None or not layout.hasHeightForWidth():
+                    return 0
+                layout_height = layout.heightForWidth(max(1, width))
+                current_margins = self._current_layout_margins()
+                if self._base_layout_margins is None or current_margins is None:
+                    return layout_height
+                return (
+                    layout_height
+                    - current_margins[3]
+                    + self._base_layout_margins[3]
+                )
+
+            def heightForWidth(self, width):
+                regular_height = super().heightForWidth(width)
+                layout_height = self._base_layout_height_for_width(width)
+                return max(
+                    regular_height,
+                    int(layout_height / self._TAIL_Y_RATIO + 0.9999),
+                )
+
+            def sizeHint(self):
+                hint = super().sizeHint()
+                width = self.width() if self.width() > 0 else hint.width()
+                return QSize(width, self.heightForWidth(width))
+
+            def adjustSize(self):
+                super().adjustSize()
+                safe_height = self.heightForWidth(self.width())
+                if self.height() < safe_height:
+                    self.resize(self.width(), safe_height)
+
+            def _apply_tail_padding(self):
+                layout = self.layout()
+                if layout is None or self._base_layout_margins is None:
+                    return
+                left, top, right, bottom = self._base_layout_margins
+                target_margins = (
+                    left,
+                    top,
+                    right,
+                    bottom + round(self.height() * (1 - self._TAIL_Y_RATIO)),
+                )
+                if self._current_layout_margins() != target_margins:
+                    layout.setContentsMargins(*target_margins)
+
+            def resizeEvent(self, event):
+                super().resizeEvent(event)
+                self._apply_tail_padding()
 
             def paintEvent(self, event):
                 if self.bubble_pixmap is not None and not self.bubble_pixmap.isNull():
@@ -448,6 +578,7 @@ class PetWindow:
                 command_layout.setContentsMargins(34, 22, 34, 22)
                 command_layout.setSpacing(8)
                 command_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.command_surface.setBaseLayoutMargins(command_layout.contentsMargins())
                 self.quick_status = QLabel()
                 self.quick_status.setObjectName("quickStatus")
                 self.quick_status.setWordWrap(True)

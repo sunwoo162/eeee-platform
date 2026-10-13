@@ -240,6 +240,7 @@ class PetWindow:
                 self._pet_drag_origin = None
                 self._pet_window_origin = None
                 self._pet_is_dragging = False
+                self._initial_position_applied = False
                 self._busy = False
                 self._refreshing = False
                 self._conversation_active = False
@@ -486,6 +487,7 @@ class PetWindow:
                 self._typing_timer.timeout.connect(self._advance_reply_typing)
                 self._typing_text = ""
                 self._typing_index = 0
+                self._quick_chat_mode = "input"
                 self._pet_motion_timer = QTimer(self)
                 # 16 ms keeps mouse gaze and key-down animation responsive
                 # without tying animation to the slower API refresh timer.
@@ -671,12 +673,34 @@ class PetWindow:
 
             def showEvent(self, event):
                 super().showEvent(event)
+                if not self._initial_position_applied:
+                    self._place_initial_pet()
                 # WindowStaysOnTopHint is the policy; raising after the native
                 # window is shown makes that policy reliable on Windows when
                 # another app was focused immediately before the pet opened.
                 self.raise_()
                 QTimer.singleShot(0, self.raise_)
                 QTimer.singleShot(0, self._enforce_topmost)
+
+            def _initial_pet_position(self, screen_rect, window_size):
+                """Return the stable first-launch position in the screen corner."""
+                margin = 24
+                return QPoint(
+                    screen_rect.right() - window_size.width() - margin + 1,
+                    screen_rect.bottom() - window_size.height() - margin + 1,
+                )
+
+            def _place_initial_pet(self):
+                screen = self.screen() or QApplication.primaryScreen()
+                if screen is None:
+                    return
+                self.adjustSize()
+                self.move(
+                    self._initial_pet_position(
+                        screen.availableGeometry(), self.size()
+                    )
+                )
+                self._initial_position_applied = True
 
             def _enforce_topmost(self):
                 _force_windows_topmost(self)
@@ -686,24 +710,26 @@ class PetWindow:
                     _force_windows_topmost(self.reply_surface)
 
             def show_command_surface(self):
-                # Quick Chat lives above the pet. It reuses the same response
-                # bubble for the latest answer and places the composer below
-                # that answer, so nothing is rendered under the character.
+                # Quick Chat has one content mode at a time: the centered
+                # composer while waiting for input, or the centered reply
+                # after a request. Keeping both widgets visible was the source
+                # of the stacked greeting/status/input screenshot.
                 latest_reply = self.detail.text().strip()
                 if latest_reply in {
                     self._text("connecting"),
                     self._text("assistant_busy"),
                 }:
                     latest_reply = ""
-                self.quick_reply.setText(latest_reply)
                 self.detail.hide()
                 self.reply_surface.hide()
                 self._reply_hide_timer.stop()
+                self.quick_reply.setText(latest_reply)
                 self.command_surface.show()
+                self._set_quick_chat_mode("reply" if latest_reply else "input")
                 self.command_surface.adjustSize()
                 self.command_surface.move(self._command_surface_position())
                 QTimer.singleShot(0, self._reposition_command_surface)
-                self.quick_reply.setVisible(bool(self.quick_reply.text().strip()))
+                self._schedule_reply_hide()
                 self.raise_()
                 self.command_surface.raise_()
                 self.command_surface.activateWindow()
@@ -734,12 +760,25 @@ class PetWindow:
             def hide_command_surface(self):
                 self.command_surface.hide()
                 self.quick_reply.hide()
+                self.assistant_input.hide()
+                self.quick_status.hide()
                 self.detail.hide()
                 if self.detail.text().strip():
                     self.reply_surface.show()
                     self._reposition_reply_surface()
                 self._schedule_reply_hide()
                 self.clearFocus()
+
+            def _set_quick_chat_mode(self, mode: str, text: str | None = None):
+                """Show exactly one centered child inside the Quick Chat bubble."""
+                self._quick_chat_mode = mode
+                self.quick_status.hide()
+                if text is not None:
+                    self.quick_reply.setText(text)
+                show_reply = mode == "reply" and bool(self.quick_reply.text().strip())
+                self.quick_reply.setVisible(show_reply)
+                self.assistant_input.setVisible(mode == "input")
+                self.command_surface.adjustSize()
 
             def _pet_anchor_rect(self):
                 """Return the pet artwork bounds in screen coordinates."""
@@ -824,9 +863,17 @@ class PetWindow:
                 return True
 
             def _hide_reply_bubble(self):
-                if not self.command_surface.isVisible():
-                    self.detail.hide()
-                    self.reply_surface.hide()
+                self._reply_hide_timer.stop()
+                self.detail.clear()
+                self.reply_surface.hide()
+                if self.command_surface.isVisible():
+                    self.command_surface.hide()
+                self.quick_reply.clear()
+                self.quick_reply.hide()
+                self.quick_status.hide()
+                self.assistant_input.clear()
+                self.assistant_input.hide()
+                self._quick_chat_mode = "input"
 
             def _press_source_frame(self, frame: str) -> str:
                 """Return the sibling artwork for a same-paw press frame.
@@ -1092,6 +1139,8 @@ class PetWindow:
                 self.detail.hide()
                 self.reply_surface.hide()
                 self.quick_reply.setVisible(False)
+                if self.command_surface.isVisible():
+                    self._set_quick_chat_mode("reply")
                 if not text:
                     return
                 self._advance_reply_typing()
@@ -1112,7 +1161,8 @@ class PetWindow:
                     self.detail.hide()
                     self.reply_surface.show()
                     self._reposition_reply_surface()
-                self.quick_reply.setVisible(self.command_surface.isVisible())
+                if self.command_surface.isVisible():
+                    self._set_quick_chat_mode("reply")
                 if self._typing_index >= len(self._typing_text):
                     self._typing_timer.stop()
                     self._schedule_reply_hide()
@@ -1381,10 +1431,8 @@ class PetWindow:
                 else:
                     self._busy = True
                     self.detail.setText(busy_message)
-                    self.quick_status.setText(busy_message)
                     if self.command_surface.isVisible():
-                        self.quick_reply.setText(busy_message)
-                        self.quick_reply.show()
+                        self._set_quick_chat_mode("reply", busy_message)
                     self._update_controls()
 
                 def success(payload):
@@ -1454,7 +1502,7 @@ class PetWindow:
                 if self.command_surface.isVisible():
                     self.detail.hide()
                     self.reply_surface.hide()
-                    self.quick_reply.hide()
+                    self._set_quick_chat_mode("reply")
                 else:
                     self.quick_reply.hide()
                     self.detail.hide()
@@ -1552,9 +1600,9 @@ class PetWindow:
                 if not text:
                     return
                 self._conversation_active = True
+                self.assistant_input.clear()
 
                 def on_success(payload):
-                    self.assistant_input.clear()
                     if self._payload_requires_chatgpt_login(payload):
                         self._open_login_automatically()
                         return

@@ -210,6 +210,10 @@ def create_app(
     local_model_name = app_settings.local_model or discover_local_model(
         app_settings.local_model_base_url, timeout_seconds=0.2
     )
+    # Ordinary conversation must remain responsive. A stronger model can be
+    # selected explicitly with local_conversation_model, while auto-discovery
+    # uses the installed fast model so a greeting never waits on a long
+    # reasoning trace or silently falls into the Web/GPT lane.
     local_conversation_model_name = (
         app_settings.local_conversation_model
         or discover_fast_local_model(app_settings.local_model_base_url, timeout_seconds=0.2)

@@ -138,13 +138,14 @@ def test_ollama_backend_plain_conversation_keeps_model_warm_and_bounds_output(mo
         lambda *args, **kwargs: (calls.append((args, kwargs)) or Response()),
     )
 
-    OllamaBackend(model="qwen2.5:1.5b").complete_text(
+    OllamaBackend(model="qwen3:4b").complete_text(
         "안녕", workspace=tmp_path, context=[{"ignored": True}]
     )
 
     payload = calls[0][1]["json"]
     assert payload["keep_alive"] == "10m"
-    assert payload["options"] == {"num_predict": 128, "temperature": 0.4}
+    assert payload["think"] is True
+    assert payload["options"] == {"num_predict": 2048, "temperature": 0.4}
     assert payload["messages"][1]["content"] == "안녕"
 
 
@@ -186,6 +187,31 @@ def test_local_conversation_lane_uses_plain_text_backend_when_available(tmp_path
     assert result.summary == "그럴 수 있어. 수면과 식사 상태부터 같이 확인해보자."
     assert "Return exactly one JSON object" not in backend.prompts[0]
     assert "일반 대화만 처리해" in backend.prompts[0]
+
+
+def test_local_conversation_lane_retries_prompt_leakage_with_a_clean_turn(tmp_path):
+    class PlainTextBackend:
+        def __init__(self):
+            self.prompts = []
+            self.responses = iter([
+                "EEE EEEE, 이제 1초에 한글자씩 말해요!",
+                "안녕하세요! 오늘은 무엇을 도와드릴까요?",
+            ])
+
+        def complete_text(self, prompt, *, workspace, context):
+            self.prompts.append(prompt)
+            return next(self.responses)
+
+    backend = PlainTextBackend()
+    result = LocalConversationRuntime(backend=backend).run(
+        AgentRequest("안녕", tmp_path, [], "conversation-retry")
+    )
+
+    assert result.status == "completed"
+    assert result.summary == "안녕하세요! 오늘은 무엇을 도와드릴까요?"
+    assert len(backend.prompts) == 2
+    assert "이전 답변의 지시문을 반복하지 마" in backend.prompts[1]
+    assert "사용자의 실제 마지막 문장: 안녕" in backend.prompts[1]
 
 
 def test_local_conversation_lane_reports_provider_truthfully(tmp_path):

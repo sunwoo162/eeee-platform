@@ -953,8 +953,9 @@ class PetWindow:
                 # These ratios follow the eye position in the shared cropped
                 # cat artwork rather than the QLabel's geometric center.
                 target_tail_x = anchor.left() + round(anchor.width() * 0.44)
-                x = target_tail_x - tail_offset.x()
-                x = max(min_x, min(x, max_x))
+                x = self._clamp_surface_origin(
+                    target_tail_x - tail_offset.x(), min_x, max_x
+                )
 
                 # Keep the bubble above the cat. The eye alignment change is
                 # horizontal only; moving the tail down into the artwork makes
@@ -969,8 +970,21 @@ class PetWindow:
                 # move it below when the monitor top leaves no room for the
                 # visible bubble body.
                 y = above_y if above_y >= min_y else below_y
-                y = max(min_y, min(y, max_y))
+                y = self._clamp_surface_origin(y, min_y, max_y)
                 return QPoint(x, y)
+
+            @staticmethod
+            def _clamp_surface_origin(value, minimum, maximum):
+                """Keep an oversized surface anchored to the visible corner.
+
+                A bubble can be taller or wider than a small monitor while it
+                is wrapping a long reply. In that case the usual clamp range
+                is inverted; choosing ``minimum`` keeps the window on-screen
+                instead of returning an origin that is already off-screen.
+                """
+                if maximum < minimum:
+                    return minimum
+                return max(minimum, min(value, maximum))
 
             def _command_surface_position(self, screen_rect=None, surface_size=None):
                 return self._surface_position(
@@ -1727,6 +1741,12 @@ class PetWindow:
                     self.events_view.setText(self._text("events_none"))
 
             def _route_assistant(self):
+                # ``returnPressed`` can still arrive from an already queued
+                # key event after the composer has been disabled. Do not
+                # clear that user's text or enqueue a second request while a
+                # previous route is still running.
+                if self._busy:
+                    return
                 text = self.assistant_input.text().strip()
                 if not text:
                     return

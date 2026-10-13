@@ -79,6 +79,16 @@ class SlowRouteClient(RouteClient):
         return super().route_assistant(text, workspace)
 
 
+class CountingSlowRouteClient(SlowRouteClient):
+    def __init__(self):
+        super().__init__()
+        self.route_count = 0
+
+    def route_assistant(self, text, workspace=None):
+        self.route_count += 1
+        return super().route_assistant(text, workspace)
+
+
 def _wait_for(app: QApplication, predicate) -> None:
     deadline = time.monotonic() + 3
     while not predicate() and time.monotonic() < deadline:
@@ -302,6 +312,24 @@ def test_quick_chat_send_switches_from_composer_to_one_centered_reply():
     _wait_for(app, lambda: window.quick_reply.text() == "요청을 받았어요.")
     assert window.assistant_input.isHidden()
     assert window.quick_reply.alignment() == Qt.AlignmentFlag.AlignCenter
+    window.close()
+
+
+def test_busy_submit_does_not_clear_or_duplicate_the_current_input():
+    app = QApplication.instance() or QApplication([])
+    client = CountingSlowRouteClient()
+    window = PetWindow(client)
+    window.show_command_surface()
+
+    window.assistant_input.setText("첫 번째 요청")
+    window.assistant_input.returnPressed.emit()
+    window.assistant_input.setText("두 번째 요청")
+    window.assistant_input.returnPressed.emit()
+
+    _wait_for(app, lambda: client.route_count == 1)
+    assert client.route_count == 1
+    assert window.assistant_input.text() == "두 번째 요청"
+    _wait_for(app, lambda: not window._busy)
     window.close()
 
 
@@ -838,6 +866,18 @@ def test_quick_chat_is_anchored_to_the_pet_and_clamped_to_screen_edges():
     assert position.x() >= screen.left() + 12
     assert position.x() + surface_size.width() <= screen.right() - 11
     assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
+    window.close()
+
+
+def test_oversized_bubble_is_anchored_inside_screen_instead_of_using_negative_clamps():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    screen = QRect(100, 50, 800, 600)
+    surface_size = QSize(1_000, 900)
+    position = window._command_surface_position(screen, surface_size)
+
+    assert position == QPoint(screen.left() + 12, screen.top() + 12)
     window.close()
 
 

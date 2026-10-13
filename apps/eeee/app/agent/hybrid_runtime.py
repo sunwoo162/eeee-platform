@@ -86,7 +86,15 @@ class FastLocalConversationRuntime:
     )
 
     def run(self, request: AgentRequest) -> AgentResult:
-        normalized = re.sub(r"\s+", " ", request.prompt.casefold()).strip()
+        # General conversation arrives through PersonalSecretary as a prompt
+        # containing history, preferences, and routing guidance. Matching
+        # against the whole prompt lets old turns or the guidance itself win
+        # over the user's current sentence (for example every turn becoming
+        # the capability answer). Only the current request is conversational
+        # input; the rest is context.
+        normalized = re.sub(
+            r"\s+", " ", self._current_request(request.prompt).casefold()
+        ).strip()
         for phrases, response in self._RESPONSES:
             if any(phrase in normalized for phrase in phrases):
                 return AgentResult(
@@ -118,3 +126,10 @@ class FastLocalConversationRuntime:
             events=[{"type": "local.fast-conversation.generic", "provider": "builtin"}],
             changed_files=[], test_commands=[], error=None,
         )
+
+    @staticmethod
+    def _current_request(prompt: str) -> str:
+        marker = "현재 사용자 요청:"
+        if marker in prompt:
+            return prompt.rsplit(marker, 1)[1].strip()[:2_000]
+        return prompt.strip()[:2_000]

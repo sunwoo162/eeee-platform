@@ -30,6 +30,8 @@ class PetApiClient:
             except ValueError:
                 detail = response.text
             raise ApiError(str(detail))
+        if response.status_code == 204:
+            return {}
         return response.json()
 
     @staticmethod
@@ -99,6 +101,37 @@ class PetApiClient:
         result = self._request("POST", self._plugin_path(plugin_id, "/disconnect"))
         if not isinstance(result, dict):
             raise ApiError("Plugin disconnect response was not an object")
+        return result
+
+    def pause_plugin(self, plugin_id: str) -> dict[str, object]:
+        result = self._request("POST", self._plugin_path(plugin_id, "/pause"))
+        if not isinstance(result, dict):
+            raise ApiError("Plugin pause response was not an object")
+        return result
+
+    def resume_plugin(self, plugin_id: str) -> dict[str, object]:
+        result = self._request("POST", self._plugin_path(plugin_id, "/resume"))
+        if not isinstance(result, dict):
+            raise ApiError("Plugin resume response was not an object")
+        return result
+
+    def uninstall_plugin(self, plugin_id: str) -> dict[str, object]:
+        result = self._request("DELETE", self._plugin_path(plugin_id, "/install"))
+        if result == {}:
+            return {"pluginId": plugin_id, "status": "not_installed"}
+        if not isinstance(result, dict):
+            raise ApiError("Plugin uninstall response was not an object")
+        return result
+
+    def get_plugin_oauth_status(self, plugin_id: str, state: str) -> dict[str, object]:
+        if not state.strip():
+            raise ValueError("oauth state is required")
+        result = self._request(
+            "GET", self._plugin_path(plugin_id, "/oauth/status"),
+            params={"state": state},
+        )
+        if not isinstance(result, dict):
+            raise ApiError("Plugin OAuth status response was not an object")
         return result
 
     def get_state(self) -> dict[str, object]:

@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -6,9 +8,19 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from app.desktop.workspace import WorkspaceWindow
+
+
+def _settle() -> None:
+    app = QApplication.instance()
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.03)
+    app.processEvents()
 
 
 class WorkspaceClient:
@@ -87,10 +99,26 @@ class PluginWorkspaceClient(WorkspaceClient):
         self.calls.append(("connection", plugin_id))
         return {"pluginId": plugin_id, "status": "connected"}
 
+    def pause_plugin(self, plugin_id):
+        self.calls.append(("pause", plugin_id))
+        self.catalog[0]["status"] = "paused"
+        return {"pluginId": plugin_id, "status": "paused"}
+
+    def resume_plugin(self, plugin_id):
+        self.calls.append(("resume", plugin_id))
+        self.catalog[0]["status"] = "connected"
+        return {"pluginId": plugin_id, "status": "connected"}
+
+    def uninstall_plugin(self, plugin_id):
+        self.calls.append(("uninstall", plugin_id))
+        self.catalog[0]["status"] = "not_installed"
+        return {"pluginId": plugin_id, "status": "not_installed"}
+
 
 def test_workspace_is_a_desktop_control_center_and_renders_project_map():
     app = QApplication.instance() or QApplication([])
     window = WorkspaceWindow(WorkspaceClient())
+    _settle()
 
     assert window.windowTitle() == "EEEE Workspace"
     assert window.map_tree.topLevelItemCount() == 1
@@ -107,6 +135,7 @@ def test_workspace_is_a_desktop_control_center_and_renders_project_map():
 def test_workspace_reads_project_state_when_api_uses_nested_snapshot():
     app = QApplication.instance() or QApplication([])
     window = WorkspaceWindow(ProjectStateWorkspaceClient())
+    _settle()
 
     assert "QA 검증 중" in window.status.text()
     window.close()
@@ -115,17 +144,20 @@ def test_workspace_reads_project_state_when_api_uses_nested_snapshot():
 def test_workspace_sidebar_selection_renders_the_selected_section():
     app = QApplication.instance() or QApplication([])
     window = WorkspaceWindow(WorkspaceClient())
+    _settle()
 
     assert window.nav.currentRow() == 2
     assert window.heading.text() == "프로젝트"
     assert window.map_tree.topLevelItemCount() == 1
 
     window.nav.setCurrentRow(4)
+    _settle()
     assert window.heading.text() == "기억"
     assert window.map_title.text() == "EEEE가 기억하고 있는 내용"
     assert window.map_tree.topLevelItem(0).text(0) == "활성 기억"
 
     window.nav.setCurrentRow(3)
+    _settle()
     assert window.heading.text() == "플러그인"
     assert window.map_tree.topLevelItem(0).text(0) == "Notion"
     window.close()
@@ -135,19 +167,23 @@ def test_workspace_plugin_screen_exposes_install_and_disconnect_actions():
     app = QApplication.instance() or QApplication([])
     client = PluginWorkspaceClient()
     window = WorkspaceWindow(client)
+    _settle()
 
     window.nav.setCurrentRow(3)
+    _settle()
     assert window.map_tree.topLevelItemCount() == 1
     assert window.map_tree.topLevelItem(0).text(0) == "Notion"
     assert window.plugin_install_button.isEnabled()
     assert not window.plugin_connect_button.isEnabled()
 
     window._install_selected_plugin()
+    _settle()
     assert client.calls == [("install", "notion")]
     assert window.plugin_connect_button.isEnabled()
     assert not window.plugin_install_button.isEnabled()
 
     window._disconnect_selected_plugin()
+    _settle()
     assert client.calls[-1] == ("disconnect", "notion")
     assert window.plugin_connect_button.isEnabled()
     window.close()
@@ -157,7 +193,9 @@ def test_workspace_oauth_connection_opens_provider_and_polls_without_exposing_se
     app = QApplication.instance() or QApplication([])
     client = PluginWorkspaceClient()
     window = WorkspaceWindow(client)
+    _settle()
     window.nav.setCurrentRow(3)
+    _settle()
     window.map_tree.setCurrentItem(window.map_tree.topLevelItem(0))
 
     opened = []
@@ -170,10 +208,62 @@ def test_workspace_oauth_connection_opens_provider_and_polls_without_exposing_se
         ["pages.read"],
         "workspace",
     )
+    _settle()
 
     assert opened == ["https://provider.test/authorize"]
     assert ("oauth", "notion", ["pages.read"], "workspace") in client.calls
     window._poll_oauth_connection()
+    _settle()
     assert window._oauth_poll_timer.isActive() is False
     assert "연결됨" in window.plugin_hint.text()
+    window.close()
+
+
+def test_workspace_exposes_complete_plugin_lifecycle_actions():
+    app = QApplication.instance() or QApplication([])
+    client = PluginWorkspaceClient()
+    window = WorkspaceWindow(client)
+    _settle()
+    window.nav.setCurrentRow(3)
+    _settle()
+
+    assert hasattr(window, "plugin_resume_button")
+    assert hasattr(window, "plugin_open_button")
+    assert hasattr(window, "plugin_uninstall_button")
+
+    client.catalog[0]["status"] = "paused"
+    window._render_section()
+    assert window.plugin_resume_button.isEnabled()
+    assert window.plugin_uninstall_button.isEnabled()
+
+    window._resume_selected_plugin()
+    _settle()
+    assert client.calls[-1] == ("resume", "notion")
+    window._uninstall_selected_plugin()
+    _settle()
+    assert client.calls[-1] == ("uninstall", "notion")
+    window.close()
+
+
+def test_workspace_refresh_runs_api_call_off_the_gui_thread():
+    app = QApplication.instance() or QApplication([])
+
+    class ThreadRecordingClient(WorkspaceClient):
+        def __init__(self):
+            self.threads = []
+
+        def get_desktop_state(self):
+            self.threads.append(threading.get_ident())
+            return super().get_desktop_state()
+
+    client = ThreadRecordingClient()
+    window = WorkspaceWindow(client)
+    client.threads.clear()
+    gui_thread = threading.get_ident()
+
+    window.refresh()
+    QTest.qWait(150)
+
+    assert client.threads
+    assert client.threads[-1] != gui_thread
     window.close()

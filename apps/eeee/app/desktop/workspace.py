@@ -26,6 +26,7 @@ class WorkspaceWindow:
             QVBoxLayout,
             QWidget,
         )
+        from app.desktop.worker import QtTaskRunner
 
         class _Workspace(QWidget):
             def __init__(self):
@@ -99,13 +100,22 @@ class WorkspaceWindow:
                 plugin_buttons = QHBoxLayout()
                 self.plugin_install_button = QPushButton("설치" if language == "ko" else "Install")
                 self.plugin_connect_button = QPushButton("연결" if language == "ko" else "Connect")
+                self.plugin_resume_button = QPushButton("재개" if language == "ko" else "Resume")
+                self.plugin_open_button = QPushButton("관리" if language == "ko" else "Manage")
                 self.plugin_disconnect_button = QPushButton("연결 해제" if language == "ko" else "Disconnect")
+                self.plugin_uninstall_button = QPushButton("삭제" if language == "ko" else "Uninstall")
                 self.plugin_install_button.clicked.connect(self._install_selected_plugin)
                 self.plugin_connect_button.clicked.connect(self._connect_selected_plugin)
+                self.plugin_resume_button.clicked.connect(self._resume_selected_plugin)
+                self.plugin_open_button.clicked.connect(self._open_selected_plugin)
                 self.plugin_disconnect_button.clicked.connect(self._disconnect_selected_plugin)
+                self.plugin_uninstall_button.clicked.connect(self._uninstall_selected_plugin)
                 plugin_buttons.addWidget(self.plugin_install_button)
                 plugin_buttons.addWidget(self.plugin_connect_button)
+                plugin_buttons.addWidget(self.plugin_resume_button)
+                plugin_buttons.addWidget(self.plugin_open_button)
                 plugin_buttons.addWidget(self.plugin_disconnect_button)
+                plugin_buttons.addWidget(self.plugin_uninstall_button)
                 self.plugin_actions_layout.addLayout(plugin_buttons)
                 content.addWidget(self.plugin_actions)
                 self.events = QLabel()
@@ -121,7 +131,11 @@ class WorkspaceWindow:
                 self._oauth_poll_timer.setInterval(1000)
                 self._oauth_poll_timer.timeout.connect(self._poll_oauth_connection)
                 self._oauth_poll_plugin_id: str | None = None
+                self._oauth_poll_state: str | None = None
                 self._oauth_poll_attempts = 0
+                self._oauth_poll_request_pending = False
+                self._task_runner = QtTaskRunner(parent=self)
+                self._busy = False
                 self.plugin_actions.setVisible(False)
                 self.refresh()
 
@@ -258,13 +272,16 @@ class WorkspaceWindow:
                 getter = getattr(self.client, "get_plugin_catalog", None)
                 if not callable(getter):
                     return
-                try:
-                    catalog = getter()
-                except Exception as exc:
-                    self._set_plugin_hint(self._friendly_error(exc))
-                    return
+                self._submit_background(
+                    getter,
+                    self._apply_plugin_catalog,
+                    lambda exc: self._set_plugin_hint(self._friendly_error(exc)),
+                )
+
+            def _apply_plugin_catalog(self, catalog: object):
                 if isinstance(catalog, list):
                     self._plugin_catalog = [item for item in catalog if isinstance(item, dict)]
+                    self._render_section()
 
             def _selected_plugin_id(self) -> str | None:
                 item = self.map_tree.currentItem()
@@ -280,16 +297,30 @@ class WorkspaceWindow:
                 if plugin is None:
                     self.plugin_install_button.setEnabled(False)
                     self.plugin_connect_button.setEnabled(False)
+                    self.plugin_resume_button.setEnabled(False)
+                    self.plugin_open_button.setEnabled(False)
                     self.plugin_disconnect_button.setEnabled(False)
+                    self.plugin_uninstall_button.setEnabled(False)
                     if getattr(self, "_active_section", 2) == 3:
                         self._set_plugin_hint("플러그인을 선택해줘." if self.language == "ko" else "Select a plugin.")
                     return
                 status = str(plugin.get("status", "unknown"))
+                if self._busy:
+                    for button in (
+                        self.plugin_install_button, self.plugin_connect_button,
+                        self.plugin_resume_button, self.plugin_open_button,
+                        self.plugin_disconnect_button, self.plugin_uninstall_button,
+                    ):
+                        button.setEnabled(False)
+                    return
                 self.plugin_install_button.setEnabled(status == "not_installed")
                 self.plugin_connect_button.setEnabled(status in {
                     "available", "awaiting_authentication", "failed"
                 })
+                self.plugin_resume_button.setEnabled(status == "paused")
+                self.plugin_open_button.setEnabled(status == "connected")
                 self.plugin_disconnect_button.setEnabled(status in {"connected", "paused"})
+                self.plugin_uninstall_button.setEnabled(status not in {"not_installed", "disabled", "unknown"})
                 self.plugin_connect_button.setText(
                     ("재연결" if self.language == "ko" else "Reconnect")
                     if status == "failed"
@@ -304,35 +335,97 @@ class WorkspaceWindow:
                     else f"{plugin.get('description', '')}\nPermissions: {permission_text}\nAuth: {auth_mode}"
                 )
 
+            def _selected_plugin_action(self, action: str):
+                plugin = self._selected_plugin
+                if plugin is None:
+                    return
+                plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
+                operation = getattr(self.client, action, None)
+                if not callable(operation):
+                    self._set_plugin_hint("이 작업은 아직 지원되지 않아." if self.language == "ko" else "This action is not available yet.")
+                    return
+                self._submit_background(
+                    lambda: operation(plugin_id),
+                    lambda _result: self.refresh(),
+                    lambda exc: self._set_plugin_hint(self._friendly_error(exc)),
+                )
+
+            def _resume_selected_plugin(self):
+                self._selected_plugin_action("resume_plugin")
+
+            def _uninstall_selected_plugin(self):
+                self._selected_plugin_action("uninstall_plugin")
+
+            def _open_selected_plugin(self):
+                plugin = self._selected_plugin
+                if plugin is None:
+                    return
+                permissions = plugin.get("approvedPermissions", [])
+                account = plugin.get("accountLabel")
+                self._set_plugin_hint(
+                    f"연결된 계정: {account or '기본 계정'}\n승인된 권한: {', '.join(str(item) for item in permissions) if isinstance(permissions, list) else '없음'}"
+                    if self.language == "ko"
+                    else f"Connected account: {account or 'default'}\nApproved permissions: {', '.join(str(item) for item in permissions) if isinstance(permissions, list) else 'none'}"
+                )
+
             def _set_plugin_hint(self, text: str):
                 if hasattr(self, "plugin_hint"):
                     self.plugin_hint.setText(text)
+
+            def _submit_background(self, operation, on_success, on_error):
+                if self._busy:
+                    return False
+                self._busy = True
+                self.refresh_button.setEnabled(False)
+                for button in (
+                    self.plugin_install_button, self.plugin_connect_button,
+                    self.plugin_resume_button, self.plugin_open_button,
+                    self.plugin_disconnect_button, self.plugin_uninstall_button,
+                ):
+                    button.setEnabled(False)
+
+                def success(result):
+                    self._busy = False
+                    self.refresh_button.setEnabled(True)
+                    self._select_plugin()
+                    on_success(result)
+
+                def failure(error):
+                    self._busy = False
+                    self.refresh_button.setEnabled(True)
+                    self._select_plugin()
+                    on_error(error)
+
+                self._task_runner.submit(operation, success, failure)
+                return True
 
             def _install_selected_plugin(self):
                 plugin = self._selected_plugin
                 if plugin is None:
                     return
                 plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
-                try:
-                    self.client.install_plugin(plugin_id)
-                except Exception as exc:
-                    self._set_plugin_hint(self._friendly_error(exc))
-                    return
-                self._set_plugin_hint("설치했어. 연결할 계정을 선택해줘." if self.language == "ko" else "Installed. Choose an account to connect.")
-                self.refresh()
+                self._submit_background(
+                    lambda: self.client.install_plugin(plugin_id),
+                    lambda _result: (
+                        self._set_plugin_hint("설치했어. 연결할 계정을 선택해줘." if self.language == "ko" else "Installed. Choose an account to connect."),
+                        self.refresh(),
+                    ),
+                    lambda exc: self._set_plugin_hint(self._friendly_error(exc)),
+                )
 
             def _disconnect_selected_plugin(self):
                 plugin = self._selected_plugin
                 if plugin is None:
                     return
                 plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
-                try:
-                    self.client.disconnect_plugin(plugin_id)
-                except Exception as exc:
-                    self._set_plugin_hint(self._friendly_error(exc))
-                    return
-                self._set_plugin_hint("연결을 해제했어." if self.language == "ko" else "Disconnected.")
-                self.refresh()
+                self._submit_background(
+                    lambda: self.client.disconnect_plugin(plugin_id),
+                    lambda _result: (
+                        self._set_plugin_hint("연결을 해제했어." if self.language == "ko" else "Disconnected."),
+                        self.refresh(),
+                    ),
+                    lambda exc: self._set_plugin_hint(self._friendly_error(exc)),
+                )
 
             def _connect_selected_plugin(self):
                 plugin = self._selected_plugin
@@ -354,9 +447,20 @@ class WorkspaceWindow:
                 permissions = plugin.get("permissions", [])
                 if not isinstance(permissions, list):
                     permissions = []
+                permission_details = plugin.get("permissionDetails", [])
+                details_by_id = {
+                    str(item.get("id")): item
+                    for item in permission_details
+                    if isinstance(item, dict) and item.get("id")
+                }
                 for permission in permissions:
-                    check = QCheckBox(str(permission))
-                    check.setChecked(True)
+                    permission_id = str(permission)
+                    detail = details_by_id.get(permission_id, {})
+                    label = str(detail.get("label") or permission_id)
+                    description_text = str(detail.get("description") or "")
+                    check = QCheckBox(f"{label} ({description_text})" if description_text else label)
+                    check.setProperty("permissionId", permission_id)
+                    check.setChecked(bool(detail.get("defaultApproved", permission_id.endswith(".read"))))
                     checks.append(check)
                     form.addRow("권한" if self.language == "ko" else "Permission", check)
                 account = QLineEdit()
@@ -367,25 +471,39 @@ class WorkspaceWindow:
                 use_browser_oauth.setChecked(auth_mode == "oauth")
                 use_browser_oauth.setVisible(auth_mode in {"oauth", "token-or-oauth"})
                 form.addRow(use_browser_oauth)
-                credential = QLineEdit()
-                credential.setEchoMode(QLineEdit.EchoMode.Password)
-                credential.setPlaceholderText("토큰은 저장하거나 표시하지 않아" if self.language == "ko" else "The token is never displayed")
-                credential.setVisible(auth_mode in {"token", "token-or-oauth"})
-                form.addRow("토큰" if self.language == "ko" else "Token", credential)
-                parent_page = QLineEdit()
-                parent_page.setPlaceholderText("Notion 부모 페이지 ID" if self.language == "ko" else "Notion parent page ID")
-                parent_page.setVisible(str(plugin.get("id") or plugin.get("pluginId")) == "notion")
-                form.addRow("부모 페이지" if self.language == "ko" else "Parent page", parent_page)
+                credential_edits: dict[str, QLineEdit] = {}
+                credential_fields = plugin.get("credentialFields", [])
+                if not isinstance(credential_fields, list) or not credential_fields:
+                    credential_fields = [
+                        {"key": "token", "label": "토큰" if self.language == "ko" else "Token", "secret": True},
+                    ]
+                    if str(plugin.get("id") or plugin.get("pluginId")) == "notion":
+                        credential_fields.append({"key": "parentPageId", "label": "부모 페이지" if self.language == "ko" else "Parent page", "secret": False})
+                for field in credential_fields:
+                    if not isinstance(field, dict) or not field.get("key"):
+                        continue
+                    key = str(field["key"])
+                    edit = QLineEdit()
+                    if bool(field.get("secret")):
+                        edit.setEchoMode(QLineEdit.EchoMode.Password)
+                    placeholder = field.get("placeholder")
+                    if isinstance(placeholder, str):
+                        edit.setPlaceholderText(placeholder)
+                    edit.setVisible(auth_mode in {"token", "token-or-oauth"})
+                    credential_edits[key] = edit
+                    form.addRow(str(field.get("label") or key), edit)
                 buttons = QDialogButtonBox(
                     QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
                 )
                 buttons.accepted.connect(dialog.accept)
                 buttons.rejected.connect(dialog.reject)
                 form.addRow(buttons)
-                use_browser_oauth.toggled.connect(credential.setDisabled)
+                use_browser_oauth.toggled.connect(
+                    lambda checked: [edit.setDisabled(checked) for edit in credential_edits.values()]
+                )
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return
-                approved = [check.text() for check in checks if check.isChecked()]
+                approved = [str(check.property("permissionId")) for check in checks if check.isChecked()]
                 if not approved:
                     self._set_plugin_hint("최소 한 개의 권한을 확인해야 해." if self.language == "ko" else "Approve at least one permission.")
                     return
@@ -393,24 +511,23 @@ class WorkspaceWindow:
                 if use_browser_oauth.isChecked():
                     self._start_oauth_connection(plugin, approved, account.text().strip() or None)
                     return
-                token = credential.text()
-                if not token:
+                credential_payload = {
+                    key: edit.text()
+                    for key, edit in credential_edits.items()
+                    if edit.text()
+                }
+                if not credential_payload:
                     self._set_plugin_hint("토큰을 입력해줘." if self.language == "ko" else "Enter a token.")
                     return
-                credential_payload = {"token": token}
-                if plugin_id == "notion":
-                    parent_page_id = parent_page.text().strip()
-                    if not parent_page_id:
-                        self._set_plugin_hint("Notion 부모 페이지 ID를 입력해줘." if self.language == "ko" else "Enter a Notion parent page ID.")
-                        return
-                    credential_payload["parentPageId"] = parent_page_id
-                try:
-                    result = self.client.connect_plugin(
+                self._submit_background(
+                    lambda: self.client.connect_plugin(
                         plugin_id, credential_payload, approved, account.text().strip() or None
-                    )
-                except Exception as exc:
-                    self._set_plugin_hint(self._friendly_error(exc))
-                    return
+                    ),
+                    lambda result: self._finish_manual_connection(result),
+                    lambda exc: self._set_plugin_hint(self._friendly_error(exc)),
+                )
+
+            def _finish_manual_connection(self, result: object):
                 status = str(result.get("status", "connected")) if isinstance(result, dict) else "connected"
                 self._set_plugin_hint("연결됨" if status == "connected" and self.language == "ko" else status)
                 self.refresh()
@@ -424,58 +541,108 @@ class WorkspaceWindow:
                 if plugin is None:
                     return
                 plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
-                try:
-                    result = self.client.start_plugin_oauth(plugin_id, permissions, account_label)
-                    authorization_url = str(result.get("authorizationUrl", ""))
-                    if not authorization_url:
-                        raise RuntimeError("OAuth authorization URL is missing")
-                    QDesktopServices.openUrl(QUrl(authorization_url))
-                except Exception as exc:
-                    self._set_plugin_hint(self._friendly_error(exc))
-                    return
                 self._oauth_poll_plugin_id = plugin_id
+                self._oauth_poll_state = None
                 self._oauth_poll_attempts = 0
+                self._submit_background(
+                    lambda: self.client.start_plugin_oauth(plugin_id, permissions, account_label),
+                    lambda result: self._oauth_started(plugin_id, result),
+                    lambda exc: self._oauth_start_failed(exc),
+                )
+
+            def _oauth_started(self, plugin_id: str, result: object):
+                if not isinstance(result, dict):
+                    self._oauth_start_failed(RuntimeError("OAuth authorization response is invalid"))
+                    return
+                authorization_url = str(result.get("authorizationUrl", ""))
+                if not authorization_url:
+                    self._oauth_start_failed(RuntimeError("OAuth authorization URL is missing"))
+                    return
+                from urllib.parse import parse_qs, urlparse
+
+                state = result.get("state")
+                if not isinstance(state, str) or not state:
+                    state = parse_qs(urlparse(authorization_url).query).get("state", [None])[0]
+                self._oauth_poll_plugin_id = plugin_id
+                self._oauth_poll_state = state if isinstance(state, str) else None
+                QDesktopServices.openUrl(QUrl(authorization_url))
                 self._set_plugin_hint(
                     "브라우저에서 권한을 승인하면 연결 상태를 확인할게." if self.language == "ko"
                     else "Approve access in your browser; I will check the connection."
                 )
                 self._oauth_poll_timer.start()
 
+            def _oauth_start_failed(self, exc: Exception):
+                self._oauth_poll_timer.stop()
+                self._oauth_poll_plugin_id = None
+                self._oauth_poll_state = None
+                self._set_plugin_hint(self._friendly_error(exc))
+
             def _poll_oauth_connection(self):
                 plugin_id = self._oauth_poll_plugin_id
                 if not plugin_id:
                     self._oauth_poll_timer.stop()
                     return
-                self._oauth_poll_attempts += 1
-                try:
-                    result = self.client.get_plugin_connection(plugin_id)
-                except Exception as exc:
-                    if self._oauth_poll_attempts >= 60:
-                        self._oauth_poll_timer.stop()
-                        self._oauth_poll_plugin_id = None
-                        self._set_plugin_hint(self._friendly_error(exc))
+                if self._oauth_poll_request_pending:
                     return
+                self._oauth_poll_attempts += 1
+                self._oauth_poll_request_pending = True
+                get_status = getattr(self.client, "get_plugin_oauth_status", None)
+                if callable(get_status) and self._oauth_poll_state:
+                    operation = lambda: get_status(plugin_id, self._oauth_poll_state)
+                else:
+                    operation = lambda: self.client.get_plugin_connection(plugin_id)
+                accepted = self._submit_background(
+                    operation,
+                    lambda result: self._handle_oauth_poll_result(plugin_id, result),
+                    lambda exc: self._handle_oauth_poll_error(exc),
+                )
+                if not accepted:
+                    self._oauth_poll_request_pending = False
+
+            def _handle_oauth_poll_result(self, plugin_id: str, result: object):
+                self._oauth_poll_request_pending = False
                 status = str(result.get("status", "")) if isinstance(result, dict) else ""
+                oauth_state = str(result.get("state", "")) if isinstance(result, dict) else ""
+                if oauth_state in {"failed", "cancelled", "expired"}:
+                    self._oauth_poll_timer.stop()
+                    self._oauth_poll_plugin_id = None
+                    self._oauth_poll_state = None
+                    self._set_plugin_hint(
+                        "연결을 완료하지 못했어. 다시 시도해줘." if self.language == "ko"
+                        else "The connection did not complete. Try again."
+                    )
+                    return
+                if oauth_state == "completed":
+                    status = "connected"
                 if status == "connected":
                     self._oauth_poll_timer.stop()
                     self._oauth_poll_plugin_id = None
+                    self._oauth_poll_state = None
                     for candidate in self._plugin_catalog:
                         candidate_id = str(candidate.get("id") or candidate.get("pluginId") or "")
                         if candidate_id == plugin_id:
                             candidate["status"] = "connected"
-                    if self._selected_plugin is not None:
-                        self._selected_plugin["status"] = "connected"
-                    self._set_plugin_hint("연결됨" if self.language == "ko" else "Connected")
                     self._render_section()
                     self._set_plugin_hint("연결됨" if self.language == "ko" else "Connected")
                 elif status in {"failed", "disabled"}:
                     self._oauth_poll_timer.stop()
                     self._oauth_poll_plugin_id = None
+                    self._oauth_poll_state = None
                     self._set_plugin_hint("연결에 실패했어. 설정을 확인해줘." if self.language == "ko" else "Connection failed. Check the provider configuration.")
                 elif self._oauth_poll_attempts >= 60:
                     self._oauth_poll_timer.stop()
                     self._oauth_poll_plugin_id = None
+                    self._oauth_poll_state = None
                     self._set_plugin_hint("연결 확인 시간이 만료됐어." if self.language == "ko" else "Connection check timed out.")
+
+            def _handle_oauth_poll_error(self, exc: Exception):
+                self._oauth_poll_request_pending = False
+                if self._oauth_poll_attempts >= 60:
+                    self._oauth_poll_timer.stop()
+                    self._oauth_poll_plugin_id = None
+                    self._oauth_poll_state = None
+                    self._set_plugin_hint(self._friendly_error(exc))
 
             def _friendly_error(self, exc: Exception) -> str:
                 detail = str(exc).lower()
@@ -502,10 +669,15 @@ class WorkspaceWindow:
                 ]))
 
             def refresh(self):
-                try:
-                    snapshot = self.client.get_desktop_state()
-                except Exception as exc:
-                    self.status.setText(str(exc))
+                self._submit_background(
+                    self.client.get_desktop_state,
+                    self._apply_snapshot,
+                    lambda exc: self.status.setText(str(exc)),
+                )
+
+            def _apply_snapshot(self, snapshot: object):
+                if not isinstance(snapshot, dict):
+                    self.status.setText("EEEE 제어 센터 응답이 올바르지 않아." if self.language == "ko" else "Invalid control center response.")
                     return
                 self._snapshot = snapshot
                 project_state = snapshot.get("projectState")
@@ -589,10 +761,15 @@ class WorkspaceWindow:
                 self.map_tree.clear()
                 if not project_id or not hasattr(self.client, "open_project"):
                     return
-                try:
-                    snapshot = self.client.open_project(project_id)
-                except Exception as exc:
-                    self.events.setText(str(exc))
+                self._submit_background(
+                    lambda: self.client.open_project(project_id),
+                    self._apply_project_map,
+                    lambda exc: self.events.setText(str(exc)),
+                )
+
+            def _apply_project_map(self, snapshot: object):
+                if not isinstance(snapshot, dict):
+                    self.events.setText("프로젝트 맵 응답이 올바르지 않아." if self.language == "ko" else "Invalid project map response.")
                     return
                 nodes = {str(node.get("id")): node for node in snapshot.get("nodes", []) if isinstance(node, dict)}
                 children: dict[str, list[str]] = {node_id: [] for node_id in nodes}
@@ -628,5 +805,10 @@ class WorkspaceWindow:
                 for child_id in children.get(node_id, []):
                     self._append_node(item, child_id, nodes, children, current_ids)
                 item.setExpanded(True)
+
+            def closeEvent(self, event):
+                self._oauth_poll_timer.stop()
+                self._task_runner.shutdown()
+                super().closeEvent(event)
 
         return _Workspace()

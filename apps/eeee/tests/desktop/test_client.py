@@ -158,6 +158,59 @@ def test_client_supports_plugin_catalog_install_and_connection_lifecycle(monkeyp
     ]
 
 
+def test_client_supports_plugin_pause_resume_and_uninstall(monkeypatch):
+    requests = []
+
+    def request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        return httpx.Response(200, json={"pluginId": "notion", "status": "paused"})
+
+    monkeypatch.setattr(httpx, "request", request)
+    client = PetApiClient("http://127.0.0.1:8123")
+
+    assert client.pause_plugin("notion")["status"] == "paused"
+    assert client.resume_plugin("notion")["status"] == "paused"
+    assert client.uninstall_plugin("notion") == {"pluginId": "notion", "status": "paused"}
+
+    assert requests == [
+        ("POST", "http://127.0.0.1:8123/api/plugins/notion/pause", {"timeout": 5.0}),
+        ("POST", "http://127.0.0.1:8123/api/plugins/notion/resume", {"timeout": 5.0}),
+        ("DELETE", "http://127.0.0.1:8123/api/plugins/notion/install", {"timeout": 5.0}),
+    ]
+
+
+def test_client_can_read_oauth_terminal_status(monkeypatch):
+    requests = []
+
+    def request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        return httpx.Response(200, json={"pluginId": "notion", "state": "cancelled"})
+
+    monkeypatch.setattr(httpx, "request", request)
+    result = PetApiClient("http://127.0.0.1:8123").get_plugin_oauth_status("notion", "opaque-state")
+
+    assert result["state"] == "cancelled"
+    assert requests == [
+        (
+            "GET",
+            "http://127.0.0.1:8123/api/plugins/notion/oauth/status",
+            {"timeout": 5.0, "params": {"state": "opaque-state"}},
+        )
+    ]
+
+
+def test_uninstall_accepts_the_api_204_response(monkeypatch):
+    monkeypatch.setattr(
+        httpx,
+        "request",
+        lambda method, url, **kwargs: httpx.Response(204),
+    )
+
+    assert PetApiClient("http://127.0.0.1:8123").uninstall_plugin("notion") == {
+        "pluginId": "notion", "status": "not_installed"
+    }
+
+
 def test_client_connect_plugin_sends_credential_without_logging_or_transforming_it(monkeypatch):
     requests = []
 

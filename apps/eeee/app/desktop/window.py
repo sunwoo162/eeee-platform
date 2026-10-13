@@ -786,7 +786,10 @@ class PetWindow:
                 x = target_tail_x - tail_offset.x()
                 x = max(min_x, min(x, max_x))
 
-                tail_target_y = anchor.top() + round(anchor.height() * 0.34)
+                # Keep the bubble above the cat. The eye alignment change is
+                # horizontal only; moving the tail down into the artwork makes
+                # the reply surface overlap the pet during normal use.
+                tail_target_y = anchor.top() - 6
                 above_y = tail_target_y - tail_offset.y()
                 bubble_top_offset = round(
                     surface_size.height() * 124 / surface.bubble_pixmap.height()
@@ -1115,8 +1118,11 @@ class PetWindow:
                     self._schedule_reply_hide()
 
             def _schedule_reply_hide(self):
-                state = self.current_state.get("state")
-                if self.detail.text() and state in {"idle", "completed", "blocked", "failed"}:
+                # A long-running task is acknowledged in the bubble, then the
+                # bubble gets out of the user's way. Progress remains in the
+                # workspace/status model; it must not occupy the desktop for
+                # the entire duration of a project or plugin run.
+                if self.detail.text().strip():
                     self._reply_hide_timer.start()
                 else:
                     self._reply_hide_timer.stop()

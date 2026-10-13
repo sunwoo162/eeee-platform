@@ -253,7 +253,7 @@ def test_quick_chat_above_pet_contains_input_and_latest_reply():
     assert abs(
         window.command_surface.frameGeometry().top()
         + tail_offset.y()
-        - (anchor.top() + round(anchor.height() * 0.34))
+        - (anchor.top() - 6)
     ) <= 2
     assert window.detail.isHidden()
     assert window.quick_reply.isVisible()
@@ -762,10 +762,7 @@ def test_quick_chat_is_anchored_to_the_pet_and_clamped_to_screen_edges():
 
     assert position.x() >= screen.left() + 12
     assert position.x() + surface_size.width() <= screen.right() - 11
-    assert abs(
-        position.y() + tail_offset.y()
-        - (anchor.top() + round(anchor.height() * 0.34))
-    ) <= 2
+    assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
     window.close()
 
 
@@ -781,10 +778,7 @@ def test_quick_chat_prefers_above_the_pet_when_space_is_available():
     position = window._command_surface_position(screen, surface_size)
 
     tail_offset = window._speech_bubble_tail_offset(window.command_surface, surface_size)
-    assert abs(
-        position.y() + tail_offset.y()
-        - (anchor.top() + round(anchor.height() * 0.34))
-    ) <= 2
+    assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
     assert abs(
         position.x() + surface_size.width() // 2
         - (anchor.left() + round(anchor.width() * 0.44))
@@ -805,7 +799,7 @@ def test_quick_chat_bubble_tail_tracks_the_cat_head_not_the_window_frame():
     character_rect = QRect(character_top_left, window.character.size())
     tail_offset = window._speech_bubble_tail_offset(window.command_surface, surface_size)
     expected_tail_x = character_rect.left() + round(character_rect.width() * 0.44)
-    expected_tail_y = character_rect.top() + round(character_rect.height() * 0.34)
+    expected_tail_y = character_rect.top() - 6
 
     assert abs(position.x() + tail_offset.x() - expected_tail_x) <= 2
     assert abs(position.y() + tail_offset.y() - expected_tail_y) <= 2
@@ -829,10 +823,7 @@ def test_normal_reply_bubble_uses_the_cat_eye_anchor():
         position.x() + tail_offset.x()
         - (anchor.left() + round(anchor.width() * 0.44))
     ) <= 12
-    assert abs(
-        position.y() + tail_offset.y()
-        - (anchor.top() + round(anchor.height() * 0.34))
-    ) <= 2
+    assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
     window.close()
 
 
@@ -904,6 +895,22 @@ def test_short_reply_bubble_is_hidden_after_its_display_window():
     window = PetWindow(SlowClient())
     _wait_for(app, lambda: window.current_state.get("state") == "idle")
     window._render({"state": "completed", "message": "완료했어."})
+    assert not window.reply_surface.isHidden()
+
+    window._reply_hide_timer.setInterval(20)
+    window._reply_hide_timer.stop()
+    window._schedule_reply_hide()
+    _wait_for(app, lambda: window.reply_surface.isHidden())
+
+    assert window.detail.isHidden()
+    window.close()
+
+
+def test_long_running_reply_bubble_is_hidden_after_acknowledgement_window():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    _wait_for(app, lambda: window.current_state.get("state") == "idle")
+    window._render({"state": "working", "message": "작업을 백그라운드에서 진행 중이야."})
     assert not window.reply_surface.isHidden()
 
     window._reply_hide_timer.setInterval(20)

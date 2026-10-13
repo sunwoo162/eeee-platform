@@ -1,6 +1,7 @@
 """Small HTTP client used by the desktop shell."""
 
 import httpx
+from typing import Any
 
 
 class ApiError(RuntimeError):
@@ -21,7 +22,7 @@ class PetApiClient:
 
     def _request(
         self, method: str, path: str, *, timeout: float = 5.0, **kwargs
-    ) -> dict[str, object]:
+    ) -> Any:
         response = httpx.request(method, f"{self.base_url}{path}", timeout=timeout, **kwargs)
         if response.is_error:
             try:
@@ -30,6 +31,75 @@ class PetApiClient:
                 detail = response.text
             raise ApiError(str(detail))
         return response.json()
+
+    @staticmethod
+    def _plugin_path(plugin_id: str, suffix: str = "") -> str:
+        plugin_id = plugin_id.strip()
+        if not plugin_id or "/" in plugin_id or "\\" in plugin_id:
+            raise ValueError("plugin_id must be a non-empty path segment")
+        return f"/api/plugins/{plugin_id}{suffix}"
+
+    def get_plugin_catalog(self) -> list[dict[str, object]]:
+        result = self._request("GET", "/api/plugins/catalog")
+        if not isinstance(result, list):
+            raise ApiError("Plugin catalog response was not a list")
+        return [item for item in result if isinstance(item, dict)]
+
+    def install_plugin(self, plugin_id: str) -> dict[str, object]:
+        result = self._request("POST", self._plugin_path(plugin_id, "/install"))
+        if not isinstance(result, dict):
+            raise ApiError("Plugin install response was not an object")
+        return result
+
+    def get_plugin_connection(self, plugin_id: str) -> dict[str, object]:
+        result = self._request("GET", self._plugin_path(plugin_id, "/connection"))
+        if not isinstance(result, dict):
+            raise ApiError("Plugin connection response was not an object")
+        return result
+
+    def start_plugin_oauth(
+        self,
+        plugin_id: str,
+        approved_permissions: list[str],
+        account_label: str | None = None,
+    ) -> dict[str, object]:
+        result = self._request(
+            "POST",
+            self._plugin_path(plugin_id, "/oauth/start"),
+            json={
+                "approvedPermissions": list(approved_permissions),
+                "accountLabel": account_label,
+            },
+        )
+        if not isinstance(result, dict):
+            raise ApiError("Plugin OAuth response was not an object")
+        return result
+
+    def connect_plugin(
+        self,
+        plugin_id: str,
+        credential: dict[str, str],
+        approved_permissions: list[str],
+        account_label: str | None = None,
+    ) -> dict[str, object]:
+        result = self._request(
+            "POST",
+            self._plugin_path(plugin_id, "/connect"),
+            json={
+                "credential": credential,
+                "approvedPermissions": list(approved_permissions),
+                "accountLabel": account_label,
+            },
+        )
+        if not isinstance(result, dict):
+            raise ApiError("Plugin connection response was not an object")
+        return result
+
+    def disconnect_plugin(self, plugin_id: str) -> dict[str, object]:
+        result = self._request("POST", self._plugin_path(plugin_id, "/disconnect"))
+        if not isinstance(result, dict):
+            raise ApiError("Plugin disconnect response was not an object")
+        return result
 
     def get_state(self) -> dict[str, object]:
         return self._request("GET", f"/projects/{self.project_id}/state")

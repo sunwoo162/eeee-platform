@@ -130,7 +130,13 @@ class KernelService:
             retrieved = self._retrieve_context(request, context)
             handler = registered.handler
             if handler is None:
-                if self.plugin_platform is not None and selection.capability_id == "plugin:notion:pages":
+                platform_capability_ids = {
+                    item.id for item in self.plugin_platform.capabilities("local-user")
+                } if self.plugin_platform is not None else set()
+                if (
+                    self.plugin_platform is not None
+                    and selection.capability_id in platform_capability_ids
+                ):
                     platform_execution = self.plugin_platform.invoke(
                         "local-user", selection.capability_id,
                         {"text": request.raw_text, "context": request.context},

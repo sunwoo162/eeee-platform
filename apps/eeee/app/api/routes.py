@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -27,7 +27,9 @@ from app.plugins.api_models import (
     PluginCatalogView,
     PluginConnectPayload as PlatformPluginConnectPayload,
     PluginHealthView,
+    PluginOAuthStartPayload,
 )
+from app.plugins.oauth import OAuthBroker, OAuthError, OAuthProviderConfig, OAuthStateMismatch
 from app.plugins.platform import PluginPlatformService
 from app.project_runtime.documents import ProjectDocumentService
 from app.project_runtime.evidence import ProjectEvidenceService
@@ -226,9 +228,13 @@ def _plugin_user_id(request: Request, header: str | None) -> str:
 
 
 def build_plugin_router(
-    host: PluginHost, platform: PluginPlatformService | None = None
+    host: PluginHost,
+    platform: PluginPlatformService | None = None,
+    *,
+    oauth_broker: OAuthBroker | None = None,
+    oauth_configs: Mapping[str, OAuthProviderConfig] | None = None,
 ) -> APIRouter:
-    """Expose the local plugin lifecycle; no remote plugin registry is involved."""
+    """Expose local lifecycle and optional browser-based provider connections."""
 
     router = APIRouter(prefix="/api/plugins")
 
@@ -255,6 +261,7 @@ def build_plugin_router(
                 "connected": "open",
                 "failed": "reconnect",
                 "paused": "resume",
+                "disabled": "configure",
             }.get(status, "connect")
             views.append(PluginCatalogView(
                 id=entry.id, name=entry.name, version=entry.version,
@@ -273,6 +280,8 @@ def build_plugin_router(
             return platform.install(plugin_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.delete("/{plugin_id}/install", status_code=204)
     def uninstall_plugin(plugin_id: str) -> Response:
@@ -283,6 +292,72 @@ def build_plugin_router(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(status_code=204)
+
+    @router.post("/{plugin_id}/oauth/start")
+    def start_plugin_oauth(
+        plugin_id: str,
+        request: Request,
+        payload: PluginOAuthStartPayload,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ) -> dict[str, object]:
+        if platform is None or oauth_broker is None or oauth_configs is None:
+            raise HTTPException(status_code=503, detail="OAuth plugin connection is unavailable")
+        config = oauth_configs.get(plugin_id)
+        if config is None:
+            raise HTTPException(status_code=503, detail="OAuth configuration is unavailable for this plugin")
+        principal = _plugin_user_id(request, user_id)
+        try:
+            if platform.status(plugin_id, principal) == "not_installed":
+                raise HTTPException(status_code=409, detail="Plugin must be installed before connecting")
+            callback = str(request.url_for("plugin_oauth_callback", plugin_id=plugin_id))
+            authorization = oauth_broker.start(
+                user_id=principal,
+                plugin_id=plugin_id,
+                config=config,
+                redirect_uri=callback,
+                approved_permissions=set(payload.approved_permissions),
+                account_label=payload.account_label,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "pluginId": plugin_id,
+            "authorizationUrl": authorization.authorization_url,
+            "expiresAt": authorization.expires_at,
+        }
+
+    @router.get("/{plugin_id}/oauth/callback", name="plugin_oauth_callback")
+    def complete_plugin_oauth(
+        plugin_id: str,
+        state: str,
+        request: Request,
+        code: str | None = None,
+        error: str | None = None,
+        error_description: str | None = None,
+    ) -> dict[str, object]:
+        del request, error_description
+        if platform is None or oauth_broker is None:
+            raise HTTPException(status_code=503, detail="OAuth plugin connection is unavailable")
+        try:
+            completion = oauth_broker.complete(
+                user_id=None, plugin_id=plugin_id, state=state, code=code, error=error
+            )
+            connected = platform.connect(
+                completion.user_id,
+                plugin_id,
+                set(completion.approved_permissions),
+                completion.credential,
+                completion.account_label,
+            )
+            return connected.model_dump(by_alias=True)
+        except OAuthStateMismatch as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OAuthError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (KeyError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/{plugin_id}/connection")
     def plugin_connection(
@@ -716,6 +791,10 @@ def build_desktop_router(
                     "pluginId": entry.id,
                     "name": entry.name,
                     "version": entry.version,
+                    "description": entry.description,
+                    "authMode": entry.auth_mode,
+                    "permissions": entry.permissions,
+                    "installSource": entry.install_source,
                     "status": status,
                     "nextAction": {
                         "not_installed": "install",
@@ -724,6 +803,7 @@ def build_desktop_router(
                         "connected": "open",
                         "failed": "reconnect",
                         "paused": "resume",
+                        "disabled": "configure",
                     }.get(status, "connect"),
                     "approvedPermissions": _platform_permissions(plugin_platform, entry.id),
                 })

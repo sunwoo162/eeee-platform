@@ -19,6 +19,9 @@ body { margin: 0; background: radial-gradient(circle at top right, #223b3e, #101
 .eeee-plugin-status-heading h3 { margin: 0; font-size: 1rem; }
 .eeee-plugin-list { display: grid; gap: .45rem; list-style: none; margin: .65rem 0 0; padding: 0; }
 .eeee-plugin-item { display: grid; grid-template-columns: minmax(8rem, 1fr) auto minmax(6rem, auto); align-items: center; gap: .7rem; padding: .65rem .75rem; border: 1px solid #46506c; border-radius: 10px; background: rgba(12, 15, 23, .28); }
+.plugin-action { border: 1px solid #6b82ed; border-radius: 8px; background: rgba(107, 130, 237, .18); color: #eef3f7; padding: .35rem .7rem; cursor: pointer; }
+.plugin-action:hover { background: rgba(107, 130, 237, .35); }
+.plugin-action:disabled { opacity: .55; cursor: wait; }
 .plugin-status { color: #f5ce72; font-size: .82rem; }
 .plugin-status-connected { color: #71e6c2; }
 .plugin-status-failed { color: #ff9f9f; }

@@ -18,13 +18,41 @@ class CapabilityRouter:
     OPTIONAL_PLUGIN_HINTS = (
         ("notion", "Notion", ["pages.read", "pages.write"]),
         ("노션", "Notion", ["pages.read", "pages.write"]),
+        ("gmail", "Gmail", ["mail.read", "mail.send"]),
+        ("지메일", "Gmail", ["mail.read", "mail.send"]),
         ("google calendar", "Google Calendar", ["calendar.read", "calendar.write"]),
         ("구글 캘린더", "Google Calendar", ["calendar.read", "calendar.write"]),
-        ("github", "GitHub", ["repository.read", "repository.write"]),
-        ("깃허브", "GitHub", ["repository.read", "repository.write"]),
+        ("google drive", "Google Drive", ["files.read", "files.write"]),
+        ("구글 드라이브", "Google Drive", ["files.read", "files.write"]),
+        ("google contacts", "Google Contacts", ["contacts.read"]),
+        ("구글 연락처", "Google Contacts", ["contacts.read"]),
+        ("github", "GitHub", ["repos.read", "issues.read", "pull_requests.write"]),
+        ("깃허브", "GitHub", ["repos.read", "issues.read", "pull_requests.write"]),
+        ("figma", "Figma", ["files.read", "files.write"]),
+        ("피그마", "Figma", ["files.read", "files.write"]),
         ("slack", "Slack", ["messages.read", "messages.write"]),
         ("슬랙", "Slack", ["messages.read", "messages.write"]),
+        ("linear", "Linear", ["issues.read", "issues.write"]),
+        ("리니어", "Linear", ["issues.read", "issues.write"]),
+        ("todoist", "Todoist", ["tasks.read", "tasks.write"]),
+        ("투두이스트", "Todoist", ["tasks.read", "tasks.write"]),
+        ("outlook mail", "Outlook Email", ["mail.read", "mail.send"]),
+        ("아웃룩 메일", "Outlook Email", ["mail.read", "mail.send"]),
+        ("outlook calendar", "Outlook Calendar", ["calendar.read", "calendar.write"]),
+        ("아웃룩 캘린더", "Outlook Calendar", ["calendar.read", "calendar.write"]),
     )
+
+    OPTIONAL_PLUGIN_IDS = {
+        "notion": "notion", "노션": "notion", "gmail": "gmail", "지메일": "gmail",
+        "google calendar": "google-calendar", "구글 캘린더": "google-calendar",
+        "google drive": "google-drive", "구글 드라이브": "google-drive",
+        "google contacts": "google-contacts", "구글 연락처": "google-contacts",
+        "github": "github", "깃허브": "github", "figma": "figma", "피그마": "figma",
+        "slack": "slack", "슬랙": "slack", "linear": "linear", "리니어": "linear",
+        "todoist": "todoist", "투두이스트": "todoist",
+        "outlook mail": "outlook-email", "아웃룩 메일": "outlook-email",
+        "outlook calendar": "outlook-calendar", "아웃룩 캘린더": "outlook-calendar",
+    }
 
     def __init__(
         self,
@@ -158,10 +186,7 @@ class CapabilityRouter:
     def _optional_plugin_hint(self, normalized: str) -> tuple[str, str, list[str]] | None:
         for phrase, plugin_name, permissions in self.OPTIONAL_PLUGIN_HINTS:
             if _contains(normalized, phrase):
-                plugin_id = phrase if phrase.isascii() else {
-                    "노션": "notion", "구글 캘린더": "google-calendar",
-                    "깃허브": "github", "슬랙": "slack",
-                }[phrase]
+                plugin_id = self.OPTIONAL_PLUGIN_IDS[phrase]
                 return plugin_id, plugin_name, permissions
         return None
 

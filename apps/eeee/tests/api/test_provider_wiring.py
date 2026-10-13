@@ -133,3 +133,41 @@ def test_connected_chatgpt_web_is_primary_when_no_real_local_model_exists(monkey
 
     assert handler.runtime.local is None
     assert handler.runtime.web is not None
+
+
+def test_explicit_provider_config_is_wired_into_plugin_platform_and_oauth(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+        plugin_provider_config_json=(
+            '{"gmail": {"baseUrl": "https://gmail.example", "oauth": {'
+            '"authorizationEndpoint": "https://accounts.example/authorize", '
+            '"tokenEndpoint": "https://accounts.example/token", '
+            '"clientId": "public-client", "scopes": ["mail.read"]}}}'
+        ),
+    )
+
+    application = create_app(settings)
+
+    assert set(application.state.plugin_platform.connectors) == {"notion", "gmail"}
+    assert application.state.oauth_configs["gmail"].client_id == "public-client"
+    assert application.state.plugin_platform.status("gmail") == "not_installed"
+
+
+def test_invalid_provider_config_fails_during_app_creation(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+        plugin_provider_config_json="not-json",
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="invalid JSON"):
+        create_app(settings)

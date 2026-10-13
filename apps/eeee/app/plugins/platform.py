@@ -18,6 +18,56 @@ from app.runtime.store import PluginConnectionStore, PluginInstallation, PluginI
 from app.storage.sqlite import SQLiteStore
 
 
+# These are deliberately routing descriptors, not a second provider API. The
+# provider connector remains the source of truth for the operation itself.
+_GENERIC_PLUGIN_ACTIONS: dict[str, tuple[dict[str, object], ...]] = {
+    "gmail": (
+        {"action": "mail.list", "name": "Gmail Mail", "intents": ["email", "mail"], "triggers": ["메일", "이메일", "gmail", "지메일"], "permission": "mail.read", "effect": SideEffectLevel.NONE},
+        {"action": "mail.send", "name": "Gmail Send Mail", "intents": ["email", "mail"], "triggers": ["메일 보내", "이메일 보내", "gmail 보내"], "permission": "mail.send", "effect": SideEffectLevel.EXTERNAL},
+    ),
+    "google-calendar": (
+        {"action": "calendar.events", "name": "Google Calendar Events", "intents": ["calendar", "schedule"], "triggers": ["구글 캘린더", "google calendar", "캘린더 일정"], "permission": "calendar.read", "effect": SideEffectLevel.NONE},
+        {"action": "calendar.create", "name": "Google Calendar Create", "intents": ["calendar", "schedule"], "triggers": ["캘린더 일정 추가", "캘린더 일정 만들어"], "permission": "calendar.write", "effect": SideEffectLevel.EXTERNAL},
+    ),
+    "google-drive": (
+        {"action": "files.list", "name": "Google Drive Files", "intents": ["files", "documents"], "triggers": ["구글 드라이브", "google drive", "드라이브 파일"], "permission": "files.read", "effect": SideEffectLevel.NONE},
+        {"action": "files.create", "name": "Google Drive Create File", "intents": ["files", "documents"], "triggers": ["드라이브 파일 만들어", "구글 드라이브에 저장"], "permission": "files.write", "effect": SideEffectLevel.EXTERNAL},
+    ),
+    "google-contacts": (
+        {"action": "contacts.list", "name": "Google Contacts", "intents": ["contacts"], "triggers": ["구글 연락처", "google contacts", "연락처"], "permission": "contacts.read", "effect": SideEffectLevel.NONE},
+    ),
+    "github": (
+        {"action": "repos.list", "name": "GitHub Repositories", "intents": ["code", "repository"], "triggers": ["github 저장소", "깃허브 저장소", "github repo"], "permission": "repos.read", "effect": SideEffectLevel.NONE},
+        {"action": "issues.list", "name": "GitHub Issues", "intents": ["code", "issues"], "triggers": ["github 이슈", "깃허브 이슈"], "permission": "issues.read", "effect": SideEffectLevel.NONE},
+        {"action": "pull_requests.write", "name": "GitHub Pull Request", "intents": ["code", "review"], "triggers": ["github pr", "깃허브 pr", "풀 리퀘스트"], "permission": "pull_requests.write", "effect": SideEffectLevel.EXTERNAL},
+    ),
+    "figma": (
+        {"action": "files.get", "name": "Figma Files", "intents": ["design", "files"], "triggers": ["figma", "피그마"], "permission": "files.read", "effect": SideEffectLevel.NONE},
+        {"action": "files.write", "name": "Figma Edit File", "intents": ["design", "files"], "triggers": ["피그마 수정", "figma 수정"], "permission": "files.write", "effect": SideEffectLevel.EXTERNAL},
+    ),
+    "slack": (
+        {"action": "messages.list", "name": "Slack Messages", "intents": ["chat", "messages"], "triggers": ["slack", "슬랙"], "permission": "messages.read", "effect": SideEffectLevel.NONE},
+        {"action": "messages.send", "name": "Slack Send Message", "intents": ["chat", "messages"], "triggers": ["슬랙 메시지 보내", "slack 메시지 보내"], "permission": "messages.write", "effect": SideEffectLevel.EXTERNAL},
+    ),
+    "linear": (
+        {"action": "issues.search", "name": "Linear Issues", "intents": ["issues", "project"], "triggers": ["linear", "리니어"], "permission": "issues.read", "effect": SideEffectLevel.NONE},
+        {"action": "issues.create", "name": "Linear Create Issue", "intents": ["issues", "project"], "triggers": ["linear 이슈 만들어", "리니어 이슈 만들어"], "permission": "issues.write", "effect": SideEffectLevel.EXTERNAL},
+    ),
+    "todoist": (
+        {"action": "tasks.list", "name": "Todoist Tasks", "intents": ["tasks", "todo"], "triggers": ["todoist", "투두이스트", "할 일 목록"], "permission": "tasks.read", "effect": SideEffectLevel.NONE},
+        {"action": "tasks.create", "name": "Todoist Create Task", "intents": ["tasks", "todo"], "triggers": ["todoist 할 일 추가", "할 일 추가"], "permission": "tasks.write", "effect": SideEffectLevel.EXTERNAL},
+    ),
+    "outlook-email": (
+        {"action": "mail.list", "name": "Outlook Mail", "intents": ["email", "mail"], "triggers": ["아웃룩 메일", "outlook mail"], "permission": "mail.read", "effect": SideEffectLevel.NONE},
+        {"action": "mail.send", "name": "Outlook Send Mail", "intents": ["email", "mail"], "triggers": ["아웃룩 메일 보내", "outlook mail 보내"], "permission": "mail.send", "effect": SideEffectLevel.EXTERNAL},
+    ),
+    "outlook-calendar": (
+        {"action": "calendar.events", "name": "Outlook Calendar", "intents": ["calendar", "schedule"], "triggers": ["아웃룩 캘린더", "outlook calendar"], "permission": "calendar.read", "effect": SideEffectLevel.NONE},
+        {"action": "calendar.create", "name": "Outlook Create Event", "intents": ["calendar", "schedule"], "triggers": ["아웃룩 일정 추가", "outlook 일정 추가"], "permission": "calendar.write", "effect": SideEffectLevel.EXTERNAL},
+    ),
+}
+
+
 class PluginInstallationView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
@@ -58,6 +108,8 @@ class PluginPlatformService:
 
     def install(self, plugin_id: str) -> PluginInstallationView:
         entry = self.catalog_source.get(plugin_id)
+        if entry.connector not in self.connectors:
+            raise RuntimeError(f"plugin connector is unavailable: {entry.connector}")
         installation = self.installations.install(entry.id, entry.version)
         return PluginInstallationView(
             pluginId=installation.plugin_id, version=installation.version, status="available"
@@ -81,6 +133,9 @@ class PluginPlatformService:
         account for it yet.
         """
         self.catalog_source.get(plugin_id)
+        entry = self.catalog_source.get(plugin_id)
+        if entry.connector not in self.connectors:
+            return "disabled"
         if not self.installations.is_installed(plugin_id):
             return "not_installed"
         try:
@@ -103,26 +158,37 @@ class PluginPlatformService:
         if not approved_permissions or not approved_permissions.issubset(requested):
             raise PermissionError("plugin permission approval is invalid")
         connector = self._connector(plugin_id)
+        try:
+            prior = self.connections.get(user_id, plugin_id)
+        except KeyError:
+            prior = None
         reference = self.credentials.put(user_id, plugin_id, _credential_json(credential))
         connecting = PluginConnection(
             userId=user_id, pluginId=plugin_id, status="connecting",
             approvedPermissions=sorted(approved_permissions), credentialRef=reference,
             accountLabel=account_label, updatedAt=_now(),
         )
-        self.connections.save(connecting)
         try:
             transient = connector.connect(user_id, credential, approved_permissions)
             health = connector.health(transient)
         except Exception:
+            self.credentials.delete(reference)
+            if prior is not None and prior.status in {"connected", "paused"}:
+                return self._view(prior)
             failed = connecting.model_copy(update={
-                "status": "failed", "last_health": "unavailable", "last_error": "provider_unavailable",
+                "status": "failed", "credential_ref": None,
+                "last_health": "unavailable", "last_error": "provider_unavailable",
                 "updated_at": _now(),
             })
             self.connections.save(failed)
             return self._view(failed)
         if health.status != "healthy":
+            self.credentials.delete(reference)
+            if prior is not None and prior.status in {"connected", "paused"}:
+                return self._view(prior)
             failed = connecting.model_copy(update={
-                "status": "failed", "last_health": health.status, "last_error": health.code,
+                "status": "failed", "credential_ref": None,
+                "last_health": health.status, "last_error": health.code,
                 "updated_at": _now(),
             })
             self.connections.save(failed)
@@ -132,6 +198,8 @@ class PluginPlatformService:
             "updated_at": _now(),
         })
         self.connections.save(connected)
+        if prior is not None and prior.credential_ref and prior.credential_ref != reference:
+            self.credentials.delete(prior.credential_ref)
         return self._view(connected)
 
     def get_connection(self, user_id: str, plugin_id: str) -> PluginConnectionView:
@@ -199,6 +267,18 @@ class PluginPlatformService:
                     side_effect_level=SideEffectLevel.EXTERNAL, approval_level="user",
                     claim_latch_policy="claimlatch-v0.2.0", memory_writable=False,
                 ))
+                continue
+            for action in _GENERIC_PLUGIN_ACTIONS.get(entry.id, ()):
+                if str(action["permission"]) not in connection.approved_permissions:
+                    continue
+                projected.append(CapabilityDescriptor(
+                    id=f"plugin:{entry.id}:{action['action']}", version=entry.version,
+                    display_name=str(action["name"]), intents=list(action["intents"]),
+                    trigger_phrases=list(action["triggers"]),
+                    required_connectors=[f"plugin:{entry.id}"],
+                    side_effect_level=action["effect"], approval_level="user" if action["effect"] != SideEffectLevel.NONE else "none",
+                    claim_latch_policy="claimlatch-v0.2.0", memory_writable=False,
+                ))
         return projected
 
     def invoke(self, user_id: str, capability_id: str, value: dict[str, object]) -> ExecutionEnvelope:
@@ -212,7 +292,10 @@ class PluginPlatformService:
         try:
             connector = self._connector(plugin_id)
             transient = connector.connect(user_id, _credential_from_json(credential), set(connection.approved_permissions))
-            output = connector.invoke(transient, str(value.get("action", "get_page")), value)
+            action = str(value.get("action") or capability_id.rsplit(":", 1)[-1])
+            if plugin_id == "notion" and action == "pages":
+                action = "get_page"
+            output = connector.invoke(transient, action, value)
             envelope = ExecutionEnvelope(
                 executionId=f"plugin-execution-{uuid4().hex}", requestId=f"plugin-request-{uuid4().hex}",
                 capabilityId=capability_id, toolId=plugin_id, actor="EEEE", input=value,

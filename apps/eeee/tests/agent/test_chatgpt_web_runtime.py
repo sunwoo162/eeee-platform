@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+from threading import Lock, Thread
+import time
 
 import httpx
 
@@ -33,6 +35,42 @@ def test_chatgpt_web_runtime_returns_bridge_response_and_keeps_conversation(monk
     assert second.status == "completed"
     assert calls[0][1]["conversationRef"] is None
     assert calls[1][1]["conversationRef"] == "conv-1"
+
+
+def test_chatgpt_web_runtime_serializes_shared_conversation_turns(monkeypatch):
+    active = 0
+    maximum = 0
+    state_lock = Lock()
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "completed", "message": "ok", "conversationRef": "conv-1"}
+
+    def post(*_args, **_kwargs):
+        nonlocal active, maximum
+        with state_lock:
+            active += 1
+            maximum = max(maximum, active)
+        time.sleep(0.05)
+        with state_lock:
+            active -= 1
+        return Response()
+
+    monkeypatch.setattr(httpx, "post", post)
+    runtime = ChatGptWebRuntime("http://127.0.0.1:47831")
+    threads = [
+        Thread(target=runtime.run, args=(AgentRequest("work", Path("."), [], f"run-{index}"),))
+        for index in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert maximum == 1
 
 
 def test_chatgpt_web_runtime_does_not_claim_success_when_bridge_is_down(monkeypatch):

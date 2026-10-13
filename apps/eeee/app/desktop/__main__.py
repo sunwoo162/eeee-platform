@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.desktop.client import PetApiClient
+from app.desktop.instance import DesktopInstanceLock
 from app.desktop.preferences import apply_preferences, load_preferences, save_preferences
 from app.desktop.runtime import ApiStartupError, EmbeddedApiRuntime
 
@@ -136,6 +137,10 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.gui_self_test:
         return run_gui_self_test()
 
+    instance_lock = DesktopInstanceLock(Settings().data_dir / "desktop-instance.lock")
+    if not instance_lock.acquire():
+        return 0
+
     prepare_qt_runtime()
     from PySide6.QtWidgets import QApplication
 
@@ -161,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if runtime is not None:
             runtime.stop()
+        instance_lock.release()
 
 
 if __name__ == "__main__":

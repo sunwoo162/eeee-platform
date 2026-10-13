@@ -305,9 +305,13 @@ class TrustPipeline:
 def _qa_failure(qa_report: Mapping[str, object] | None, envelope: ExecutionEnvelope) -> str | None:
     if not isinstance(qa_report, Mapping):
         return "Independent QA report is missing"
-    if qa_report.get("projectId") not in {None, envelope.project_id}:
+    if not isinstance(qa_report.get("projectId"), str) or not str(qa_report["projectId"]).strip():
+        return "QA report project identity is missing"
+    if qa_report.get("projectId") != envelope.project_id:
         return "QA report project identity does not match execution"
-    if qa_report.get("projectRevision") not in {None, envelope.project_revision}:
+    if not isinstance(qa_report.get("projectRevision"), str) or not str(qa_report["projectRevision"]).strip():
+        return "QA report project revision is missing"
+    if qa_report.get("projectRevision") != envelope.project_revision:
         return "QA report is stale for the execution revision"
     if not _is_pass(qa_report.get("status")):
         return "Independent QA did not PASS"

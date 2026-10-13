@@ -30,7 +30,9 @@ def preferences_path() -> Path:
 def _defaults() -> DesktopPreferences:
     return DesktopPreferences(
         chatgpt_web_enabled=True,
-        chatgpt_web_autostart=True,
+        # Web ChatGPT is an implementation detail and must never open a
+        # browser during ordinary desktop startup. Login remains explicit.
+        chatgpt_web_autostart=False,
         profile_root=_local_app_data() / "Gleave" / "chatgpt-web-profile",
     )
 
@@ -44,10 +46,22 @@ def load_preferences() -> DesktopPreferences:
         return defaults
     if not isinstance(payload, dict):
         return defaults
+    # Version 1 enabled browser autostart by default. Treat those persisted
+    # settings as legacy so an existing install does not suddenly reopen a
+    # Chrome window when the desktop pet starts after this update.
+    try:
+        version = int(payload.get("version", 1))
+    except (TypeError, ValueError):
+        version = 1
+    autostart = (
+        bool(payload.get("chatgptWebAutostart", defaults.chatgpt_web_autostart))
+        if version >= 2
+        else False
+    )
     profile = payload.get("profileRoot")
     return DesktopPreferences(
         chatgpt_web_enabled=bool(payload.get("chatgptWebEnabled", defaults.chatgpt_web_enabled)),
-        chatgpt_web_autostart=bool(payload.get("chatgptWebAutostart", defaults.chatgpt_web_autostart)),
+        chatgpt_web_autostart=autostart,
         profile_root=Path(profile) if isinstance(profile, str) and profile.strip() else defaults.profile_root,
         browser_executable=(
             payload["browserExecutable"]
@@ -67,7 +81,7 @@ def save_preferences(
     path = preferences_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": 1,
+        "version": 2,
         "chatgptWebEnabled": chatgpt_web_enabled,
         "chatgptWebAutostart": chatgpt_web_autostart,
         "profileRoot": str(profile_root),

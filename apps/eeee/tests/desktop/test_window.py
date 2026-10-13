@@ -246,8 +246,13 @@ def test_quick_chat_above_pet_contains_input_and_latest_reply():
     window._start_reply_typing("이전 답변")
     window._reposition_command_surface()
 
-    assert window.command_surface.frameGeometry().bottom() < window.frameGeometry().top()
-    assert window.frameGeometry().top() - window.command_surface.frameGeometry().bottom() <= 1
+    anchor = window._pet_anchor_rect()
+    tail_offset = window._speech_bubble_tail_offset(window.command_surface.size())
+    assert abs(
+        window.command_surface.frameGeometry().top()
+        + tail_offset.y()
+        - (anchor.top() - 6)
+    ) <= 2
     assert window.detail.isHidden()
     assert window.quick_reply.isVisible()
     assert window.quick_reply.text()
@@ -749,15 +754,13 @@ def test_quick_chat_is_anchored_to_the_pet_and_clamped_to_screen_edges():
 
     screen = QRect(0, 0, 800, 600)
     surface_size = QSize(320, 180)
-    anchor = window._pet_anchor_rect()
     position = window._command_surface_position(screen, surface_size)
+    anchor = window._pet_anchor_rect()
+    tail_offset = window._speech_bubble_tail_offset(surface_size)
 
     assert position.x() >= screen.left() + 12
     assert position.x() + surface_size.width() <= screen.right() - 11
-    assert (
-        position.y() >= anchor.bottom()
-        or position.y() + surface_size.height() <= anchor.top()
-    )
+    assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
     window.close()
 
 
@@ -772,10 +775,32 @@ def test_quick_chat_prefers_above_the_pet_when_space_is_available():
     anchor = window._pet_anchor_rect()
     position = window._command_surface_position(screen, surface_size)
 
-    assert position.y() + surface_size.height() <= anchor.top()
+    tail_offset = window._speech_bubble_tail_offset(surface_size)
+    assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
     assert abs(
-        position.x() + surface_size.width() // 2 - anchor.center().x()
+        position.x() + surface_size.width() // 2
+        - (anchor.left() + round(anchor.width() * 0.44))
     ) <= 12
+    window.close()
+
+
+def test_quick_chat_bubble_tail_tracks_the_cat_head_not_the_window_frame():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show()
+    window.move(200, 220)
+
+    screen = QRect(0, 0, 1200, 800)
+    surface_size = QSize(320, 180)
+    position = window._command_surface_position(screen, surface_size)
+    character_top_left = window.character.mapToGlobal(window.character.rect().topLeft())
+    character_rect = QRect(character_top_left, window.character.size())
+    tail_offset = window._speech_bubble_tail_offset(surface_size)
+    expected_tail_x = character_rect.left() + round(character_rect.width() * 0.44)
+    expected_tail_y = character_rect.top() - 6
+
+    assert abs(position.x() + tail_offset.x() - expected_tail_x) <= 2
+    assert abs(position.y() + tail_offset.y() - expected_tail_y) <= 2
     window.close()
 
 

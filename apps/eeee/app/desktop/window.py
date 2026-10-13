@@ -706,14 +706,27 @@ class PetWindow:
                 self.clearFocus()
 
             def _pet_anchor_rect(self):
-                """Return the complete visible pet bounds in screen coordinates."""
-                return self.frameGeometry()
+                """Return the pet artwork bounds in screen coordinates."""
+                top_left = self.character.mapToGlobal(self.character.rect().topLeft())
+                return QRect(top_left, self.character.size())
+
+            def _speech_bubble_tail_offset(self, surface_size):
+                """Return the scaled speech-bubble tail tip inside its window."""
+                pixmap = self.command_surface.bubble_pixmap
+                if pixmap is None or pixmap.isNull():
+                    return QPoint(surface_size.width() // 2, surface_size.height())
+                # The transparent source asset's alpha bounds end at the tip
+                # (y=764 of 887).  Use that visible coordinate instead of the
+                # widget bottom, which includes transparent padding.
+                tail_y = round(surface_size.height() * 764 / pixmap.height())
+                return QPoint(surface_size.width() // 2, tail_y)
 
             def _command_surface_position(self, screen_rect=None, surface_size=None):
                 """Place Quick Chat next to the pet, clamped to the usable screen."""
-                # The bubble tail should nearly touch the cat. The old
-                # gap plus transparent asset padding made them feel detached.
-                margin = 0
+                # Anchor the visible tail to the cat artwork. The window also
+                # contains transparent source-asset padding, so using the
+                # widget edge would leave a large visual gap.
+                margin = 12
                 anchor = self._pet_anchor_rect()
                 if screen_rect is None:
                     screen = self.screen()
@@ -728,12 +741,22 @@ class PetWindow:
                 min_y = screen_rect.top() + margin
                 max_y = screen_rect.bottom() - margin - surface_size.height() + 1
 
-                centered_x = anchor.center().x() - surface_size.width() // 2
-                x = max(min_x, min(centered_x, max_x))
-                above_y = anchor.top() - margin - surface_size.height()
-                below_y = anchor.bottom() + margin
+                tail_offset = self._speech_bubble_tail_offset(surface_size)
+                # The cat's head is slightly left of the image center; placing
+                # the tail here makes the bubble read as spoken by the cat.
+                target_tail_x = anchor.left() + round(anchor.width() * 0.44)
+                x = target_tail_x - tail_offset.x()
+                x = max(min_x, min(x, max_x))
+
+                tail_target_y = anchor.top() - 6
+                above_y = tail_target_y - tail_offset.y()
+                bubble_top_offset = round(
+                    surface_size.height() * 124 / self.command_surface.bubble_pixmap.height()
+                )
+                below_y = anchor.bottom() + 6 - bubble_top_offset
                 # The composer and latest reply belong above the pet. Only
-                # move it below when the top of the monitor has no room.
+                # move it below when the monitor top leaves no room for the
+                # visible bubble body.
                 y = above_y if above_y >= min_y else below_y
                 y = max(min_y, min(y, max_y))
                 return QPoint(x, y)

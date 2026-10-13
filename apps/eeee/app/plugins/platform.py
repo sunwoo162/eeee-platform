@@ -103,26 +103,37 @@ class PluginPlatformService:
         if not approved_permissions or not approved_permissions.issubset(requested):
             raise PermissionError("plugin permission approval is invalid")
         connector = self._connector(plugin_id)
+        try:
+            prior = self.connections.get(user_id, plugin_id)
+        except KeyError:
+            prior = None
         reference = self.credentials.put(user_id, plugin_id, _credential_json(credential))
         connecting = PluginConnection(
             userId=user_id, pluginId=plugin_id, status="connecting",
             approvedPermissions=sorted(approved_permissions), credentialRef=reference,
             accountLabel=account_label, updatedAt=_now(),
         )
-        self.connections.save(connecting)
         try:
             transient = connector.connect(user_id, credential, approved_permissions)
             health = connector.health(transient)
         except Exception:
+            self.credentials.delete(reference)
+            if prior is not None and prior.status in {"connected", "paused"}:
+                return self._view(prior)
             failed = connecting.model_copy(update={
-                "status": "failed", "last_health": "unavailable", "last_error": "provider_unavailable",
+                "status": "failed", "credential_ref": None,
+                "last_health": "unavailable", "last_error": "provider_unavailable",
                 "updated_at": _now(),
             })
             self.connections.save(failed)
             return self._view(failed)
         if health.status != "healthy":
+            self.credentials.delete(reference)
+            if prior is not None and prior.status in {"connected", "paused"}:
+                return self._view(prior)
             failed = connecting.model_copy(update={
-                "status": "failed", "last_health": health.status, "last_error": health.code,
+                "status": "failed", "credential_ref": None,
+                "last_health": health.status, "last_error": health.code,
                 "updated_at": _now(),
             })
             self.connections.save(failed)
@@ -132,6 +143,8 @@ class PluginPlatformService:
             "updated_at": _now(),
         })
         self.connections.save(connected)
+        if prior is not None and prior.credential_ref and prior.credential_ref != reference:
+            self.credentials.delete(prior.credential_ref)
         return self._view(connected)
 
     def get_connection(self, user_id: str, plugin_id: str) -> PluginConnectionView:

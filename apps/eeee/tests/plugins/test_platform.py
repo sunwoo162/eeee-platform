@@ -73,14 +73,48 @@ def test_platform_isolates_users_and_disconnect_removes_capability(tmp_path) -> 
 
 
 def test_platform_marks_provider_failure_and_does_not_expose_capability(tmp_path) -> None:
-    platform = _platform(tmp_path, FakeConnector(healthy=False))
+    connector = FakeConnector(healthy=False)
+    credentials = MemoryCredentialStore()
+    platform = PluginPlatformService(
+        SQLiteStore(tmp_path / "state.sqlite3"),
+        credentials=credentials, connectors={"notion": connector},
+    )
+    platform.connections.store.init()
     platform.install("notion")
 
     failed = platform.connect("user-a", "notion", {"pages.read"}, {"token": "secret"}, None)
 
     assert failed.status == "failed"
     assert failed.last_error == "provider_unavailable"
+    assert platform.connections.get("user-a", "notion").credential_ref is None
+    assert credentials._values == {}
     assert platform.capabilities("user-a") == []
+
+
+def test_failed_reconnect_keeps_existing_healthy_credential(tmp_path) -> None:
+    connector = FakeConnector()
+    credentials = MemoryCredentialStore()
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store, credentials=credentials, connectors={"notion": connector}
+    )
+    platform.install("notion")
+    connected = platform.connect(
+        "user-a", "notion", {"pages.read"}, {"token": "old-secret"}, None
+    )
+    old_connection = platform.connections.get("user-a", "notion")
+    connector.healthy = False
+
+    retried = platform.connect(
+        "user-a", "notion", {"pages.read"}, {"token": "new-secret"}, None
+    )
+
+    assert connected.status == "connected"
+    assert retried.status == "connected"
+    assert platform.connections.get("user-a", "notion").credential_ref == old_connection.credential_ref
+    assert credentials.get(old_connection.credential_ref) == '{"token": "old-secret"}'
+    assert all("new-secret" not in value for value in credentials._values.values())
 
 
 def test_application_distinguishes_optional_installation_from_connection_requirement(tmp_path) -> None:

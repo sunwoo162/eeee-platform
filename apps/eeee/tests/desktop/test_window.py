@@ -251,7 +251,7 @@ def test_quick_chat_above_pet_contains_input_and_latest_reply():
     assert abs(
         window.command_surface.frameGeometry().top()
         + tail_offset.y()
-        - (anchor.top() - 6)
+        - (anchor.top() + round(anchor.height() * 0.34))
     ) <= 2
     assert window.detail.isHidden()
     assert window.quick_reply.isVisible()
@@ -760,7 +760,10 @@ def test_quick_chat_is_anchored_to_the_pet_and_clamped_to_screen_edges():
 
     assert position.x() >= screen.left() + 12
     assert position.x() + surface_size.width() <= screen.right() - 11
-    assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
+    assert abs(
+        position.y() + tail_offset.y()
+        - (anchor.top() + round(anchor.height() * 0.34))
+    ) <= 2
     window.close()
 
 
@@ -776,10 +779,13 @@ def test_quick_chat_prefers_above_the_pet_when_space_is_available():
     position = window._command_surface_position(screen, surface_size)
 
     tail_offset = window._speech_bubble_tail_offset(surface_size)
-    assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
+    assert abs(
+        position.y() + tail_offset.y()
+        - (anchor.top() + round(anchor.height() * 0.34))
+    ) <= 2
     assert abs(
         position.x() + surface_size.width() // 2
-        - (anchor.left() + round(anchor.width() * 0.32))
+        - (anchor.left() + round(anchor.width() * 0.44))
     ) <= 12
     window.close()
 
@@ -796,8 +802,8 @@ def test_quick_chat_bubble_tail_tracks_the_cat_head_not_the_window_frame():
     character_top_left = window.character.mapToGlobal(window.character.rect().topLeft())
     character_rect = QRect(character_top_left, window.character.size())
     tail_offset = window._speech_bubble_tail_offset(surface_size)
-    expected_tail_x = character_rect.left() + round(character_rect.width() * 0.32)
-    expected_tail_y = character_rect.top() - 6
+    expected_tail_x = character_rect.left() + round(character_rect.width() * 0.44)
+    expected_tail_y = character_rect.top() + round(character_rect.height() * 0.34)
 
     assert abs(position.x() + tail_offset.x() - expected_tail_x) <= 2
     assert abs(position.y() + tail_offset.y() - expected_tail_y) <= 2
@@ -844,7 +850,7 @@ def test_quick_chat_reanchors_after_pet_moves():
         second.x() + window.command_surface.width() // 2
         - window._pet_anchor_rect().center().x()
     )
-    assert abs(centered_x + round(window._pet_anchor_rect().width() * 0.18)) <= 2 or second.x() == 0 or (
+    assert abs(centered_x + round(window._pet_anchor_rect().width() * 0.06)) <= 2 or second.x() == 0 or (
         second.x() + window.command_surface.width()
         >= window.screen().availableGeometry().right() - 11
     )

@@ -250,6 +250,12 @@ class PetWindow:
                     self._tail_safe_height(width),
                 )
 
+            def sizeHint(self):
+                """Make standalone bubble sizing honor the measured text area."""
+                hint = super().sizeHint()
+                width = self.width() if self.width() > 0 else hint.width()
+                return QSize(width, max(hint.height(), self.heightForWidth(width)))
+
             def resizeEvent(self, event):
                 super().resizeEvent(event)
                 tail_padding = round(self.height() * (1 - self._TAIL_Y_RATIO))

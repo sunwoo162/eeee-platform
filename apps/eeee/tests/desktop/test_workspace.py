@@ -47,6 +47,47 @@ class ProjectStateWorkspaceClient(WorkspaceClient):
         return snapshot
 
 
+class PluginWorkspaceClient(WorkspaceClient):
+    def __init__(self):
+        self.catalog = [{
+            "id": "notion",
+            "name": "Notion",
+            "description": "Notion pages connector",
+            "authMode": "token-or-oauth",
+            "permissions": ["pages.read", "pages.write"],
+            "installSource": "bundled-optional",
+            "status": "not_installed",
+            "nextAction": "install",
+        }]
+        self.calls = []
+
+    def get_plugin_catalog(self):
+        return self.catalog
+
+    def install_plugin(self, plugin_id):
+        self.calls.append(("install", plugin_id))
+        self.catalog[0]["status"] = "awaiting_authentication"
+        return {"pluginId": plugin_id, "status": "available"}
+
+    def connect_plugin(self, plugin_id, credential, permissions, account_label=None):
+        self.calls.append(("connect", plugin_id, credential, permissions, account_label))
+        self.catalog[0]["status"] = "connected"
+        return {"pluginId": plugin_id, "status": "connected"}
+
+    def disconnect_plugin(self, plugin_id):
+        self.calls.append(("disconnect", plugin_id))
+        self.catalog[0]["status"] = "awaiting_authentication"
+        return {"pluginId": plugin_id, "status": "awaiting_authentication"}
+
+    def start_plugin_oauth(self, plugin_id, permissions, account_label=None):
+        self.calls.append(("oauth", plugin_id, permissions, account_label))
+        return {"pluginId": plugin_id, "authorizationUrl": "https://provider.test/authorize"}
+
+    def get_plugin_connection(self, plugin_id):
+        self.calls.append(("connection", plugin_id))
+        return {"pluginId": plugin_id, "status": "connected"}
+
+
 def test_workspace_is_a_desktop_control_center_and_renders_project_map():
     app = QApplication.instance() or QApplication([])
     window = WorkspaceWindow(WorkspaceClient())
@@ -87,4 +128,52 @@ def test_workspace_sidebar_selection_renders_the_selected_section():
     window.nav.setCurrentRow(3)
     assert window.heading.text() == "플러그인"
     assert window.map_tree.topLevelItem(0).text(0) == "Notion"
+    window.close()
+
+
+def test_workspace_plugin_screen_exposes_install_and_disconnect_actions():
+    app = QApplication.instance() or QApplication([])
+    client = PluginWorkspaceClient()
+    window = WorkspaceWindow(client)
+
+    window.nav.setCurrentRow(3)
+    assert window.map_tree.topLevelItemCount() == 1
+    assert window.map_tree.topLevelItem(0).text(0) == "Notion"
+    assert window.plugin_install_button.isEnabled()
+    assert not window.plugin_connect_button.isEnabled()
+
+    window._install_selected_plugin()
+    assert client.calls == [("install", "notion")]
+    assert window.plugin_connect_button.isEnabled()
+    assert not window.plugin_install_button.isEnabled()
+
+    window._disconnect_selected_plugin()
+    assert client.calls[-1] == ("disconnect", "notion")
+    assert window.plugin_connect_button.isEnabled()
+    window.close()
+
+
+def test_workspace_oauth_connection_opens_provider_and_polls_without_exposing_secrets(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    client = PluginWorkspaceClient()
+    window = WorkspaceWindow(client)
+    window.nav.setCurrentRow(3)
+    window.map_tree.setCurrentItem(window.map_tree.topLevelItem(0))
+
+    opened = []
+    monkeypatch.setattr(
+        "PySide6.QtGui.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toString()) or True,
+    )
+    window._start_oauth_connection(
+        window._selected_plugin,
+        ["pages.read"],
+        "workspace",
+    )
+
+    assert opened == ["https://provider.test/authorize"]
+    assert ("oauth", "notion", ["pages.read"], "workspace") in client.calls
+    window._poll_oauth_connection()
+    assert window._oauth_poll_timer.isActive() is False
+    assert "연결됨" in window.plugin_hint.text()
     window.close()

@@ -293,6 +293,7 @@ def test_quick_chat_send_switches_from_composer_to_one_centered_reply():
     app.processEvents()
 
     assert window.assistant_input.isHidden()
+    assert window.assistant_input.text() == ""
     assert window.quick_status.isHidden()
     assert window.quick_reply.isVisible()
 

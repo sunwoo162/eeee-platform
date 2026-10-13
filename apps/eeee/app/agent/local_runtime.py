@@ -303,7 +303,8 @@ class LocalConversationRuntime:
         # can otherwise confidently invent that a Web/GPT session answered.
         # Answer this narrow diagnostic turn deterministically while keeping
         # all other ordinary conversation on the local model.
-        if re.search(r"\b(?:gpt|chatgpt)\b|지피티|챗gpt", request.prompt, re.IGNORECASE):
+        user_text = self._extract_user_text(request.prompt)
+        if re.search(r"\b(?:gpt|chatgpt)\b|지피티|챗gpt", user_text, re.IGNORECASE):
             return AgentResult(
                 status="completed",
                 summary=(
@@ -313,7 +314,6 @@ class LocalConversationRuntime:
                 events=[{"type": "local.conversation", "provider": "ollama"}],
                 changed_files=[], test_commands=[], error=None,
             )
-        user_text = self._extract_user_text(request.prompt)
         recent_turns = self._extract_section(
             request.prompt, "최근 대화:", "사용자 선호:"
         )
@@ -349,8 +349,16 @@ class LocalConversationRuntime:
                     retried = complete_text(
                         retry_prompt, workspace=request.workspace, context=[]
                     )
-                    if isinstance(retried, str) and retried.strip():
+                    if (
+                        isinstance(retried, str)
+                        and retried.strip()
+                        and not self._looks_like_prompt_leakage(retried)
+                    ):
                         summary = retried
+                    else:
+                        raise ValueError(
+                            "local conversation response repeated prompt leakage"
+                        )
             else:
                 # Keep the small scripted backend contract used by tests and
                 # alternate local adapters while Ollama uses plain text above.

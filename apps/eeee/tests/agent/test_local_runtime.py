@@ -214,6 +214,43 @@ def test_local_conversation_lane_retries_prompt_leakage_with_a_clean_turn(tmp_pa
     assert "사용자의 실제 마지막 문장: 안녕" in backend.prompts[1]
 
 
+def test_local_conversation_lane_checks_provider_identity_only_on_current_turn(tmp_path):
+    class PlainTextBackend:
+        def complete_text(self, prompt, *, workspace, context):
+            return "안녕하세요!"
+
+    prompt = (
+        "너는 EEEE라는 개인 비서야.\n"
+        '최근 대화: [{"role":"user","content":"GPT Web을 써?"}]\n'
+        "사용자 선호: {}\n관련 기억: {}\n현재 사용자 요청: 안녕"
+    )
+    result = LocalConversationRuntime(backend=PlainTextBackend()).run(
+        AgentRequest(prompt, tmp_path, [], "conversation-history-provider")
+    )
+
+    assert result.status == "completed"
+    assert result.summary == "안녕하세요!"
+
+
+def test_local_conversation_lane_rejects_a_second_prompt_leakage_response(tmp_path):
+    class PlainTextBackend:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_text(self, prompt, *, workspace, context):
+            self.calls += 1
+            return "EEE EEEE, 이제 1초에 한글자씩 말해요!"
+
+    backend = PlainTextBackend()
+    result = LocalConversationRuntime(backend=backend).run(
+        AgentRequest("안녕", tmp_path, [], "conversation-double-leak")
+    )
+
+    assert result.status == "unavailable"
+    assert "prompt leakage" in (result.error or "")
+    assert backend.calls == 2
+
+
 def test_local_conversation_lane_reports_provider_truthfully(tmp_path):
     class FailingBackend:
         def complete_text(self, *args, **kwargs):

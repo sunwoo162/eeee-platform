@@ -779,7 +779,7 @@ def test_quick_chat_prefers_above_the_pet_when_space_is_available():
     assert abs(position.y() + tail_offset.y() - (anchor.top() - 6)) <= 2
     assert abs(
         position.x() + surface_size.width() // 2
-        - (anchor.left() + round(anchor.width() * 0.68))
+        - (anchor.left() + round(anchor.width() * 0.32))
     ) <= 12
     window.close()
 
@@ -796,7 +796,7 @@ def test_quick_chat_bubble_tail_tracks_the_cat_head_not_the_window_frame():
     character_top_left = window.character.mapToGlobal(window.character.rect().topLeft())
     character_rect = QRect(character_top_left, window.character.size())
     tail_offset = window._speech_bubble_tail_offset(surface_size)
-    expected_tail_x = character_rect.left() + round(character_rect.width() * 0.68)
+    expected_tail_x = character_rect.left() + round(character_rect.width() * 0.32)
     expected_tail_y = character_rect.top() - 6
 
     assert abs(position.x() + tail_offset.x() - expected_tail_x) <= 2
@@ -844,7 +844,7 @@ def test_quick_chat_reanchors_after_pet_moves():
         second.x() + window.command_surface.width() // 2
         - window._pet_anchor_rect().center().x()
     )
-    assert abs(centered_x - round(window._pet_anchor_rect().width() * 0.18)) <= 2 or second.x() == 0 or (
+    assert abs(centered_x + round(window._pet_anchor_rect().width() * 0.18)) <= 2 or second.x() == 0 or (
         second.x() + window.command_surface.width()
         >= window.screen().availableGeometry().right() - 11
     )

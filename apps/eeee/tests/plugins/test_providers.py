@@ -34,6 +34,7 @@ def test_provider_factory_only_builds_explicitly_configured_connectors() -> None
 
     assert set(connectors) == {"gmail"}
     assert connectors["gmail"].plugin_id == "gmail"
+    assert connectors["gmail"].health_path == "/profile"
 
 
 def test_provider_configs_load_from_json_without_accepting_secrets_in_catalog() -> None:

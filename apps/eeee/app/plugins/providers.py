@@ -22,7 +22,7 @@ class ProviderConfig(BaseModel):
 
     base_url: str = Field(alias="baseUrl", min_length=1)
     oauth: OAuthProviderConfig
-    health_path: str = Field(default="/", alias="healthPath")
+    health_path: str | None = Field(default=None, alias="healthPath")
 
 
 @dataclass(frozen=True)

@@ -356,6 +356,10 @@ class SQLiteStore:
             }
             if "input_json" not in assistant_job_columns:
                 connection.execute("ALTER TABLE assistant_jobs ADD COLUMN input_json TEXT NOT NULL DEFAULT '{}'")
+            if "lease_owner" not in assistant_job_columns:
+                connection.execute("ALTER TABLE assistant_jobs ADD COLUMN lease_owner TEXT")
+            if "lease_expires_at" not in assistant_job_columns:
+                connection.execute("ALTER TABLE assistant_jobs ADD COLUMN lease_expires_at TEXT")
             if "error" not in run_columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN error TEXT")
             if "created_at" not in run_columns:

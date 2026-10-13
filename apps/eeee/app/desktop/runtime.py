@@ -31,6 +31,14 @@ _NODE_CANDIDATES = (
 )
 
 
+def _background_process_kwargs() -> dict[str, int]:
+    """Keep helper processes from creating a console beside the GUI pet."""
+
+    if os.name == "nt":
+        return {"creationflags": int(subprocess.CREATE_NO_WINDOW)}
+    return {}
+
+
 def _resolve_browser_executable(configured: str | None) -> str:
     if configured and Path(configured).exists():
         return configured
@@ -289,6 +297,7 @@ class EmbeddedApiRuntime:
             stdout=self._chatgpt_bridge_log,
             stderr=subprocess.STDOUT,
             text=True,
+            **_background_process_kwargs(),
         )
         _runtime_debug(f"bridge_pid={self._chatgpt_bridge.pid}")
         self.settings.chatgpt_web_bridge_url = (
@@ -344,7 +353,10 @@ class EmbeddedApiRuntime:
             # Chromium headless mode. Keep one real browser session, but keep
             # its window out of the user's way during normal operation.
             command.insert(1, "--start-minimized")
-        self._chatgpt_browser = subprocess.Popen(command)
+        self._chatgpt_browser = subprocess.Popen(
+            command,
+            **_background_process_kwargs(),
+        )
 
     def _stop_chatgpt_session(self) -> None:
         if self._chatgpt_bridge is not None:

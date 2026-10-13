@@ -4,14 +4,28 @@ from app.config import Settings
 from app.desktop.preferences import load_preferences, apply_preferences, save_preferences
 
 
-def test_first_run_preferences_enable_chatgpt_without_environment_variables(monkeypatch, tmp_path):
+def test_first_run_preferences_keep_web_chatgpt_in_the_background(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
     preferences = load_preferences()
 
     assert preferences.chatgpt_web_enabled is True
-    assert preferences.chatgpt_web_autostart is True
+    assert preferences.chatgpt_web_autostart is False
     assert preferences.profile_root == tmp_path / "Gleave" / "chatgpt-web-profile"
+
+
+def test_legacy_preferences_do_not_reopen_a_browser_on_startup(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    path = tmp_path / "Gleave" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '{"version": 1, "chatgptWebEnabled": true, "chatgptWebAutostart": true}\n',
+        encoding="utf-8",
+    )
+
+    preferences = load_preferences()
+
+    assert preferences.chatgpt_web_autostart is False
 
 
 def test_preferences_round_trip_and_apply_to_desktop_settings(monkeypatch, tmp_path):

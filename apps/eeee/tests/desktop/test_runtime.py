@@ -1,4 +1,5 @@
 import time
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -22,10 +23,16 @@ def test_resolves_chrome_from_common_windows_install_path(monkeypatch, tmp_path)
 
 def test_chatgpt_browser_is_minimized_for_normal_runtime(monkeypatch, tmp_path):
     launched = []
+    launch_kwargs = []
 
     class FakeProcess:
         def poll(self):
             return None
+
+    def fake_popen(args, **kwargs):
+        launched.append(args)
+        launch_kwargs.append(kwargs)
+        return FakeProcess()
 
     monkeypatch.setattr(
         "app.desktop.runtime._resolve_browser_executable",
@@ -33,7 +40,7 @@ def test_chatgpt_browser_is_minimized_for_normal_runtime(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "app.desktop.runtime.subprocess.Popen",
-        lambda args, **kwargs: (launched.append(args) or FakeProcess()),
+        fake_popen,
     )
     runtime = EmbeddedApiRuntime(
         settings=Settings(
@@ -48,6 +55,7 @@ def test_chatgpt_browser_is_minimized_for_normal_runtime(monkeypatch, tmp_path):
 
     assert "--start-minimized" in launched[0]
     assert "--headless=new" not in launched[0]
+    assert launch_kwargs[0]["creationflags"] == subprocess.CREATE_NO_WINDOW
 
 
 def test_chatgpt_login_browser_is_visible(monkeypatch, tmp_path):

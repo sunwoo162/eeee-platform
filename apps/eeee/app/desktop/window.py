@@ -744,7 +744,7 @@ class PetWindow:
                 tail_offset = self._speech_bubble_tail_offset(surface_size)
                 # The cat's head is slightly left of the image center; placing
                 # the tail here makes the bubble read as spoken by the cat.
-                target_tail_x = anchor.left() + round(anchor.width() * 0.44)
+                target_tail_x = anchor.left() + round(anchor.width() * 0.32)
                 x = target_tail_x - tail_offset.x()
                 x = max(min_x, min(x, max_x))
 

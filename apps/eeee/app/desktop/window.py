@@ -370,6 +370,28 @@ class PetWindow:
                 self.detail.setMaximumWidth(640)
                 root.addWidget(self.detail)
 
+                # Normal replies use the same bubble artwork as Quick Chat,
+                # but live in their own transparent tool window.  Keeping the
+                # reply bubble out of the pet's vertical layout lets its tail
+                # point at the cat's eye instead of the layout center.
+                self.reply_surface = _SpeechBubbleLabel(
+                    QPixmap(str(asset_dir / "cat-speech-bubble.png"))
+                )
+                self.reply_surface.setObjectName("assistantReplyBubble")
+                self.reply_surface.setWindowFlags(
+                    Qt.WindowType.FramelessWindowHint
+                    | Qt.WindowType.WindowStaysOnTopHint
+                    | Qt.WindowType.Tool
+                )
+                self.reply_surface.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+                self.reply_surface.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                self.reply_surface.setMinimumWidth(360)
+                self.reply_surface.setMaximumWidth(640)
+                self.reply_surface.setStyleSheet(
+                    "#assistantReplyBubble { background: transparent; border: none; color: #000000; }"
+                )
+                self.reply_surface.hide()
+
                 # Visual order: AI speech bubble -> pet -> composer below.
                 # The bubble must not sit underneath the pet or get separated
                 # from the composer by the window's invisible legacy widgets.
@@ -660,6 +682,8 @@ class PetWindow:
                 _force_windows_topmost(self)
                 if self.command_surface.isVisible():
                     _force_windows_topmost(self.command_surface)
+                if self.reply_surface.isVisible():
+                    _force_windows_topmost(self.reply_surface)
 
             def show_command_surface(self):
                 # Quick Chat lives above the pet. It reuses the same response
@@ -673,6 +697,7 @@ class PetWindow:
                     latest_reply = ""
                 self.quick_reply.setText(latest_reply)
                 self.detail.hide()
+                self.reply_surface.hide()
                 self._reply_hide_timer.stop()
                 self.command_surface.show()
                 self.command_surface.adjustSize()
@@ -690,18 +715,29 @@ class PetWindow:
                     self.command_surface.move(self._command_surface_position())
                     self._enforce_topmost()
 
+            def _reposition_reply_surface(self):
+                if self.reply_surface.isVisible():
+                    self.reply_surface.adjustSize()
+                    self.reply_surface.move(self._reply_surface_position())
+                    self._enforce_topmost()
+
             def resizeEvent(self, event):
                 super().resizeEvent(event)
                 self._reposition_command_surface()
+                self._reposition_reply_surface()
 
             def moveEvent(self, event):
                 super().moveEvent(event)
                 self._reposition_command_surface()
+                self._reposition_reply_surface()
 
             def hide_command_surface(self):
                 self.command_surface.hide()
                 self.quick_reply.hide()
-                self.detail.show()
+                self.detail.hide()
+                if self.detail.text().strip():
+                    self.reply_surface.show()
+                    self._reposition_reply_surface()
                 self._schedule_reply_hide()
                 self.clearFocus()
 
@@ -710,9 +746,9 @@ class PetWindow:
                 top_left = self.character.mapToGlobal(self.character.rect().topLeft())
                 return QRect(top_left, self.character.size())
 
-            def _speech_bubble_tail_offset(self, surface_size):
+            def _speech_bubble_tail_offset(self, surface, surface_size):
                 """Return the scaled speech-bubble tail tip inside its window."""
-                pixmap = self.command_surface.bubble_pixmap
+                pixmap = surface.bubble_pixmap
                 if pixmap is None or pixmap.isNull():
                     return QPoint(surface_size.width() // 2, surface_size.height())
                 # The transparent source asset's alpha bounds end at the tip
@@ -721,7 +757,7 @@ class PetWindow:
                 tail_y = round(surface_size.height() * 764 / pixmap.height())
                 return QPoint(surface_size.width() // 2, tail_y)
 
-            def _command_surface_position(self, screen_rect=None, surface_size=None):
+            def _surface_position(self, surface, screen_rect=None, surface_size=None):
                 """Place Quick Chat next to the pet, clamped to the usable screen."""
                 # Anchor the visible tail to the cat artwork. The window also
                 # contains transparent source-asset padding, so using the
@@ -734,14 +770,14 @@ class PetWindow:
                         screen = QApplication.primaryScreen()
                     screen_rect = screen.availableGeometry()
                 if surface_size is None:
-                    surface_size = self.command_surface.size()
+                    surface_size = surface.size()
 
                 min_x = screen_rect.left() + margin
                 max_x = screen_rect.right() - margin - surface_size.width() + 1
                 min_y = screen_rect.top() + margin
                 max_y = screen_rect.bottom() - margin - surface_size.height() + 1
 
-                tail_offset = self._speech_bubble_tail_offset(surface_size)
+                tail_offset = self._speech_bubble_tail_offset(surface, surface_size)
                 # The bubble tail points just above the cat's anatomical right
                 # eye, which appears on the viewer-left side of the artwork.
                 # These ratios follow the eye position in the shared cropped
@@ -753,7 +789,7 @@ class PetWindow:
                 tail_target_y = anchor.top() + round(anchor.height() * 0.34)
                 above_y = tail_target_y - tail_offset.y()
                 bubble_top_offset = round(
-                    surface_size.height() * 124 / self.command_surface.bubble_pixmap.height()
+                    surface_size.height() * 124 / surface.bubble_pixmap.height()
                 )
                 below_y = anchor.bottom() + 6 - bubble_top_offset
                 # The composer and latest reply belong above the pet. Only
@@ -762,6 +798,16 @@ class PetWindow:
                 y = above_y if above_y >= min_y else below_y
                 y = max(min_y, min(y, max_y))
                 return QPoint(x, y)
+
+            def _command_surface_position(self, screen_rect=None, surface_size=None):
+                return self._surface_position(
+                    self.command_surface, screen_rect, surface_size
+                )
+
+            def _reply_surface_position(self, screen_rect=None, surface_size=None):
+                return self._surface_position(
+                    self.reply_surface, screen_rect, surface_size
+                )
 
             def _handle_global_mouse_press(self, global_pos):
                 if not self.command_surface.isVisible():
@@ -777,6 +823,7 @@ class PetWindow:
             def _hide_reply_bubble(self):
                 if not self.command_surface.isVisible():
                     self.detail.hide()
+                    self.reply_surface.hide()
 
             def _press_source_frame(self, frame: str) -> str:
                 """Return the sibling artwork for a same-paw press frame.
@@ -1037,8 +1084,10 @@ class PetWindow:
                 self._typing_text = text
                 self._typing_index = 0
                 self.detail.setText("")
+                self.reply_surface.setText("")
                 self.quick_reply.setText("")
-                self.detail.setVisible(not self.command_surface.isVisible())
+                self.detail.hide()
+                self.reply_surface.hide()
                 self.quick_reply.setVisible(False)
                 if not text:
                     return
@@ -1054,8 +1103,12 @@ class PetWindow:
                 self._typing_index += 1
                 visible_text = self._typing_text[: self._typing_index]
                 self.detail.setText(visible_text)
+                self.reply_surface.setText(visible_text)
                 self.quick_reply.setText(visible_text)
-                self.detail.setVisible(not self.command_surface.isVisible())
+                if not self.command_surface.isVisible():
+                    self.detail.hide()
+                    self.reply_surface.show()
+                    self._reposition_reply_surface()
                 self.quick_reply.setVisible(self.command_surface.isVisible())
                 if self._typing_index >= len(self._typing_text):
                     self._typing_timer.stop()
@@ -1103,6 +1156,7 @@ class PetWindow:
                 self._app.removeEventFilter(self)
                 self._task_runner.shutdown()
                 self.command_surface.close()
+                self.reply_surface.close()
                 if self._workspace is not None:
                     self._workspace.close()
                 if self._tray is not None:
@@ -1155,6 +1209,7 @@ class PetWindow:
                 self._typing_timer.stop()
                 self._reply_hide_timer.stop()
                 self.command_surface.hide()
+                self.reply_surface.hide()
                 self.hide()
 
             def restore_from_tray(self):
@@ -1392,10 +1447,11 @@ class PetWindow:
                 self._reply_hide_timer.stop()
                 if self.command_surface.isVisible():
                     self.detail.hide()
+                    self.reply_surface.hide()
                     self.quick_reply.hide()
                 else:
                     self.quick_reply.hide()
-                    self.detail.show()
+                    self.detail.hide()
                 self._start_reply_typing(detail)
                 self._render_desktop_status(payload)
                 candidates = payload.get("candidates", [])

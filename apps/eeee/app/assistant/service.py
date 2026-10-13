@@ -99,23 +99,30 @@ class AssistantService:
             selection = self.router.select(request)
             if selection.status == "selected" and selection.capability_id == "project-execution":
                 request_id = f"assistant-request-{uuid4().hex}"
+                # Allocate the identity before the worker starts.  The same
+                # value is persisted in the job input so a process restart or
+                # manual retry resumes the original project instead of
+                # creating a second one.
+                project_id = f"project-{uuid4().hex}"
                 job_id = self.background_supervisor.submit(
                     request_id,
                     lambda: self._route_sync(
                         text, workspace, requested_capability=requested_capability,
-                        conversation_id=conversation_id,
+                        conversation_id=conversation_id, resume_project_id=project_id,
                     ).model_dump(mode="json"),
                     input_data={
                         "text": text,
                         "workspace": workspace,
                         "requestedCapability": requested_capability,
                         "conversationId": conversation_id,
+                        "projectId": project_id,
                     },
                 )
                 result = AssistantRouteResult(
                     status="accepted",
                     selection=selection,
                     message="프로젝트 작업을 백그라운드에서 시작했어. 진행 상황에서 확인할 수 있어.",
+                    project_id=project_id,
                     job_id=job_id,
                     response_verification=ResponseVerification(
                         decision="WARN",
@@ -135,7 +142,7 @@ class AssistantService:
 
     def _route_sync(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
-        conversation_id: str = "desktop-default",
+        conversation_id: str = "desktop-default", resume_project_id: str | None = None,
     ) -> AssistantRouteResult:
         implicit_preference = extract_implicit_preference(text)
         if implicit_preference is not None:
@@ -153,7 +160,11 @@ class AssistantService:
         envelope = self.kernel.route(
             AssistantRequest(
                 raw_text=text,
-                context={"workspace": workspace, "conversationId": conversation_id},
+                context={
+                    "workspace": workspace,
+                    "conversationId": conversation_id,
+                    **({"resumeProjectId": resume_project_id} if resume_project_id else {}),
+                },
                              requested_capability=requested_capability),
             AssistantContext(),
         )
@@ -275,6 +286,7 @@ class AssistantService:
         workspace = input_data.get("workspace")
         requested_capability = input_data.get("requestedCapability")
         conversation_id = input_data.get("conversationId")
+        project_id = input_data.get("projectId")
         if not isinstance(text, str) or not text.strip():
             return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
         return lambda: self._route_sync(
@@ -282,5 +294,6 @@ class AssistantService:
             workspace if isinstance(workspace, str) else None,
             requested_capability=requested_capability if isinstance(requested_capability, str) else None,
             conversation_id=conversation_id if isinstance(conversation_id, str) else "desktop-default",
+            resume_project_id=project_id if isinstance(project_id, str) else None,
         ).model_dump(mode="json")
 

@@ -225,7 +225,12 @@ class ProjectExecutionCapability:
         self.agent_runtime = agent_runtime
 
     def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
-        project_id = f"project-{uuid4().hex}"
+        requested_project_id = request.context.get("resumeProjectId")
+        project_id = (
+            requested_project_id
+            if isinstance(requested_project_id, str) and requested_project_id.strip()
+            else f"project-{uuid4().hex}"
+        )
         root = self.settings.workspace_root.resolve()
         requested = request.context.get("workspace")
         workspace = Path(requested).resolve() if requested else root / "assistant" / project_id
@@ -243,14 +248,27 @@ class ProjectExecutionCapability:
     def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
         text = plan.inputs["text"]
         brief = parse_request(text)
-        project = self.coordinator.create_project(
-            plan.inputs["projectId"], brief.goal[:80], plan.inputs["workspace"],
-        )
+        project_id = str(plan.inputs["projectId"])
         try:
-            state = self.coordinator.create_request(project.id, text)
-            if state.request_id is None:
-                raise RuntimeError("Project request did not produce a request ID")
-            self.store.save_request_context(state.request_id, project.id, project.workspace)
+            project = self.store.get_project(project_id)
+            if Path(project.workspace).resolve() != Path(str(plan.inputs["workspace"])).resolve():
+                raise ValueError("Resumed project workspace does not match the accepted request")
+        except KeyError:
+            project = self.coordinator.create_project(
+                project_id, brief.goal[:80], plan.inputs["workspace"],
+            )
+        try:
+            existing_context = self.store.get_latest_request_context_for_project(project.id)
+            if existing_context is not None:
+                request_id, _workspace = existing_context
+                state = self.coordinator.get_state(project.id)
+                if state.request_id != request_id:
+                    raise RuntimeError("Resumed project request state is inconsistent")
+            else:
+                state = self.coordinator.create_request(project.id, text)
+                if state.request_id is None:
+                    raise RuntimeError("Project request did not produce a request ID")
+                self.store.save_request_context(state.request_id, project.id, project.workspace)
         except Exception as exc:
             message = str(exc).strip() or type(exc).__name__
             return CapabilityOutcome(

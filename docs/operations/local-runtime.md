@@ -17,6 +17,12 @@ build\desktop\GleaveDesktop.exe --self-test
 
 The widget is always-on-top, draggable, interactive, and can hide to or restore from the system tray. It talks only to the local EEEE API. Notion, Google Calendar, and GitHub CI/code review are optional provider adapters; ISEOL runs locally and Discord is not a required runtime dependency.
 
+Only one packaged desktop instance may run at a time.  A second launch exits
+without opening another API/browser helper, so it cannot cover the user's
+active application with a duplicate EEEE window.  If the first process has
+actually exited but a stale lock remains, terminate the old `GleaveDesktop.exe`
+process and relaunch; the lock is released automatically during normal shutdown.
+
 ## EEEE general conversation engine
 
 EEEE uses the ISEOL ChatGPT Web bridge for general conversation when
@@ -64,6 +70,14 @@ node shows its role, status, current commit, changed files, ClaimLatch receipt
 status, independent QA status, evidence IDs, and troubleshooting references.
 Korean is the default UI language; the language selector switches the launcher
 and existing workbench labels to English.
+
+Long project requests return a durable `jobId` and planned `projectId`
+immediately. The worker stores the project identity in the job input and uses
+it again after restart or retry, so a partially provisioned project is resumed
+instead of silently creating a second project. The jobs API exposes queued,
+running, paused, cancelled, failed, and completed states; a stale running job
+is recovered through an atomic supervisor lease so two desktop processes cannot
+execute the same recovery attempt simultaneously.
 
 Local plugin tools are intentionally outside the body. A plugin manifest is
 discovered and registered through `/api/plugins/discover` and

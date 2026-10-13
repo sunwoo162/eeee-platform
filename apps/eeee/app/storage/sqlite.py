@@ -356,6 +356,10 @@ class SQLiteStore:
             }
             if "input_json" not in assistant_job_columns:
                 connection.execute("ALTER TABLE assistant_jobs ADD COLUMN input_json TEXT NOT NULL DEFAULT '{}'")
+            if "lease_owner" not in assistant_job_columns:
+                connection.execute("ALTER TABLE assistant_jobs ADD COLUMN lease_owner TEXT")
+            if "lease_expires_at" not in assistant_job_columns:
+                connection.execute("ALTER TABLE assistant_jobs ADD COLUMN lease_expires_at TEXT")
             if "error" not in run_columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN error TEXT")
             if "created_at" not in run_columns:
@@ -424,6 +428,23 @@ class SQLiteStore:
         if row is None:
             raise KeyError(f"Request context not found: {request_id}")
         return row["project_id"], row["workspace"]
+
+    def get_latest_request_context_for_project(self, project_id: str) -> tuple[str, str] | None:
+        """Return the durable request identity already allocated to a project.
+
+        Background project execution can be restarted after provisioning has
+        begun.  Reusing this context prevents a retry from creating another
+        request/task for the same project.
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT request_id, workspace FROM request_contexts "
+                "WHERE project_id = ? ORDER BY rowid DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return row["request_id"], row["workspace"]
 
     def save_harness_state(self, project_id: str, state: ProjectState) -> None:
         with self._connect() as connection:

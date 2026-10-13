@@ -225,3 +225,40 @@ def test_paused_job_stays_paused_after_restart_until_explicit_resume(tmp_path):
     finally:
         second.shutdown()
 
+
+def test_two_supervisors_cannot_resume_the_same_stale_running_job(tmp_path):
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    first = BackgroundExecutionSupervisor(store, max_workers=1)
+    second = BackgroundExecutionSupervisor(store, max_workers=1)
+    job_id = "assistant-job-single-resume"
+    started = Event()
+    release = Event()
+    try:
+        first._create(job_id, "assistant-request-single-resume", {"text": "once"})
+        with store._connect() as connection:
+            connection.execute(
+                "UPDATE assistant_jobs SET status = 'running', updated_at = ? WHERE job_id = ?",
+                ("2000-01-01T00:00:00+00:00", job_id),
+            )
+
+        def operation_factory(job):
+            def operation():
+                started.set()
+                release.wait(timeout=3)
+                return {"message": job["input"]["text"]}
+            return operation
+
+        first_resumed = first.resume_pending(operation_factory)
+        assert started.wait(timeout=3)
+        second_resumed = second.resume_pending(operation_factory)
+
+        assert first_resumed == [job_id]
+        assert second_resumed == []
+        release.set()
+        assert _wait_for(first, job_id, "completed")["result"] == {"message": "once"}
+    finally:
+        release.set()
+        first.shutdown()
+        second.shutdown()
+

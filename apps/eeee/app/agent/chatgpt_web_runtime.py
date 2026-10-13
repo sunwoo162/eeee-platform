@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import Lock
 import time
 from typing import Any
 
@@ -37,11 +38,19 @@ class ChatGptWebRuntime:
         self.mode = mode
         self.profile_path = profile_path
         self.conversation_state_path = conversation_state_path
+        self._turn_lock = Lock()
         self.conversation_ref: str | None = (
             None if fresh_conversation else self._load_conversation_ref()
         )
 
     def run(self, request: AgentRequest) -> AgentResult:
+        # The bridge conversation reference is mutable shared state.  A
+        # concurrent general turn could otherwise send two prompts with the
+        # same reference and assign whichever response arrives last.
+        with self._turn_lock:
+            return self._run_locked(request)
+
+    def _run_locked(self, request: AgentRequest) -> AgentResult:
         new_conversation = self.fresh_conversation
         body = {
             "text": request.prompt,

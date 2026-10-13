@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from threading import Lock
 from typing import Any
@@ -37,6 +37,8 @@ class BackgroundExecutionSupervisor:
         self._futures: dict[str, Future[None]] = {}
         self._operations: dict[str, Callable[[], dict[str, Any]]] = {}
         self._lock = Lock()
+        self._owner_token = f"supervisor-{uuid4().hex}"
+        self._lease_seconds = 300
 
     def submit(
         self, request_id: str, operation: Callable[[], dict[str, Any]],
@@ -54,7 +56,8 @@ class BackgroundExecutionSupervisor:
     def get(self, job_id: str) -> dict[str, object]:
         with self.store._connect() as connection:
             row = connection.execute(
-                "SELECT job_id, request_id, status, input_json, result_json, error, created_at, updated_at "
+                "SELECT job_id, request_id, status, input_json, result_json, error, created_at, updated_at, "
+                "lease_owner, lease_expires_at "
                 "FROM assistant_jobs WHERE job_id = ?", (job_id,)
             ).fetchone()
         if row is None:
@@ -68,6 +71,8 @@ class BackgroundExecutionSupervisor:
             "error": row["error"],
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
+            "leaseOwner": row["lease_owner"],
+            "leaseExpiresAt": row["lease_expires_at"],
         }
 
     def list_jobs(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
@@ -119,20 +124,34 @@ class BackgroundExecutionSupervisor:
         self._pool.shutdown(wait=wait, cancel_futures=False)
 
     def resume_pending(self, operation_factory: Callable[[dict[str, object]], Callable[[], dict[str, Any]]]) -> list[str]:
+        now = _now()
         with self.store._connect() as connection:
             rows = connection.execute(
-                "SELECT job_id, request_id, input_json FROM assistant_jobs "
-                "WHERE status IN ('queued', 'running') ORDER BY created_at"
+                "SELECT job_id, request_id, input_json, status FROM assistant_jobs "
+                "WHERE status = 'queued' OR (status = 'running' AND "
+                "(lease_expires_at IS NULL OR lease_expires_at < ?)) ORDER BY created_at",
+                (now,),
             ).fetchall()
         resumed: list[str] = []
         for row in rows:
             input_data = json.loads(row["input_json"])
+            lease_expires_at = self._lease_expiry()
             with self.store._connect() as connection:
-                cursor = connection.execute(
-                    "UPDATE assistant_jobs SET status = 'queued', error = NULL, updated_at = ? "
-                    "WHERE job_id = ? AND status IN ('queued', 'running')",
-                    (_now(), row["job_id"]),
-                )
+                if row["status"] == "queued":
+                    cursor = connection.execute(
+                        "UPDATE assistant_jobs SET status = 'running', lease_owner = ?, "
+                        "lease_expires_at = ?, error = NULL, updated_at = ? "
+                        "WHERE job_id = ? AND status = 'queued'",
+                        (self._owner_token, lease_expires_at, now, row["job_id"]),
+                    )
+                else:
+                    cursor = connection.execute(
+                        "UPDATE assistant_jobs SET status = 'running', lease_owner = ?, "
+                        "lease_expires_at = ?, error = NULL, updated_at = ? "
+                        "WHERE job_id = ? AND status = 'running' AND "
+                        "(lease_expires_at IS NULL OR lease_expires_at < ?)",
+                        (self._owner_token, lease_expires_at, now, row["job_id"], now),
+                    )
             if cursor.rowcount != 1:
                 continue
             operation = operation_factory({
@@ -140,11 +159,14 @@ class BackgroundExecutionSupervisor:
             })
             with self._lock:
                 self._operations[row["job_id"]] = operation
-            future = self._pool.submit(self._run, row["job_id"], operation)
+            future = self._pool.submit(self._run, row["job_id"], operation, True)
             with self._lock:
                 self._futures[row["job_id"]] = future
             resumed.append(row["job_id"])
         return resumed
+
+    def _lease_expiry(self) -> str:
+        return (datetime.now(timezone.utc) + timedelta(seconds=self._lease_seconds)).isoformat()
 
     def _create(self, job_id: str, request_id: str, input_data: dict[str, Any]) -> None:
         timestamp = _now()
@@ -156,10 +178,12 @@ class BackgroundExecutionSupervisor:
                 (job_id, request_id, json.dumps(input_data, ensure_ascii=False), timestamp, timestamp),
             )
 
-    def _run(self, job_id: str, operation: Callable[[], dict[str, Any]]) -> None:
+    def _run(
+        self, job_id: str, operation: Callable[[], dict[str, Any]], claimed: bool = False,
+    ) -> None:
         # Claim the queued job atomically. A separate read followed by an
         # unconditional write lets pause/cancel be overwritten by this worker.
-        if not self._update_if_current(job_id, "running", expected={"queued"}):
+        if not claimed and not self._claim_queued(job_id):
             return
         try:
             result = operation()
@@ -169,15 +193,28 @@ class BackgroundExecutionSupervisor:
                 "failed",
                 expected={"running"},
                 error=str(exc).strip() or type(exc).__name__,
+                owner=self._owner_token,
             )
             return
-        self._update_if_current(job_id, "completed", expected={"running"}, result=result)
+        self._update_if_current(job_id, "completed", expected={"running"}, result=result, owner=self._owner_token)
+
+    def _claim_queued(self, job_id: str) -> bool:
+        timestamp = _now()
+        with self.store._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE assistant_jobs SET status = 'running', lease_owner = ?, "
+                "lease_expires_at = ?, updated_at = ? "
+                "WHERE job_id = ? AND status = 'queued'",
+                (self._owner_token, self._lease_expiry(), timestamp, job_id),
+            )
+        return cursor.rowcount == 1
 
     def _transition(self, job_id: str, target: str, allowed: set[str]) -> dict[str, object]:
         allowed_placeholders = ", ".join("?" for _ in allowed)
         with self.store._connect() as connection:
             cursor = connection.execute(
-                "UPDATE assistant_jobs SET status = ?, updated_at = ? "
+                "UPDATE assistant_jobs SET status = ?, updated_at = ?, "
+                "lease_owner = NULL, lease_expires_at = NULL "
                 "WHERE job_id = ? AND status IN (" + allowed_placeholders + ")",
                 (target, _now(), job_id, *sorted(allowed)),
             )
@@ -220,7 +257,8 @@ class BackgroundExecutionSupervisor:
         with self.store._connect() as connection:
             cursor = connection.execute(
                 "UPDATE assistant_jobs SET status = 'queued', result_json = NULL, "
-                "error = NULL, updated_at = ? WHERE job_id = ? AND status IN ("
+                "error = NULL, lease_owner = NULL, lease_expires_at = NULL, updated_at = ? "
+                "WHERE job_id = ? AND status IN ("
                 + expected_placeholders + ")",
                 (_now(), job_id, *sorted(expected)),
             )
@@ -243,14 +281,26 @@ class BackgroundExecutionSupervisor:
         expected: set[str],
         result: dict[str, Any] | None = None,
         error: str | None = None,
+        owner: str | None = None,
     ) -> bool:
         expected_placeholders = ", ".join("?" for _ in expected)
         with self.store._connect() as connection:
+            where = "WHERE job_id = ? AND status IN (" + expected_placeholders + ")"
+            parameters: tuple[object, ...] = (
+                status,
+                json.dumps(result, ensure_ascii=False) if result is not None else None,
+                error,
+                _now(),
+                job_id,
+                *sorted(expected),
+            )
+            if owner is not None:
+                where += " AND lease_owner = ?"
+                parameters += (owner,)
             cursor = connection.execute(
-                "UPDATE assistant_jobs SET status = ?, result_json = ?, error = ?, updated_at = ? "
-                "WHERE job_id = ? AND status IN (" + expected_placeholders + ")",
-                (status, json.dumps(result, ensure_ascii=False) if result is not None else None,
-                 error, _now(), job_id, *sorted(expected)),
+                "UPDATE assistant_jobs SET status = ?, result_json = ?, error = ?, updated_at = ?, "
+                "lease_owner = NULL, lease_expires_at = NULL " + where,
+                parameters,
             )
         return cursor.rowcount == 1
 

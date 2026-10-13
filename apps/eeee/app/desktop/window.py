@@ -742,15 +742,15 @@ class PetWindow:
                 max_y = screen_rect.bottom() - margin - surface_size.height() + 1
 
                 tail_offset = self._speech_bubble_tail_offset(surface_size)
-                # The cat's head is slightly left of the image center; placing
-                # the tail here makes the bubble read as spoken by the cat.
-                # The bubble tail points at the cat's anatomical right eye,
-                # which appears on the viewer-left side of the artwork.
-                target_tail_x = anchor.left() + round(anchor.width() * 0.32)
+                # The bubble tail points just above the cat's anatomical right
+                # eye, which appears on the viewer-left side of the artwork.
+                # These ratios follow the eye position in the shared cropped
+                # cat artwork rather than the QLabel's geometric center.
+                target_tail_x = anchor.left() + round(anchor.width() * 0.44)
                 x = target_tail_x - tail_offset.x()
                 x = max(min_x, min(x, max_x))
 
-                tail_target_y = anchor.top() - 6
+                tail_target_y = anchor.top() + round(anchor.height() * 0.34)
                 above_y = tail_target_y - tail_offset.y()
                 bubble_top_offset = round(
                     surface_size.height() * 124 / self.command_surface.bubble_pixmap.height()

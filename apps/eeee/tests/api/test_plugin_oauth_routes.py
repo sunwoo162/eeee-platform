@@ -1,0 +1,113 @@
+from urllib.parse import parse_qs, urlparse
+
+from fastapi.testclient import TestClient
+
+from app.config import Settings
+from app.main import create_app
+from app.plugins.connectors import ConnectorConnection, ConnectorHealth
+from app.plugins.credentials import MemoryCredentialStore
+from app.plugins.oauth import OAuthBroker, OAuthProviderConfig
+
+
+class HealthyConnector:
+    plugin_id = "notion"
+
+    def connect(self, user_id, credential, approved_permissions):
+        return ConnectorConnection(
+            user_id=user_id, plugin_id=self.plugin_id,
+            approved_permissions=frozenset(approved_permissions), client=object(),
+        )
+
+    def disconnect(self, connection):
+        return None
+
+    def health(self, connection):
+        return ConnectorHealth(status="healthy", code="healthy", reason="ok")
+
+    def invoke(self, connection, action, value):
+        return {"status": "completed"}
+
+
+class FakeOAuthTransport:
+    def exchange_code(self, config, *, code, code_verifier, redirect_uri):
+        return {"access_token": "oauth-secret", "parentPageId": "page-id"}
+
+
+def _application(tmp_path):
+    application = create_app(
+        Settings(
+            data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces",
+            claim_latch_auto_start=False,
+        ),
+        oauth_broker=OAuthBroker(FakeOAuthTransport()),
+        oauth_configs={
+            "notion": OAuthProviderConfig(
+                authorizationEndpoint="https://provider.example/authorize",
+                tokenEndpoint="https://provider.example/token",
+                clientId="public-client",
+                scopes=["pages.read"],
+            )
+        },
+    )
+    application.state.plugin_platform.credentials = MemoryCredentialStore()
+    application.state.plugin_platform.connectors["notion"] = HealthyConnector()
+    return application
+
+
+def test_oauth_start_and_callback_connect_user_without_returning_tokens(tmp_path) -> None:
+    client = TestClient(_application(tmp_path))
+    assert client.post("/api/plugins/notion/install").status_code == 200
+
+    started = client.post(
+        "/api/plugins/notion/oauth/start",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"approvedPermissions": ["pages.read"], "accountLabel": "Work"},
+    )
+    assert started.status_code == 200
+    body = started.json()
+    assert body["pluginId"] == "notion"
+    assert "oauth-secret" not in started.text
+    query = parse_qs(urlparse(body["authorizationUrl"]).query)
+    state = query["state"][0]
+    assert "code_verifier" not in body["authorizationUrl"]
+
+    callback = client.get(
+        "/api/plugins/notion/oauth/callback",
+        params={"state": state, "code": "authorization-code"},
+    )
+    assert callback.status_code == 200
+    assert callback.json()["status"] == "connected"
+    assert "oauth-secret" not in callback.text
+
+    connection = client.get(
+        "/api/plugins/notion/connection", headers={"X-EEEE-User-Id": "user-a"}
+    )
+    assert connection.json()["status"] == "connected"
+    assert connection.json()["accountLabel"] == "Work"
+
+
+def test_oauth_requires_installation_and_configuration(tmp_path) -> None:
+    application = _application(tmp_path)
+    client = TestClient(application)
+
+    not_installed = client.post(
+        "/api/plugins/notion/oauth/start",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"approvedPermissions": ["pages.read"]},
+    )
+    assert not_installed.status_code == 409
+
+    no_config = create_app(
+        Settings(
+            data_dir=tmp_path / "other-data", workspace_root=tmp_path / "other-workspaces",
+            claim_latch_auto_start=False,
+        )
+    )
+    no_config_client = TestClient(no_config)
+    assert no_config_client.post("/api/plugins/notion/install").status_code == 200
+    response = no_config_client.post(
+        "/api/plugins/notion/oauth/start",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"approvedPermissions": ["pages.read"]},
+    )
+    assert response.status_code == 503

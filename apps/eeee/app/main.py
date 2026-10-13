@@ -1,4 +1,5 @@
 from pathlib import Path
+from collections.abc import Mapping
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -51,6 +52,7 @@ from app.project_runtime.evidence import ProjectEvidenceService
 from app.project_view.service import ProjectViewService
 from app.plugins.host import PluginHost
 from app.plugins.notion_connector import NotionConnector
+from app.plugins.oauth import HttpOAuthTransport, OAuthBroker, OAuthProviderConfig
 from app.plugins.platform import PluginPlatformService
 from app.storage.sqlite import SQLiteStore
 from app.trust.gate import TrustGate
@@ -63,6 +65,8 @@ def create_app(
     researcher: GitHubResearcher | None = None,
     agent_runtime: AgentRuntime | None = None,
     notion_client: NotionClient | None = None,
+    oauth_broker: OAuthBroker | None = None,
+    oauth_configs: Mapping[str, OAuthProviderConfig] | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings()
     application = FastAPI(title=app_settings.app_name)
@@ -105,6 +109,7 @@ def create_app(
             )
         },
     )
+    configured_oauth_broker = oauth_broker or OAuthBroker(HttpOAuthTransport())
     capability_router = CapabilityRouter(
         build_default_registry(),
         plugin_status_provider=plugin_platform.status,
@@ -322,6 +327,8 @@ def create_app(
     )
     application.state.plugin_host = plugin_host
     application.state.plugin_platform = plugin_platform
+    application.state.oauth_broker = configured_oauth_broker
+    application.state.oauth_configs = dict(oauth_configs or {})
 
     def mobile_snapshot(project_id: str | None) -> dict[str, object]:
         snapshot: dict[str, object] = {
@@ -371,7 +378,14 @@ def create_app(
         )
     )
     application.include_router(build_design_router(design_service))
-    application.include_router(build_plugin_router(plugin_host, plugin_platform))
+    application.include_router(
+        build_plugin_router(
+            plugin_host,
+            plugin_platform,
+            oauth_broker=configured_oauth_broker,
+            oauth_configs=oauth_configs or {},
+        )
+    )
     static_dir = Path(__file__).parent / "static"
     application.mount("/static", StaticFiles(directory=static_dir), name="static")
 

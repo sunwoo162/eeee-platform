@@ -16,6 +16,13 @@ class PluginConnectPayload(BaseModel):
         return {key: value.get_secret_value() for key, value in self.credential.items()}
 
 
+class PluginOAuthStartPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    approved_permissions: list[str] = Field(alias="approvedPermissions", min_length=1)
+    account_label: str | None = Field(default=None, alias="accountLabel", max_length=160)
+
+
 class PluginCatalogView(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 

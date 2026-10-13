@@ -252,7 +252,7 @@ def test_two_line_korean_bubble_keeps_glyphs_inside_the_body():
     # The bubble image has a transparent tail area below the text body. Keep
     # enough extra room for two Korean glyph rows so their ascenders/descenders
     # cannot be clipped when the label is rendered at its minimum height.
-    assert body_height >= line_height * 2 + 8
+    assert body_height >= line_height * 2 + 24
     window.close()
 
 

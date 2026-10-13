@@ -236,10 +236,12 @@ class PetWindow:
                     + self._base_contents_margins[3]
                 )
                 # QTextDocument reports the line box tightly.  QLabel still
-                # needs a little extra vertical room for Korean glyph
-                # ascenders/descenders, especially when the bubble is at its
-                # 96px minimum height and the tail padding is applied.
-                body_height += 8
+                # needs generous vertical room for Korean glyph
+                # ascenders/descenders, especially when a two-line reply is
+                # shown while the tail padding is applied.  The old 96px
+                # minimum left only a thin 31px body, which clipped the text
+                # even though the document measurement technically fit.
+                body_height += 24
                 return int(body_height / self._TAIL_Y_RATIO + 0.9999)
 
             def heightForWidth(self, width):

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.service import ApiFlowService
@@ -29,7 +29,7 @@ from app.plugins.api_models import (
     PluginHealthView,
     PluginOAuthStartPayload,
 )
-from app.plugins.oauth import OAuthBroker, OAuthError, OAuthProviderConfig, OAuthStateMismatch
+from app.plugins.oauth import OAuthBroker, OAuthCancelled, OAuthError, OAuthProviderConfig, OAuthStateMismatch
 from app.plugins.platform import PluginPlatformService
 from app.project_runtime.documents import ProjectDocumentService
 from app.project_runtime.evidence import ProjectEvidenceService
@@ -266,7 +266,9 @@ def build_plugin_router(
             views.append(PluginCatalogView(
                 id=entry.id, name=entry.name, version=entry.version,
                 description=entry.description, authMode=entry.auth_mode,
-                permissions=entry.permissions, installSource=entry.install_source,
+                permissions=entry.permissions, credentialFields=entry.credential_fields,
+                permissionDetails=entry.permission_details,
+                installSource=entry.install_source,
                 defaultInstalled=entry.default_installed, status=status,
                 nextAction=next_action,
             ))
@@ -309,6 +311,9 @@ def build_plugin_router(
         try:
             if platform.status(plugin_id, principal) == "not_installed":
                 raise HTTPException(status_code=409, detail="Plugin must be installed before connecting")
+            platform.begin_oauth(
+                principal, plugin_id, set(payload.approved_permissions), payload.account_label
+            )
             callback = str(request.url_for("plugin_oauth_callback", plugin_id=plugin_id))
             authorization = oauth_broker.start(
                 user_id=principal,
@@ -323,6 +328,7 @@ def build_plugin_router(
         return {
             "pluginId": plugin_id,
             "authorizationUrl": authorization.authorization_url,
+            "state": authorization.state,
             "expiresAt": authorization.expires_at,
         }
 
@@ -334,10 +340,14 @@ def build_plugin_router(
         code: str | None = None,
         error: str | None = None,
         error_description: str | None = None,
-    ) -> dict[str, object]:
+    ) -> HTMLResponse:
         del request, error_description
         if platform is None or oauth_broker is None:
             raise HTTPException(status_code=503, detail="OAuth plugin connection is unavailable")
+        def mark_connection_failed(error_code: str) -> None:
+            owner = oauth_broker.owner(state, plugin_id=plugin_id)
+            if owner is not None:
+                platform.fail_oauth(owner, plugin_id, error_code)
         try:
             completion = oauth_broker.complete(
                 user_id=None, plugin_id=plugin_id, state=state, code=code, error=error
@@ -349,15 +359,51 @@ def build_plugin_router(
                 completion.credential,
                 completion.account_label,
             )
-            return connected.model_dump(by_alias=True)
+            return _oauth_callback_page(
+                "연결 완료",
+                "플러그인 계정 연결이 완료됐습니다. 이 창을 닫아도 됩니다.",
+            )
+        except OAuthCancelled:
+            mark_connection_failed("oauth_cancelled")
+            return _oauth_callback_page(
+                "연결 취소",
+                "계정 연결을 취소했습니다. 이 창을 닫아도 됩니다.",
+            )
         except OAuthStateMismatch as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            mark_connection_failed("oauth_state_invalid")
+            return _oauth_callback_page(
+                "연결 확인 실패", "OAuth 요청이 만료됐거나 유효하지 않습니다.", status_code=400
+            )
         except OAuthError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            mark_connection_failed("oauth_provider_error")
+            oauth_broker.mark_failed(state, plugin_id)
+            return _oauth_callback_page(
+                "연결 실패", "제공자 인증을 완료하지 못했습니다. 다시 시도해 주세요.", status_code=400
+            )
         except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            mark_connection_failed("permission_denied")
+            oauth_broker.mark_failed(state, plugin_id, "permission_denied")
+            return _oauth_callback_page(
+                "권한 부족", "선택한 권한으로 연결할 수 없습니다.", status_code=403
+            )
         except (KeyError, RuntimeError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            mark_connection_failed("oauth_connection_failed")
+            oauth_broker.mark_failed(state, plugin_id)
+            return _oauth_callback_page(
+                "연결 실패", "플러그인 연결을 완료하지 못했습니다.", status_code=409
+            )
+
+    @router.get("/{plugin_id}/oauth/status")
+    def plugin_oauth_status(
+        plugin_id: str,
+        state: str = Query(min_length=1, max_length=256),
+        request: Request = None,
+    ) -> dict[str, str | None]:
+        if oauth_broker is None:
+            raise HTTPException(status_code=503, detail="OAuth plugin connection is unavailable")
+        if request is not None:
+            _require_local_desktop(request)
+        return oauth_broker.status(state, plugin_id=plugin_id)
 
     @router.get("/{plugin_id}/connection")
     def plugin_connection(
@@ -515,6 +561,23 @@ def build_plugin_router(
         return Response(status_code=204)
 
     return router
+
+
+def _oauth_callback_page(title: str, message: str, *, status_code: int = 200) -> HTMLResponse:
+    """Return a small browser-safe callback page without exposing OAuth data."""
+    from html import escape
+
+    body = (
+        "<!doctype html><html lang='ko'><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>EEEE OAuth</title>"
+        "<style>body{font-family:system-ui,sans-serif;background:#171820;color:#f7f7fb;"
+        "display:grid;place-items:center;min-height:100vh;margin:0}main{max-width:34rem;"
+        "padding:2rem;text-align:center}h1{font-size:1.4rem}p{color:#c8cbe0}</style>"
+        f"<main><h1>{escape(title)}</h1><p>{escape(message)}</p>"
+        "<p>이 창은 닫아도 됩니다.</p></main></html>"
+    )
+    return HTMLResponse(content=body, status_code=status_code)
 
 
 def build_router(coordinator: Coordinator) -> APIRouter:
@@ -794,6 +857,8 @@ def build_desktop_router(
                     "description": entry.description,
                     "authMode": entry.auth_mode,
                     "permissions": entry.permissions,
+                    "credentialFields": [field.model_dump(by_alias=True) for field in entry.credential_fields],
+                    "permissionDetails": [detail.model_dump(by_alias=True) for detail in entry.permission_details],
                     "installSource": entry.install_source,
                     "status": status,
                     "nextAction": {

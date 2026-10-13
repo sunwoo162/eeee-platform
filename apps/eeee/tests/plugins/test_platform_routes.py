@@ -42,6 +42,8 @@ def test_catalog_install_connect_and_disconnect_are_redacted_and_user_scoped(tmp
     notion = next(item for item in catalog if item["id"] == "notion")
     assert notion["status"] == "not_installed"
     assert notion["nextAction"] == "install"
+    assert [field["key"] for field in notion["credentialFields"]] == ["token", "parentPageId"]
+    assert [item["defaultApproved"] for item in notion["permissionDetails"]] == [True, False]
 
     installed = client.post("/api/plugins/notion/install")
     assert installed.status_code == 200

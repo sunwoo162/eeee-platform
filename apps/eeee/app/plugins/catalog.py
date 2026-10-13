@@ -7,6 +7,26 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+class CredentialField(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    key: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    secret: bool = False
+    required: bool = True
+    placeholder: str | None = None
+
+
+class PermissionDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    effect: Literal["none", "external"] = "none"
+    default_approved: bool = Field(default=False, alias="defaultApproved")
+
+
 class PluginCatalogEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
@@ -16,6 +36,8 @@ class PluginCatalogEntry(BaseModel):
     description: str = Field(min_length=1)
     auth_mode: Literal["token", "oauth", "token-or-oauth"] = Field(alias="authMode")
     permissions: list[str] = Field(min_length=1)
+    credential_fields: list[CredentialField] = Field(default_factory=list, alias="credentialFields")
+    permission_details: list[PermissionDetail] = Field(default_factory=list, alias="permissionDetails")
     install_source: Literal["bundled-optional"] = Field(alias="installSource")
     default_installed: bool = Field(alias="defaultInstalled")
     connector: str = Field(min_length=1)
@@ -38,6 +60,20 @@ class PluginCatalog:
             id="notion", name="Notion", version="1.0.0",
             description="Notion pages connector", authMode="token-or-oauth",
             permissions=["pages.read", "pages.write"],
+            credentialFields=[
+                CredentialField(key="token", label="Notion token", secret=True, placeholder="secret_…"),
+                CredentialField(key="parentPageId", label="Parent page ID", secret=False),
+            ],
+            permissionDetails=[
+                PermissionDetail(
+                    id="pages.read", label="페이지 읽기",
+                    description="Notion 페이지를 읽습니다.", defaultApproved=True,
+                ),
+                PermissionDetail(
+                    id="pages.write", label="페이지 쓰기",
+                    description="Notion 페이지를 만들거나 수정합니다.", effect="external",
+                ),
+            ],
             installSource="bundled-optional", defaultInstalled=False, connector="notion",
         ),
         PluginCatalogEntry(

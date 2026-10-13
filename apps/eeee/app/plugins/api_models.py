@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from app.plugins.catalog import CredentialField, PermissionDetail
+
 
 class PluginConnectPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -32,6 +34,8 @@ class PluginCatalogView(BaseModel):
     description: str
     auth_mode: str = Field(alias="authMode")
     permissions: list[str]
+    credential_fields: list[CredentialField] = Field(default_factory=list, alias="credentialFields")
+    permission_details: list[PermissionDetail] = Field(default_factory=list, alias="permissionDetails")
     install_source: str = Field(alias="installSource")
     default_installed: bool = Field(alias="defaultInstalled")
     status: str

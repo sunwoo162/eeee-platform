@@ -13,6 +13,14 @@ def test_bundled_catalog_exposes_notion_as_optional_not_installed() -> None:
         "description": "Notion pages connector",
         "authMode": "token-or-oauth",
         "permissions": ["pages.read", "pages.write"],
+        "credentialFields": [
+            {"key": "token", "label": "Notion token", "secret": True, "required": True, "placeholder": "secret_…"},
+            {"key": "parentPageId", "label": "Parent page ID", "secret": False, "required": True, "placeholder": None},
+        ],
+        "permissionDetails": [
+            {"id": "pages.read", "label": "페이지 읽기", "description": "Notion 페이지를 읽습니다.", "effect": "none", "defaultApproved": True},
+            {"id": "pages.write", "label": "페이지 쓰기", "description": "Notion 페이지를 만들거나 수정합니다.", "effect": "external", "defaultApproved": False},
+        ],
         "installSource": "bundled-optional",
         "defaultInstalled": False,
         "connector": "notion",
@@ -48,3 +56,13 @@ def test_catalog_includes_first_party_connector_candidates() -> None:
         "github", "figma", "slack", "linear", "todoist",
         "outlook-email", "outlook-calendar", "notion",
     }.issubset(ids)
+
+
+def test_catalog_exposes_credential_fields_and_safe_permission_defaults() -> None:
+    notion = PluginCatalog().get("notion")
+
+    assert [field.key for field in notion.credential_fields] == ["token", "parentPageId"]
+    assert notion.credential_fields[0].secret is True
+    assert notion.credential_fields[1].secret is False
+    assert notion.permission_details[0].default_approved is True
+    assert notion.permission_details[1].default_approved is False

@@ -27,12 +27,29 @@
         </div>
         <div class="eeee-plugin-status" aria-labelledby="eeee-plugin-status-heading">
           <div class="eeee-plugin-status-heading">
-            <h3 id="eeee-plugin-status-heading">플러그인 상태</h3>
+            <div>
+              <h3 id="eeee-plugin-status-heading">플러그인</h3>
+              <span class="muted">필요한 도구를 설치하고 계정을 연결하세요.</span>
+            </div>
             <span class="muted">설치·연결은 사용자 승인 후 진행됩니다.</span>
           </div>
-          <ul id="eeee-plugin-list" class="eeee-plugin-list" aria-live="polite">
-            <li class="muted">불러오는 중</li>
-          </ul>
+          <label class="eeee-plugin-search-label" for="eeee-plugin-search">플러그인 검색</label>
+          <input id="eeee-plugin-search" class="eeee-plugin-search" type="search" placeholder="플러그인 검색" autocomplete="off" />
+          <div class="eeee-plugin-sections">
+            <section aria-labelledby="eeee-installed-plugins-heading">
+              <h4 id="eeee-installed-plugins-heading">설치된 플러그인</h4>
+              <ul id="eeee-installed-plugin-list" class="eeee-plugin-list" aria-live="polite">
+                <li class="muted">불러오는 중</li>
+              </ul>
+            </section>
+            <section aria-labelledby="eeee-available-plugins-heading">
+              <h4 id="eeee-available-plugins-heading">플러그인 둘러보기</h4>
+              <ul id="eeee-available-plugin-list" class="eeee-plugin-list" aria-live="polite">
+                <li class="muted">불러오는 중</li>
+              </ul>
+            </section>
+          </div>
+          <ul id="eeee-plugin-list" class="eeee-plugin-list eeee-plugin-list-legacy" aria-live="polite" hidden></ul>
         </div>
       </section>
       <header class="hero">

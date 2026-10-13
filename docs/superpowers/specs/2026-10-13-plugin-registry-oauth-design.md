@@ -17,7 +17,7 @@ EEEE가 사용자가 직접 개발한 로컬 플러그인과 이미 존재하는
 7. 1차 제공 후보의 메타데이터와 실제 구현 가능 상태 표시
 8. 연결되고 healthy한 capability만 EEEE 라우터에 동적으로 투영
 
-실제 Gmail·Google Calendar·Google Drive·Google Contacts·Notion·GitHub·Figma·Slack·Linear·Todoist·Outlook의 provider API 구현은 동일한 계약을 따르는 단계별 커넥터 작업으로 진행한다. 커넥터가 없는 서비스는 설치 가능한 것처럼 노출하지 않는다.
+실제 Gmail·Google Calendar·Google Drive·Google Contacts·Notion·GitHub·Figma·Slack·Linear·Todoist·Outlook의 provider API 구현은 동일한 계약을 따르는 단계별 커넥터 작업으로 진행한다. 번들 카탈로그는 먼저 로컬에 설치할 수 있지만, 커넥터가 설정되지 않은 서비스는 `설치됨 · 연결 설정 필요`로만 표시하고 연결·라우팅하지 않는다.
 
 ## 비목표
 
@@ -125,7 +125,7 @@ MCP adapter는 MCP endpoint와 provider OAuth를 감싸고, OpenAPI adapter는 �
 - provider 401/refresh 실패: `reauthentication_required`, capability 비활성화
 - provider 403: `permission_denied`, 부족한 scope 표시
 - rate limit/5xx: `provider_unavailable`, 기존 credential 유지
-- connector 미등록: catalog에서 installable로 노출하지 않음
+- connector 미등록: 로컬 설치는 허용하되 연결·라우팅은 차단하고 설정 필요 상태로 표시
 - uninstall: 연결 해제, credential 삭제, 설치 상태 제거를 원자적으로 처리
 
 ## 검증 기준

@@ -14,7 +14,12 @@ def test_web_control_center_has_plugin_status_surface(tmp_path) -> None:
     styles = client.get("/static/styles.css").text
 
     assert 'id="eeee-plugin-list"' in page
+    assert 'id="eeee-plugin-search"' in page
+    assert "설치된 플러그인" in page
+    assert "플러그인 둘러보기" in page
     assert "renderEeeePluginStatus" in script
+    assert "eeee-plugin-search" in script
+    assert 'nextActionLabels = { install: "설치"' in script
     assert "/oauth/start" in script
     assert "approvedPermissions" in script
     assert "plugin-action" in script

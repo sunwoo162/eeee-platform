@@ -55,7 +55,7 @@ def test_app_auto_discovers_an_installed_local_model_for_general_chat(monkeypatc
     assert handler.runtime.local.backend.model == "qwen2.5:3b"
 
 
-def test_general_chat_can_use_a_fast_model_without_changing_project_model(monkeypatch, tmp_path):
+def test_general_chat_uses_the_responsive_local_model_without_changing_project_model(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: "qwen3:4b")
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: "qwen2.5:1.5b")
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")

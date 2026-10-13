@@ -72,6 +72,12 @@ class ClarificationClient(RouteClient):
         return {"status": "needs_clarification", "message": "어떤 작업부터 시작할까?"}
 
 
+class SlowRouteClient(RouteClient):
+    def route_assistant(self, text, workspace=None):
+        time.sleep(0.15)
+        return super().route_assistant(text, workspace)
+
+
 def _wait_for(app: QApplication, predicate) -> None:
     deadline = time.monotonic() + 3
     while not predicate() and time.monotonic() < deadline:
@@ -274,6 +280,74 @@ def test_quick_chat_starts_with_only_a_centered_composer():
         window.assistant_input.geometry().center().y()
         - window.command_surface.rect().center().y()
     ) <= 8
+    window.close()
+
+
+def test_quick_chat_send_switches_from_composer_to_one_centered_reply():
+    app = QApplication.instance() or QApplication([])
+    client = SlowRouteClient()
+    window = PetWindow(client)
+    window.show_command_surface()
+    window.assistant_input.setText("안녕")
+    window.assistant_input.returnPressed.emit()
+    app.processEvents()
+
+    assert window.assistant_input.isHidden()
+    assert window.assistant_input.text() == ""
+    assert window.quick_status.isHidden()
+    assert window.quick_reply.isVisible()
+
+    _wait_for(app, lambda: window.current_state.get("state") == "completed")
+    _wait_for(app, lambda: window.quick_reply.text() == "요청을 받았어요.")
+    assert window.assistant_input.isHidden()
+    assert window.quick_reply.alignment() == Qt.AlignmentFlag.AlignCenter
+    window.close()
+
+
+def test_quick_chat_reply_hides_the_whole_surface_after_reply_timeout():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    window._render({"state": "completed", "message": "완료했어."})
+    _wait_for(app, lambda: window.quick_reply.text() == "완료했어.")
+
+    window._reply_hide_timer.setInterval(20)
+    window._reply_hide_timer.stop()
+    window._schedule_reply_hide()
+    _wait_for(app, lambda: window.command_surface.isHidden())
+
+    assert window.command_surface.isHidden()
+    assert window.quick_reply.isHidden()
+    window.close()
+
+
+def test_reopening_after_reply_timeout_starts_with_a_clean_composer():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    window._render({"state": "completed", "message": "이전 답변"})
+    _wait_for(app, lambda: window.quick_reply.text() == "이전 답변")
+
+    window._reply_hide_timer.setInterval(20)
+    window._reply_hide_timer.stop()
+    window._schedule_reply_hide()
+    _wait_for(app, lambda: window.command_surface.isHidden())
+    window.show_command_surface()
+
+    assert window.assistant_input.isVisible()
+    assert window.assistant_input.text() == ""
+    assert window.quick_reply.isHidden()
+    assert window.quick_reply.text() == ""
+    window.close()
+
+
+def test_initial_pet_position_is_bottom_right_of_the_available_screen():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+
+    position = window._initial_pet_position(QRect(0, 0, 800, 600), QSize(180, 108))
+
+    assert position == QPoint(596, 468)
     window.close()
 
 

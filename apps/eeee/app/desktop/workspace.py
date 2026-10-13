@@ -735,6 +735,7 @@ class WorkspaceWindow:
                 labels = {
                     "ko": {
                         "not_installed": "설치 필요",
+                        "installed": "설치됨 · 연결 설정 필요",
                         "awaiting_authentication": "연결 필요",
                         "connecting": "연결 중",
                         "connected": "연결됨",
@@ -745,6 +746,7 @@ class WorkspaceWindow:
                     },
                     "en": {
                         "not_installed": "Install required",
+                        "installed": "Installed · provider setup required",
                         "awaiting_authentication": "Connect required",
                         "connecting": "Connecting",
                         "connected": "Connected",

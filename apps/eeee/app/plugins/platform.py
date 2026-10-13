@@ -108,8 +108,8 @@ class PluginPlatformService:
 
     def install(self, plugin_id: str) -> PluginInstallationView:
         entry = self.catalog_source.get(plugin_id)
-        if entry.connector not in self.connectors:
-            raise RuntimeError(f"plugin connector is unavailable: {entry.connector}")
+        # Installation is a local catalog decision. Provider availability and
+        # account connection are checked later at connect/OAuth time.
         installation = self.installations.install(entry.id, entry.version)
         return PluginInstallationView(
             pluginId=installation.plugin_id, version=installation.version, status="available"
@@ -134,10 +134,10 @@ class PluginPlatformService:
         """
         self.catalog_source.get(plugin_id)
         entry = self.catalog_source.get(plugin_id)
-        if entry.connector not in self.connectors:
-            return "disabled"
         if not self.installations.is_installed(plugin_id):
             return "not_installed"
+        if entry.connector not in self.connectors:
+            return "installed"
         try:
             return self.connections.get(user_id, plugin_id).status
         except KeyError:

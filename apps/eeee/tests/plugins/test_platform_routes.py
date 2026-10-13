@@ -84,6 +84,24 @@ def test_catalog_install_connect_and_disconnect_are_redacted_and_user_scoped(tmp
     assert disconnected.json()["status"] == "awaiting_authentication"
 
 
+def test_install_is_local_and_does_not_require_provider_connector(tmp_path) -> None:
+    client = TestClient(_application(tmp_path))
+
+    installed = client.post("/api/plugins/gmail/install")
+
+    assert installed.status_code == 200
+    assert installed.json() == {
+        "pluginId": "gmail",
+        "version": "1.0.0",
+        "status": "available",
+    }
+
+    catalog = client.get("/api/plugins/catalog").json()
+    gmail = next(item for item in catalog if item["id"] == "gmail")
+    assert gmail["status"] == "installed"
+    assert gmail["nextAction"] == "configure"
+
+
 def test_malformed_user_scope_is_rejected(tmp_path) -> None:
     client = TestClient(_application(tmp_path))
     response = client.get(

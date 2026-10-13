@@ -123,12 +123,14 @@ def test_failed_reconnect_keeps_existing_healthy_credential(tmp_path) -> None:
     assert all("new-secret" not in value for value in credentials._values.values())
 
 
-def test_unconfigured_catalog_connector_is_disabled_and_not_installable(tmp_path) -> None:
+def test_unconfigured_catalog_connector_can_install_but_cannot_connect(tmp_path) -> None:
     platform = _platform(tmp_path, FakeConnector())
 
-    assert platform.status("gmail", "user-a") == "disabled"
+    assert platform.status("gmail", "user-a") == "not_installed"
+    assert platform.install("gmail").status == "available"
+    assert platform.status("gmail", "user-a") == "installed"
     with pytest.raises(RuntimeError, match="connector is unavailable"):
-        platform.install("gmail")
+        platform.begin_oauth("user-a", "gmail", {"mail.read"}, None)
 
 
 def test_connected_first_party_provider_projects_action_capabilities_and_invokes_action(tmp_path) -> None:

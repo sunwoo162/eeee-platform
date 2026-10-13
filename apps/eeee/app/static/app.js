@@ -295,15 +295,20 @@ async function refreshEeeeControlCenter() {
 }
 
 function renderEeeePluginStatus(plugins) {
-  const list = $("#eeee-plugin-list");
-  if (!list) return;
-  list.__eeeePlugins = plugins;
-  if (!list.dataset.bound) {
-    list.dataset.bound = "true";
-    list.addEventListener("click", async (event) => {
+  const stateList = $("#eeee-plugin-list");
+  const installedList = $("#eeee-installed-plugin-list");
+  const availableList = $("#eeee-available-plugin-list");
+  const search = $("#eeee-plugin-search");
+  const lists = [installedList, availableList].filter(Boolean);
+  if (!stateList || !lists.length) return;
+  stateList.__eeeePlugins = plugins;
+  const surface = lists[0].closest(".eeee-plugin-status") || stateList;
+  if (!surface.dataset.bound) {
+    surface.dataset.bound = "true";
+    surface.addEventListener("click", async (event) => {
       const button = event.target.closest("button[data-plugin-id]");
       if (!button) return;
-      const plugin = (list.__eeeePlugins || []).find((item) => item.pluginId === button.dataset.pluginId);
+      const plugin = (stateList.__eeeePlugins || []).find((item) => item.pluginId === button.dataset.pluginId);
       if (!plugin) return;
       button.disabled = true;
       try {
@@ -332,16 +337,21 @@ function renderEeeePluginStatus(plugins) {
       }
     });
   }
-  list.replaceChildren();
-  if (!plugins.length) {
-    const empty = document.createElement("li");
-    empty.className = "muted";
-    empty.textContent = "설치 가능한 플러그인이 없습니다.";
-    list.append(empty);
-    return;
+  if (search && !search.dataset.bound) {
+    search.dataset.bound = "true";
+    search.addEventListener("input", () => renderEeeePluginStatus(stateList.__eeeePlugins || []));
   }
+  lists.forEach((list) => list.replaceChildren());
+  const query = (search?.value || "").trim().toLocaleLowerCase();
+  const visible = plugins.filter((plugin) => {
+    if (!query) return true;
+    return [plugin.name, plugin.description, plugin.pluginId]
+      .filter(Boolean)
+      .some((value) => String(value).toLocaleLowerCase().includes(query));
+  });
   const labels = {
     not_installed: "미설치",
+    installed: "설치됨 · 연결 설정 필요",
     available: "연결 필요",
     awaiting_authentication: "연결 필요",
     connecting: "연결 중",
@@ -350,30 +360,48 @@ function renderEeeePluginStatus(plugins) {
     failed: "오류",
     disabled: "설정 필요",
   };
-  for (const plugin of plugins) {
+  const nextActionLabels = { install: "설치", connect: "연결", reconnect: "다시 연결", resume: "재개" };
+  const renderEmpty = (list, message) => {
+    const empty = document.createElement("li");
+    empty.className = "muted";
+    empty.textContent = message;
+    list.append(empty);
+  };
+  if (!visible.length) {
+    renderEmpty(availableList, query ? "검색 결과가 없습니다." : "설치 가능한 플러그인이 없습니다.");
+    return;
+  }
+  for (const plugin of visible) {
     const item = document.createElement("li");
     item.className = "eeee-plugin-item";
+    const details = document.createElement("div");
+    details.className = "eeee-plugin-details";
     const name = document.createElement("strong");
     name.textContent = plugin.name || plugin.pluginId || "플러그인";
+    const description = document.createElement("span");
+    description.className = "eeee-plugin-description";
+    description.textContent = plugin.description || "설치 가능한 EEEE 플러그인";
+    details.append(name, description);
     const status = document.createElement("span");
     status.className = `plugin-status plugin-status-${plugin.status || "unknown"}`;
     status.textContent = labels[plugin.status] || plugin.status || "확인 필요";
-    const action = document.createElement("span");
-    action.className = "muted";
-    action.textContent = plugin.nextAction ? `다음: ${plugin.nextAction}` : "";
-    const nextActionLabels = { install: "설치", connect: "연결", reconnect: "다시 연결", resume: "재개" };
     if (nextActionLabels[plugin.nextAction]) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "plugin-action";
       button.dataset.pluginId = plugin.pluginId || "";
       button.textContent = nextActionLabels[plugin.nextAction];
-      item.append(name, status, button);
+      item.append(details, status, button);
     } else {
-      item.append(name, status, action);
+      const action = document.createElement("span");
+      action.className = "plugin-next-action";
+      action.textContent = plugin.nextAction === "configure" ? "연결 설정 준비 중" : "";
+      item.append(details, status, action);
     }
-    list.append(item);
+    (plugin.status === "not_installed" ? availableList : installedList).append(item);
   }
+  if (!installedList.children.length) renderEmpty(installedList, "아직 설치된 플러그인이 없습니다.");
+  if (!availableList.children.length) renderEmpty(availableList, "모든 플러그인이 설치되어 있습니다.");
 }
 
 refreshEeeeControlCenter();

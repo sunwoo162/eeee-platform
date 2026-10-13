@@ -69,3 +69,22 @@ def test_workspace_reads_project_state_when_api_uses_nested_snapshot():
 
     assert "QA 검증 중" in window.status.text()
     window.close()
+
+
+def test_workspace_sidebar_selection_renders_the_selected_section():
+    app = QApplication.instance() or QApplication([])
+    window = WorkspaceWindow(WorkspaceClient())
+
+    assert window.nav.currentRow() == 2
+    assert window.heading.text() == "프로젝트"
+    assert window.map_tree.topLevelItemCount() == 1
+
+    window.nav.setCurrentRow(4)
+    assert window.heading.text() == "기억"
+    assert window.map_title.text() == "EEEE가 기억하고 있는 내용"
+    assert window.map_tree.topLevelItem(0).text(0) == "활성 기억"
+
+    window.nav.setCurrentRow(3)
+    assert window.heading.text() == "플러그인"
+    assert window.map_tree.topLevelItem(0).text(0) == "Notion"
+    window.close()

@@ -72,7 +72,18 @@ class DesktopSession:
         selected_project = result.get("project_id")
         if isinstance(selected_project, str) and selected_project:
             self.project_id = selected_project
-        snapshot = self.refresh()
+        try:
+            snapshot = self.refresh()
+        except Exception as exc:
+            # A project/status snapshot is secondary to the assistant route.
+            # A missing profile or transient status failure must not turn a
+            # valid conversation response into a generic error bubble.
+            snapshot = {
+                "state": "working" if isinstance(job_id, str) and job_id else "idle",
+                "message": result.get("message", "EEEE가 응답을 준비했어."),
+                "projectId": selected_project,
+                "statusError": str(exc),
+            }
         snapshot["assistantRoute"] = result
         if not isinstance(job_id, str) or not job_id:
             # A direct EEEE/plugin response has no project snapshot to carry

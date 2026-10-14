@@ -362,6 +362,12 @@ test("guest composer with a login surface still requires authentication", async 
     ChatGptWebAuthenticationRequiredError,
   );
 });
+test("browser readiness probe detects a disconnected browser without a conversation", async () => {
+  const broken = fakeBackend({ currentUrl: async () => { throw new Error("browser disconnected"); } });
+  const driver = await createPlaywrightChatGptBrowserDriver(config, { backend: broken.backend });
+
+  assert.equal(await driver.probeBrowser?.(), "lost");
+});
 test("missing composer waits only for the bounded readiness window while ambiguity fails immediately", async () => {
   for (const count of [0, 2]) {
     let now = 0;

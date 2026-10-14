@@ -270,15 +270,19 @@ export async function startEeeeChatGptWebBridge(options: { host?: string; port?:
   const server = createServer(async (request, response) => {
     try {
       const pathname = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`).pathname;
-      if (request.method === "GET" && pathname === "/health") return json(response, 200, {
-        status: "ok",
-        service: "chatgpt-web-bridge",
-        // The bridge is healthy as soon as its adapter is initialized. A
-        // conversation reference is created only after the first turn and is
-        // therefore not a transport-health signal.
-        connected: true,
-        conversationActive: Boolean(state.conversationRef),
-      });
+      if (request.method === "GET" && pathname === "/health") {
+        // A live HTTP server is not enough: the CDP browser can disappear
+        // while the bridge process keeps listening. Probe the owned page so
+        // Desktop does not reuse a stale "healthy" bridge after a restart.
+        const browserStatus = await runtime.driver?.probeBrowser?.() ?? "ready";
+        return json(response, 200, {
+          status: "ok",
+          service: "chatgpt-web-bridge",
+          connected: browserStatus !== "lost",
+          browserStatus,
+          conversationActive: Boolean(state.conversationRef),
+        });
+      }
       if (request.method !== "POST" || pathname !== "/chat") return json(response, 404, { error: "not found" });
       const input = JSON.parse(await readBody(request)) as ChatRequest;
       return json(response, 200, await queuedChat(input));

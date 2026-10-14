@@ -27,7 +27,8 @@ test("bridge includes bounded EEEE profile guidance in assistant prompts", async
 test("bridge clears stale conversation state after a browser failure", async () => {
   const source = await readFile(new URL("../src/chatgpt-web/eeee-bridge.ts", import.meta.url), "utf8");
   assert.match(source, /state\.conversationRef = undefined/);
-  assert.match(source, /connected: true/);
+  assert.match(source, /probeBrowser/);
+  assert.match(source, /connected: browserStatus !== "lost"/);
   assert.match(source, /conversationActive: Boolean\(state\.conversationRef\)/);
 });
 

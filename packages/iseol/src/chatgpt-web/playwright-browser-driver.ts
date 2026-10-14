@@ -781,11 +781,25 @@ export async function createPlaywrightChatGptBrowserDriver(
     } catch { return "lost"; }
   }
 
+  async function probeBrowser(): Promise<ChatGptWebSessionProbe> {
+    try {
+      const url = await backend.currentUrl();
+      const restrictionCount = await backend.temporaryRestrictionCount();
+      if (restrictionCount > 0) return "temporarily-limited";
+      if ((await backend.conversationLimitCount?.() ?? 0) > 0) return "conversation-exhausted";
+      if ((await backend.usageLimitCount?.() ?? 0) > 0) return "usage-limited";
+      const authCount = await backend.authenticationRequiredCount();
+      if (authUrl(url) || authCount > 0) return "auth-required";
+      return (await backend.composerCount()) === 1 ? "ready" : "lost";
+    } catch { return "lost"; }
+  }
+
   return {
     openOrResumeConversation,
     submitPrompt,
     readStructuredResult,
     probeConversation,
+    probeBrowser,
     async closeConversation(conversationRef) {
       if (!REF.test(conversationRef)) lost("Conversation identity is invalid");
       await backend.closeOwnedPage();

@@ -8,8 +8,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEventLoop, QPoint, QPointF, QRect, QSize, Qt
-from PySide6.QtGui import QTextDocument
+from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, QRect, QSize, Qt
+from PySide6.QtGui import QMouseEvent, QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -245,14 +245,15 @@ def test_two_line_korean_bubble_keeps_glyphs_inside_the_body():
     window.reply_surface.adjustSize()
     app.processEvents()
 
-    margins = window.reply_surface.contentsMargins()
-    body_height = window.reply_surface.height() - margins.top() - margins.bottom()
-    line_height = window.reply_surface.fontMetrics().lineSpacing()
+    document = QTextDocument()
+    document.setDocumentMargin(0)
+    document.setDefaultFont(window.reply_surface.font())
+    document.setTextWidth(window.reply_surface.width() - 60)
+    document.setPlainText(text)
+    text_rect = window.reply_surface._text_area_rect()
 
-    # The bubble image has a transparent tail area below the text body. Keep
-    # the measured line room plus the minimum glyph safety margin.
-    assert body_height >= line_height * 3
-    assert body_height <= line_height * 5
+    assert text_rect.height() >= int(document.size().height() + 0.9999)
+    assert text_rect.height() <= int(document.size().height() + window.reply_surface.fontMetrics().lineSpacing() + 0.9999)
     window.close()
 
 
@@ -271,13 +272,11 @@ def test_korean_bubble_reserves_responsive_glyph_room_for_larger_fonts():
     document.setDefaultFont(window.reply_surface.font())
     document.setTextWidth(width - 60)
     document.setPlainText(text)
-    margins = window.reply_surface.contentsMargins()
     expected = int(
         (
             document.size().height()
-            + margins.top()
-            + margins.bottom()
-            + window.reply_surface.fontMetrics().lineSpacing() * 2
+            + window.reply_surface._base_contents_margins[1]
+            + window.reply_surface._base_contents_margins[3]
         )
         / window.reply_surface._TAIL_Y_RATIO
         + 0.9999
@@ -418,6 +417,65 @@ def test_clicking_quick_chat_reply_bubble_margin_opens_a_fresh_input_bubble():
     assert window.assistant_input.text() == ""
     assert window.quick_reply.isHidden()
     assert window.assistant_input.hasFocus()
+    window.close()
+
+
+def test_quick_chat_reply_click_is_consumed_by_the_global_event_path():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    window._set_quick_chat_mode("reply", "이전 답변")
+    window.command_surface.adjustSize()
+    app.processEvents()
+
+    local_pos = QPoint(4, 4)
+    global_pos = window.command_surface.mapToGlobal(local_pos)
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(local_pos),
+        QPointF(global_pos),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    assert window.eventFilter(window.command_surface, event) is True
+    assert window.assistant_input.isVisible()
+    assert window.quick_reply.isHidden()
+    assert window.assistant_input.hasFocus()
+    window.close()
+
+
+def test_short_quick_chat_reply_uses_a_compact_width():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    window._set_quick_chat_mode("reply", "안녕")
+    window.command_surface.adjustSize()
+    app.processEvents()
+
+    assert window.command_surface.width() < 360
+    window.close()
+
+
+def test_long_quick_chat_reply_uses_a_larger_width_and_stays_wrapped():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    window._set_quick_chat_mode("reply", "짧은 답변")
+    window.command_surface.adjustSize()
+    short_width = window.command_surface.width()
+
+    long_text = " ".join(["사용자의 요청을 확인하고 필요한 작업을 진행하고 있어요."] * 30)
+    window._set_quick_chat_mode("reply", long_text)
+    window.command_surface.adjustSize()
+    app.processEvents()
+
+    assert window.command_surface.width() > short_width
+    assert window.quick_reply.isVisible()
+    assert window.quick_reply.height() >= window.quick_reply._document_height(
+        window.quick_reply.width()
+    )
     window.close()
 
 

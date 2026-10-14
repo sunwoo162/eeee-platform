@@ -14,6 +14,7 @@ from app.integrations.claimlatch_audit import ClaimLatchAuditStore
 from app.memory.store import MemoryStore
 from app.project_runtime.models import ProjectDocumentRecord, ProjectEvidenceRecord, ProjectProfile
 from app.planning.models import PlanningArtifact, PlanningDecision, PlanningHandoff, PlanningSession
+from app.storage.connection import connect_sqlite
 from app.domain.models import (
     CandidateScore,
     Decision,
@@ -204,7 +205,7 @@ class SQLiteStore:
         self.claimlatch_audits = ClaimLatchAuditStore(self.path)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = connect_sqlite(self.path)
         connection.row_factory = sqlite3.Row
         connection.create_function("utc_timestamp", 1, _normalise_run_timestamp, deterministic=True)
         return connection

@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.storage.connection import connect_sqlite
+
 
 class ClaimLatchAuditConflictError(RuntimeError):
     """A verification key was reused with different content or metadata."""
@@ -43,7 +45,7 @@ class ClaimLatchAuditStore:
         self.path = Path(path)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = connect_sqlite(self.path)
         connection.row_factory = sqlite3.Row
         return connection
 

@@ -12,6 +12,8 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
+from app.storage.connection import connect_sqlite
+
 
 class MobileBridgeError(RuntimeError):
     """The local Desktop↔Mobile pairing or authorization contract failed."""
@@ -196,7 +198,7 @@ class MobileBridge:
         }
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path)
+        connection = connect_sqlite(self.database_path)
         connection.row_factory = sqlite3.Row
         return connection
 

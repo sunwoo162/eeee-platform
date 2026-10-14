@@ -1,3 +1,5 @@
+import os
+
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -18,6 +20,22 @@ def test_app_reports_unavailable_instead_of_faking_general_chat(monkeypatch, tmp
     assert "로컬 AI" in payload["message"]
     assert payload["response_verification"]["decision"] in {"WARN", "BLOCK", "BLOCKED"}
     assert "LLM_API_KEY" not in payload["message"]
+
+
+def test_app_shutdown_releases_shared_state_database(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+    )
+    state_path = settings.data_dir / "state.sqlite3"
+
+    with TestClient(create_app(settings)):
+        pass
+
+    os.remove(state_path)
 
 
 def test_unconfigured_project_lane_uses_provider_neutral_runtime(monkeypatch, tmp_path):

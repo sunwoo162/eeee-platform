@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.memory.models import MemoryCandidate, MemoryRecord, MemoryStatus
+from app.storage.connection import connect_sqlite
 
 
 _CONVERSATION_SECRET_PATTERN = re.compile(
@@ -30,7 +31,7 @@ class MemoryStore:
         self.path = Path(path)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = connect_sqlite(self.path)
         connection.row_factory = sqlite3.Row
         return connection
 

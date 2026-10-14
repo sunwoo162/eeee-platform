@@ -10,6 +10,18 @@ from app.storage.sqlite import SQLiteStore
 from app.workflow.approvals import ApprovalError, AlreadyApprovedError, ApprovalService, CandidateSetChangedError
 
 
+def test_store_connection_context_closes_connection(tmp_path):
+    store = SQLiteStore(tmp_path / "context.sqlite3")
+    store.init()
+
+    connection = store._connect()
+    with connection:
+        connection.execute("SELECT 1")
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
+
+
 def candidate(full_name: str, *, license_spdx: str | None) -> CandidateScore:
     return CandidateScore(
         repository=RepositorySnapshot(

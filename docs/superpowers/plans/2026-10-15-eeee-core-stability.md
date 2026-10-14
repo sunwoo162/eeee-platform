@@ -231,3 +231,19 @@
   git add docs/superpowers/plans/2026-10-15-eeee-core-stability.md docs/superpowers/sdd/2026-10-15-eeee-core-stability/progress.md
   git commit -m "docs: record EEEE core stability verification"
   ```
+
+### Task 6: Close the Windows local-AI shutdown gap
+
+**Files:**
+- Create: `apps/eeee/app/storage/connection.py`
+- Modify: `apps/eeee/app/storage/sqlite.py`
+- Modify: `apps/eeee/app/memory/store.py`
+- Modify: `apps/eeee/app/integrations/claimlatch_audit.py`
+- Modify: `apps/eeee/app/mobile/bridge.py`
+- Test: `apps/eeee/tests/storage/test_sqlite.py`
+- Test: `apps/eeee/tests/api/test_provider_wiring.py`
+
+- [x] **Step 1: Reproduce the real failure** — a local Ollama route returned successfully, but Windows could not delete `state.sqlite3` after app shutdown.
+- [x] **Step 2: Add regression coverage** — connection-context closure and full app shutdown cleanup are covered.
+- [x] **Step 3: Implement the shared context-closing SQLite connection** — all EEEE durable stores now release handles at transaction-context exit.
+- [x] **Step 4: Verify** — focused storage/provider tests pass; real Ollama responds through the local lane; the full core product gate passes.

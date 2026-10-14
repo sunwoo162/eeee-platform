@@ -16,6 +16,7 @@ Plan: `docs/superpowers/plans/2026-10-15-eeee-core-stability.md`
 - Reply-bubble click opens a fresh input state, and the desktop route carries the durable `desktop-default` conversation ID.
 - Status refresh errors no longer discard a valid assistant route result.
 - The desktop session remains compatible with older client adapters that do not yet accept a conversation ID.
+- Shared SQLite connections now close when their transaction context exits, so the Windows state database is not left locked after EEEE shutdown.
 
 ## Verification
 
@@ -27,6 +28,8 @@ Plan: `docs/superpowers/plans/2026-10-15-eeee-core-stability.md`
 - `python -m app.desktop --self-test`: exit code 0.
 - `python -m app.desktop --gui-self-test`: exit code 0.
 - Packaged `build\\desktop\\GleaveDesktop.exe` built successfully; packaged `--self-test` and `--gui-self-test` both exited 0.
+- Real Ollama general conversation returned `provider=local` in 2.56 seconds using the installed fast model, and the app state database was deletable immediately after `TestClient` shutdown.
+- Core product gate: **332 passed, 261 warnings**; static UI contract: **2 passed**; strict UTF-8 and `git diff --check` passed.
 
 ## Deferred by scope
 

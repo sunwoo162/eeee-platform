@@ -15,10 +15,10 @@ def test_project_work_prefers_web_provider():
     assert decision.reason == "complex_or_tool_request"
 
 
-def test_connected_web_provider_handles_simple_request_when_local_is_unavailable():
+def test_simple_conversation_stays_local_only_when_local_is_unavailable():
     decision = ProviderPolicy().choose("안녕", local_available=False, web_available=True)
 
-    assert decision.provider == "web"
+    assert decision.provider == "unavailable"
     assert decision.reason == "local_unavailable"
 
 

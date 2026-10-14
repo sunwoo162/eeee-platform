@@ -122,6 +122,8 @@ _DESKTOP_TEXT = {
 
 
 _SPEECH_BUBBLE_TAIL_Y_RATIO = 764 / 887
+_BUBBLE_WIDTH_PRESETS = (280, 360, 440)
+_BUBBLE_COMFORTABLE_LINE_COUNT = 3
 
 
 # Virtual-key codes grouped by physical QWERTY position.  The boundary is
@@ -219,7 +221,7 @@ class PetWindow:
                 # above the bubble and visually detached from the cat.
                 self._base_contents_margins = (30, 26, 30, 26)
                 self.setContentsMargins(*self._base_contents_margins)
-                self.setMinimumHeight(96)
+                self.setMinimumHeight(0)
                 self.setTextFormat(Qt.TextFormat.PlainText)
 
             def _text_area_rect(self):
@@ -262,13 +264,6 @@ class PetWindow:
                     + self._base_contents_margins[1]
                     + self._base_contents_margins[3]
                 )
-                # QTextDocument reports the line box tightly. The bubble's
-                # image tail also consumes part of the label's drawable
-                # height, so reserve one measured text block as the vertical
-                # safety area. This is deliberately derived from the actual
-                # wrapped text instead of a fixed pixel value: longer
-                # replies and larger fonts both get more room automatically.
-                body_height += max(1.0, text_height)
                 return int(body_height / self._TAIL_Y_RATIO + 0.9999)
 
             def heightForWidth(self, width):
@@ -342,20 +337,23 @@ class PetWindow:
                 return document.size().height()
 
             def heightForWidth(self, width):
-                regular_height = super().heightForWidth(width)
                 if not self.text().strip():
-                    return regular_height
-                # QLabel's line box can be a couple of pixels shorter than
-                # QTextDocument's wrapped layout for Korean glyphs. Use the
-                # measured document height plus one font-derived line box as
-                # breathing room; no fixed bubble height is involved.
+                    return super().heightForWidth(width)
                 measured_height = self._document_height(width)
-                safe_height = measured_height + self.fontMetrics().lineSpacing()
-                return max(regular_height, int(safe_height + 0.9999))
+                return max(1, int(measured_height + 0.9999))
 
             def sizeHint(self):
                 hint = super().sizeHint()
-                return QSize(hint.width(), max(hint.height(), self.heightForWidth(hint.width())))
+                width = self.width()
+                parent = self.parentWidget()
+                if parent is not None and parent.width() > 0:
+                    layout = parent.layout()
+                    if layout is not None:
+                        margins = layout.contentsMargins()
+                        width = max(1, parent.width() - margins.left() - margins.right())
+                if width <= 0:
+                    width = min(hint.width(), 372)
+                return QSize(width, self.heightForWidth(width))
 
         class _SpeechBubbleFrame(QFrame):
             """Use the same cat bubble as the only Quick Chat surface."""
@@ -596,6 +594,7 @@ class PetWindow:
                 self.detail.setObjectName("assistantBubble")
                 self.detail.setMinimumWidth(240)
                 self.detail.setMaximumWidth(640)
+                self.detail.clicked.connect(self._on_reply_bubble_clicked)
                 root.addWidget(self.detail)
 
                 # Normal replies use the same bubble artwork as Quick Chat,
@@ -858,7 +857,7 @@ class PetWindow:
                 ):
                     global_pos = event.globalPosition().toPoint()
                     if self._handle_global_mouse_press(global_pos):
-                        return False
+                        return True
                 if (
                     watched in (assistant_input, command_surface)
                     and event.type() == QEvent.Type.KeyPress
@@ -990,6 +989,12 @@ class PetWindow:
 
             def _reposition_reply_surface(self):
                 if self.reply_surface.isVisible():
+                    self.reply_surface.setFixedWidth(
+                        self._bubble_width_for_text(
+                            self.reply_surface.text(),
+                            horizontal_padding=60,
+                        )
+                    )
                     self.reply_surface.adjustSize()
                     self.reply_surface.move(self._reply_surface_position())
                     self._enforce_topmost()
@@ -1022,10 +1027,31 @@ class PetWindow:
                 self.quick_status.hide()
                 if text is not None:
                     self.quick_reply.setText(text)
+                self.command_surface.setFixedWidth(
+                    self._bubble_width_for_text(
+                        self.quick_reply.text(),
+                        horizontal_padding=76,
+                    )
+                )
                 show_reply = mode == "reply" and bool(self.quick_reply.text().strip())
                 self.quick_reply.setVisible(show_reply)
                 self.assistant_input.setVisible(mode == "input")
                 self.command_surface.adjustSize()
+
+            def _bubble_width_for_text(self, text: str, *, horizontal_padding: int) -> int:
+                """Choose the smallest bubble preset that keeps text compact."""
+                if not text.strip():
+                    return 360
+                line_height = max(1, self.quick_reply.fontMetrics().lineSpacing())
+                for width in _BUBBLE_WIDTH_PRESETS:
+                    document = QTextDocument()
+                    document.setDocumentMargin(0)
+                    document.setDefaultFont(self.quick_reply.font())
+                    document.setTextWidth(max(1, width - horizontal_padding))
+                    document.setPlainText(text)
+                    if document.size().height() <= line_height * _BUBBLE_COMFORTABLE_LINE_COUNT:
+                        return width
+                return _BUBBLE_WIDTH_PRESETS[-1]
 
             def _pet_anchor_rect(self):
                 """Return the pet artwork bounds in screen coordinates."""
@@ -1119,6 +1145,13 @@ class PetWindow:
                     self.command_surface.frameGeometry().contains(global_pos)
                     or self.frameGeometry().contains(global_pos)
                 ):
+                    if (
+                        self.command_surface.frameGeometry().contains(global_pos)
+                        and self._quick_chat_mode == "reply"
+                        and self.quick_reply.isVisible()
+                    ):
+                        self._on_reply_bubble_clicked()
+                        return True
                     return False
                 self.hide_command_surface()
                 return True

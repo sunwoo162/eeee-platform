@@ -321,6 +321,33 @@ class PetWindow:
                     return
                 super().mousePressEvent(event)
 
+        class _ResponsiveTextLabel(QLabel):
+            """Keep wrapped Quick Chat text inside its actual label height."""
+
+            def _document_height(self, width):
+                document = QTextDocument()
+                document.setDocumentMargin(0)
+                document.setDefaultFont(self.font())
+                document.setTextWidth(max(1, width))
+                document.setPlainText(self.text())
+                return document.size().height()
+
+            def heightForWidth(self, width):
+                regular_height = super().heightForWidth(width)
+                if not self.text().strip():
+                    return regular_height
+                # QLabel's line box can be a couple of pixels shorter than
+                # QTextDocument's wrapped layout for Korean glyphs. Use the
+                # measured document height plus one font-derived line box as
+                # breathing room; no fixed bubble height is involved.
+                measured_height = self._document_height(width)
+                safe_height = measured_height + self.fontMetrics().lineSpacing()
+                return max(regular_height, int(safe_height + 0.9999))
+
+            def sizeHint(self):
+                hint = super().sizeHint()
+                return QSize(hint.width(), max(hint.height(), self.heightForWidth(hint.width())))
+
         class _SpeechBubbleFrame(QFrame):
             """Use the same cat bubble as the only Quick Chat surface."""
 
@@ -643,7 +670,7 @@ class PetWindow:
                 self.quick_status.setObjectName("quickStatus")
                 self.quick_status.setWordWrap(True)
                 command_layout.addWidget(self.quick_status)
-                self.quick_reply = QLabel()
+                self.quick_reply = _ResponsiveTextLabel()
                 self.quick_reply.setObjectName("quickReply")
                 self.quick_reply.setWordWrap(True)
                 self.quick_reply.setAlignment(Qt.AlignmentFlag.AlignCenter)

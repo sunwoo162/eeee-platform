@@ -235,11 +235,13 @@ class PetWindow:
                     + self._base_contents_margins[1]
                     + self._base_contents_margins[3]
                 )
-                # QTextDocument reports the line box tightly.  Reserve one
-                # font line of breathing room for glyph ascenders/descenders,
-                # while keeping the total height proportional to the measured
-                # wrapped text instead of imposing a fixed body height.
-                body_height += max(1, self.fontMetrics().lineSpacing())
+                # QTextDocument reports the line box tightly. The bubble's
+                # image tail also consumes part of the label's drawable
+                # height, so reserve one measured text block as the vertical
+                # safety area. This is deliberately derived from the actual
+                # wrapped text instead of a fixed pixel value: longer
+                # replies and larger fonts both get more room automatically.
+                body_height += max(1.0, text_height)
                 return int(body_height / self._TAIL_Y_RATIO + 0.9999)
 
             def heightForWidth(self, width):

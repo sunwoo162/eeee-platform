@@ -249,10 +249,41 @@ def test_two_line_korean_bubble_keeps_glyphs_inside_the_body():
     body_height = window.reply_surface.height() - margins.top() - margins.bottom()
     line_height = window.reply_surface.fontMetrics().lineSpacing()
 
-    # The bubble image has a transparent tail area below the text body. The
-    # safety room should be derived from the font, not a fixed bubble height.
+    # The bubble image has a transparent tail area below the text body. Keep
+    # the measured line room plus the minimum glyph safety margin.
     assert body_height >= line_height * 3
-    assert body_height <= line_height * 3 + 2
+    assert body_height <= line_height * 5
+    window.close()
+
+
+def test_korean_bubble_reserves_responsive_glyph_room_for_larger_fonts():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    text = "안녕하세요! 오늘은\n무엇을 도와드릴까요?"
+
+    font = window.reply_surface.font()
+    font.setPointSize(18)
+    window.reply_surface.setFont(font)
+    window.reply_surface.setText(text)
+    width = 360
+    document = QTextDocument()
+    document.setDocumentMargin(0)
+    document.setDefaultFont(window.reply_surface.font())
+    document.setTextWidth(width - 60)
+    document.setPlainText(text)
+    margins = window.reply_surface.contentsMargins()
+    expected = int(
+        (
+            document.size().height()
+            + margins.top()
+            + margins.bottom()
+            + window.reply_surface.fontMetrics().lineSpacing() * 2
+        )
+        / window.reply_surface._TAIL_Y_RATIO
+        + 0.9999
+    )
+
+    assert window.reply_surface.heightForWidth(width) >= expected
     window.close()
 
 

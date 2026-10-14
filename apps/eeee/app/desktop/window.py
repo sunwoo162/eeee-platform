@@ -324,6 +324,15 @@ class PetWindow:
         class _ResponsiveTextLabel(QLabel):
             """Keep wrapped Quick Chat text inside its actual label height."""
 
+            clicked = Signal()
+
+            def mousePressEvent(self, event):
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self.clicked.emit()
+                    event.accept()
+                    return
+                super().mousePressEvent(event)
+
             def _document_height(self, width):
                 document = QTextDocument()
                 document.setDocumentMargin(0)
@@ -674,6 +683,7 @@ class PetWindow:
                 self.quick_reply.setObjectName("quickReply")
                 self.quick_reply.setWordWrap(True)
                 self.quick_reply.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.quick_reply.clicked.connect(self._on_reply_bubble_clicked)
                 command_layout.addWidget(self.quick_reply)
                 self.assistant_row = QHBoxLayout()
                 self.assistant_row.setContentsMargins(0, 0, 0, 0)

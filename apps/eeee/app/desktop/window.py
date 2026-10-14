@@ -4,7 +4,12 @@ from pathlib import Path
 import time
 
 from app.desktop.client import PetApiClient
-from app.desktop.conversation_state import ConversationPhase, ConversationState
+from app.desktop.bubble_layout import (
+    bubble_height_for_text,
+    bubble_text_area_height,
+    choose_bubble_width,
+)
+from app.desktop.conversation_state import ConversationState
 from app.desktop.presentation import PetPresentation
 from app.desktop.session import DesktopSession
 from app.desktop.worker import QtTaskRunner
@@ -235,7 +240,12 @@ class PetWindow:
                 the same responsive geometry used by ``heightForWidth``.
                 """
                 left, top, right, bottom = self._base_contents_margins
-                body_height = max(1, round(self.height() * self._TAIL_Y_RATIO))
+                body_height = bubble_text_area_height(
+                    surface_height=self.height(),
+                    tail_y_ratio=self._TAIL_Y_RATIO,
+                    top_padding=top,
+                    bottom_padding=bottom,
+                ) + top + bottom
                 return QRect(
                     left,
                     top,
@@ -261,17 +271,16 @@ class PetWindow:
             def _tail_safe_height(self, width):
                 """Leave the image tail below the text's drawable body."""
                 text_height = self._wrapped_text_height(width)
-                body_height = (
-                    text_height
-                    + self._base_contents_margins[1]
-                    + self._base_contents_margins[3]
+                return bubble_height_for_text(
+                    text_height=text_height,
+                    top_padding=self._base_contents_margins[1],
+                    bottom_padding=self._base_contents_margins[3],
+                    tail_y_ratio=self._TAIL_Y_RATIO,
                     # QTextDocument reports the line box height, while the
                     # rasterized glyphs need a small breathing room at the
-                    # top/bottom of that box. Without it, two-line replies
-                    # can clip even though their measured height fits.
-                    + 4
+                    # top/bottom of that box.
+                    glyph_breathing_room=4,
                 )
-                return int(body_height / self._TAIL_Y_RATIO + 0.9999)
 
             def heightForWidth(self, width):
                 regular_height = super().heightForWidth(width)
@@ -1076,15 +1085,22 @@ class PetWindow:
                 if not text.strip():
                     return 360
                 line_height = max(1, self.quick_reply.fontMetrics().lineSpacing())
-                for width in _BUBBLE_WIDTH_PRESETS:
+
+                def measure_text_height(content_width):
                     document = QTextDocument()
                     document.setDocumentMargin(0)
                     document.setDefaultFont(self.quick_reply.font())
-                    document.setTextWidth(max(1, width - horizontal_padding))
+                    document.setTextWidth(max(1, content_width))
                     document.setPlainText(text)
-                    if document.size().height() <= line_height * _BUBBLE_COMFORTABLE_LINE_COUNT:
-                        return width
-                return _BUBBLE_WIDTH_PRESETS[-1]
+                    return document.size().height()
+
+                return choose_bubble_width(
+                    measure_text_height,
+                    line_height=line_height,
+                    horizontal_padding=horizontal_padding,
+                    presets=_BUBBLE_WIDTH_PRESETS,
+                    comfortable_lines=_BUBBLE_COMFORTABLE_LINE_COUNT,
+                )
 
             def _pet_anchor_rect(self):
                 """Return the pet artwork bounds in screen coordinates."""

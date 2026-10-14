@@ -1162,6 +1162,26 @@ def test_quick_chat_long_reply_reserves_space_above_the_tail():
     window.close()
 
 
+def test_quick_chat_reply_label_gets_the_full_wrapped_text_height():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    text = "안녕하세요! 어떻게\n도와드릴까요?"
+
+    window.show_command_surface()
+    window._set_quick_chat_mode("reply", text)
+    window.command_surface.adjustSize()
+    app.processEvents()
+
+    document = QTextDocument()
+    document.setDocumentMargin(0)
+    document.setDefaultFont(window.quick_reply.font())
+    document.setTextWidth(window.quick_reply.width())
+    document.setPlainText(text)
+
+    assert window.quick_reply.height() >= int(document.size().height() + 0.9999)
+    window.close()
+
+
 def test_quick_chat_reply_has_a_bounded_height_for_long_responses():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 
@@ -66,11 +67,7 @@ class DesktopSession:
         return self.snapshot
 
     def route(self, text: str, workspace: str | None = None) -> dict[str, object]:
-        result = self.client.route_assistant(
-            text,
-            workspace,
-            self.conversation_id,
-        )
+        result = self._route_assistant(text, workspace)
         job_id = result.get("jobId")
         if isinstance(job_id, str) and job_id:
             self.assistant_job_id = job_id
@@ -110,6 +107,26 @@ class DesktopSession:
             })
         self.snapshot = snapshot
         return snapshot
+
+    def _route_assistant(self, text: str, workspace: str | None) -> dict[str, object]:
+        """Route with durable context while keeping old client adapters usable."""
+        route = self.client.route_assistant
+        try:
+            parameters = inspect.signature(route).parameters.values()
+        except (TypeError, ValueError):
+            parameters = ()
+        supports_conversation = any(
+            parameter.kind is inspect.Parameter.VAR_POSITIONAL
+            or parameter.name == "conversation_id"
+            for parameter in parameters
+        ) or sum(
+            parameter.kind
+            in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            for parameter in parameters
+        ) >= 3
+        if supports_conversation:
+            return route(text, workspace, self.conversation_id)
+        return route(text, workspace)
 
     def issue_pairing_code(self) -> dict[str, object]:
         result = self.client.issue_pairing_code()

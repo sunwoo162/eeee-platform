@@ -378,6 +378,26 @@ def test_clicking_reply_bubble_opens_a_fresh_input_bubble():
     window.close()
 
 
+def test_clicking_quick_chat_reply_opens_a_fresh_input_bubble():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    window._set_quick_chat_mode("reply", "이전 답변")
+    window.command_surface.adjustSize()
+    app.processEvents()
+
+    assert window.quick_reply.isVisible()
+    QTest.mouseClick(window.quick_reply, Qt.MouseButton.LeftButton)
+    app.processEvents()
+
+    assert window.command_surface.isVisible()
+    assert window.assistant_input.isVisible()
+    assert window.assistant_input.text() == ""
+    assert window.quick_reply.isHidden()
+    assert window.assistant_input.hasFocus()
+    window.close()
+
+
 def test_idle_assistant_reply_is_not_replaced_by_greeting():
     app = QApplication.instance() or QApplication([])
     client = ClarificationClient()

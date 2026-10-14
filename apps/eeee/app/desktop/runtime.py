@@ -29,6 +29,13 @@ _NODE_CANDIDATES = (
     Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs/node.exe",
     Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/nodejs/node.exe",
 )
+_CHATGPT_BROWSER_HEALTHY_STATUSES = frozenset({
+    "ready",
+    "auth-required",
+    "temporarily-limited",
+    "conversation-exhausted",
+    "usage-limited",
+})
 
 
 def _background_process_kwargs() -> dict[str, int]:
@@ -83,6 +90,7 @@ def _chatgpt_bridge_is_healthy(port: int) -> bool:
                 isinstance(payload, dict)
                 and payload.get("service") == "chatgpt-web-bridge"
                 and payload.get("connected") is True
+                and payload.get("browserStatus") in _CHATGPT_BROWSER_HEALTHY_STATUSES
             )
     except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
         return False
@@ -98,7 +106,10 @@ def _chatgpt_bridge_is_stale(port: int) -> bool:
             return (
                 isinstance(payload, dict)
                 and payload.get("service") == "chatgpt-web-bridge"
-                and payload.get("connected") is False
+                and (
+                    payload.get("connected") is False
+                    or payload.get("browserStatus") not in _CHATGPT_BROWSER_HEALTHY_STATUSES
+                )
             )
     except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
         return False

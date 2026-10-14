@@ -14,6 +14,8 @@ export interface ChatGptBrowserDriver {
   submitPrompt(input: { conversationRef?: string; prompt: string; promptSha256: string }): Promise<{ conversationRef?: string } | void>;
   readStructuredResult(input: { requestId?: string; conversationRef: string; timeoutMs: number; contract: ChatGptWebResultContract }): Promise<unknown>;
   probeConversation(conversationRef: string): Promise<ChatGptWebSessionProbe>;
+  /** Check the owned browser page before any conversation exists. */
+  probeBrowser?(): Promise<ChatGptWebSessionProbe>;
   closeConversation(conversationRef: string): Promise<void>;
   recordParserDiagnostic?(input: {
     runId?: string; projectId?: string; stage: string; sessionId: string; generation: number;

@@ -56,7 +56,14 @@ def test_client_supports_canonical_eeee_desktop_contract(monkeypatch):
         (
             "POST",
             "http://127.0.0.1:8123/api/assistant/route",
-            {"timeout": 180.0, "json": {"text": "Make a project", "workspace": "C:/work"}},
+            {
+                "timeout": 180.0,
+                "json": {
+                    "text": "Make a project",
+                    "workspace": "C:/work",
+                    "conversationId": "desktop-default",
+                },
+            },
         ),
         (
             "POST",
@@ -78,6 +85,20 @@ def test_assistant_route_uses_long_timeout_for_web_ai(monkeypatch):
     PetApiClient("http://127.0.0.1:8123").route_assistant("안녕")
 
     assert requests[0][2]["timeout"] == 180.0
+
+
+def test_assistant_route_keeps_the_desktop_conversation_id(monkeypatch):
+    requests = []
+
+    def request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        return httpx.Response(200, json={"status": "completed", "message": "응답"})
+
+    monkeypatch.setattr(httpx, "request", request)
+
+    PetApiClient("http://127.0.0.1:8123").route_assistant("이어서 해줘")
+
+    assert requests[0][2]["json"]["conversationId"] == "desktop-default"
 
 
 def test_client_can_open_the_project_map(monkeypatch):

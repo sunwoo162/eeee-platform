@@ -8,8 +8,9 @@ from typing import Any
 class DesktopSession:
     """Keep the Desktop presentation model separate from the Qt window."""
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, conversation_id: str = "desktop-default") -> None:
         self.client = client
+        self.conversation_id = conversation_id.strip() or "desktop-default"
         self.project_id: str | None = None
         self.assistant_job_id: str | None = None
         self.snapshot: dict[str, object] = {}
@@ -65,7 +66,11 @@ class DesktopSession:
         return self.snapshot
 
     def route(self, text: str, workspace: str | None = None) -> dict[str, object]:
-        result = self.client.route_assistant(text, workspace)
+        result = self.client.route_assistant(
+            text,
+            workspace,
+            self.conversation_id,
+        )
         job_id = result.get("jobId")
         if isinstance(job_id, str) and job_id:
             self.assistant_job_id = job_id

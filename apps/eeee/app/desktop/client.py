@@ -152,9 +152,15 @@ class PetApiClient:
         )
 
     def route_assistant(
-        self, text: str, workspace: str | None = None
+        self,
+        text: str,
+        workspace: str | None = None,
+        conversation_id: str = "desktop-default",
     ) -> dict[str, object]:
-        payload: dict[str, object] = {"text": text}
+        payload: dict[str, object] = {
+            "text": text,
+            "conversationId": conversation_id,
+        }
         if workspace is not None:
             payload["workspace"] = workspace
         return self._request(

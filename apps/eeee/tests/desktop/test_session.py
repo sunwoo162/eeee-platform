@@ -10,7 +10,7 @@ class FakeDesktopClient:
         self.project_ids.append(project_id)
         return {"status": "ok", "projectId": project_id, "claimLatch": {"status": "advisory"}}
 
-    def route_assistant(self, text, workspace=None):
+    def route_assistant(self, text, workspace=None, conversation_id=None):
         self.routed.append((text, workspace))
         return {"status": "ready", "project_id": "project-1", "message": "created"}
 
@@ -23,7 +23,7 @@ class BackgroundDesktopClient(FakeDesktopClient):
         super().__init__()
         self.job = {"jobId": "assistant-job-1", "status": "running", "result": None}
 
-    def route_assistant(self, text, workspace=None):
+    def route_assistant(self, text, workspace=None, conversation_id=None):
         self.routed.append((text, workspace))
         return {"status": "accepted", "jobId": "assistant-job-1", "message": "started"}
 
@@ -33,7 +33,7 @@ class BackgroundDesktopClient(FakeDesktopClient):
 
 
 class SynchronousProjectResponseClient(FakeDesktopClient):
-    def route_assistant(self, text, workspace=None):
+    def route_assistant(self, text, workspace=None, conversation_id=None):
         return {
             "status": "blocked",
             "project_id": "project-1",
@@ -44,6 +44,25 @@ class SynchronousProjectResponseClient(FakeDesktopClient):
 class MissingProfileClient(FakeDesktopClient):
     def get_desktop_state(self, project_id=None):
         raise RuntimeError("Project profile not found")
+
+
+class ConversationClient(FakeDesktopClient):
+    def __init__(self):
+        super().__init__()
+        self.conversation_ids = []
+
+    def route_assistant(self, text, workspace=None, conversation_id=None):
+        self.conversation_ids.append(conversation_id)
+        return super().route_assistant(text, workspace)
+
+
+def test_session_routes_every_turn_through_the_persistent_desktop_conversation():
+    client = ConversationClient()
+    session = DesktopSession(client)
+
+    session.route("기억해줘")
+
+    assert client.conversation_ids == ["desktop-default"]
 
 
 def test_session_refreshes_selected_project_and_keeps_last_snapshot():
@@ -144,7 +163,7 @@ def test_session_keeps_synchronous_project_blocked_response_visible():
 
 def test_session_keeps_synchronous_configuration_response_blocked():
     client = SynchronousProjectResponseClient()
-    client.route_assistant = lambda text, workspace=None: {
+    client.route_assistant = lambda text, workspace=None, conversation_id=None: {
         "status": "awaiting_configuration",
         "project_id": "project-1",
         "message": "외부 연결 설정이 필요해.",

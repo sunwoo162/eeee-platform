@@ -6,6 +6,7 @@ import httpx
 
 from app.config import Settings
 from app.desktop.__main__ import connect_desktop_api, run_gui_self_test, run_self_test
+import app.desktop.runtime as desktop_runtime
 from app.desktop.runtime import EmbeddedApiRuntime, _resolve_browser_executable
 
 
@@ -85,6 +86,39 @@ def test_chatgpt_login_browser_is_visible(monkeypatch, tmp_path):
     runtime._launch_chatgpt_browser(visible=True)
 
     assert "--start-minimized" not in launched[0]
+
+
+def test_embedded_runtime_starts_ollama_when_local_api_is_unavailable(monkeypatch, tmp_path):
+    launched = []
+    wait_calls = []
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    def fake_wait(host, port, timeout=10.0):
+        wait_calls.append((host, port, timeout))
+        return len(wait_calls) > 1
+
+    monkeypatch.setattr(desktop_runtime, "_resolve_ollama_executable", lambda: "ollama.exe")
+    monkeypatch.setattr(desktop_runtime, "_wait_for_tcp_port", fake_wait)
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "Popen",
+        lambda args, **kwargs: (launched.append((args, kwargs)) or FakeProcess()),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+        )
+    )
+
+    runtime._ensure_local_model_service()
+
+    assert wait_calls[0][0:2] == ("127.0.0.1", 11434)
+    assert launched[0][0] == ["ollama.exe", "serve"]
+    assert launched[0][1]["creationflags"] == subprocess.CREATE_NO_WINDOW
 
 
 def test_embedded_runtime_serves_health_and_stops(tmp_path):

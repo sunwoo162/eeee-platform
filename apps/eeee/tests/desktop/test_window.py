@@ -79,6 +79,12 @@ class SlowRouteClient(RouteClient):
         return super().route_assistant(text, workspace)
 
 
+class VerySlowRouteClient(RouteClient):
+    def route_assistant(self, text, workspace=None):
+        time.sleep(0.25)
+        return super().route_assistant(text, workspace)
+
+
 class CountingSlowRouteClient(SlowRouteClient):
     def __init__(self):
         super().__init__()
@@ -219,6 +225,39 @@ def test_quick_chat_input_is_centered_and_not_blocked_by_initial_refresh():
     ) <= 8
     assert window.assistant_input.height() == 42
     assert window.assistant_input.isEnabled()
+    window.close()
+
+
+def test_quick_chat_keeps_a_non_empty_draft_after_idle_timeout():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show_command_surface()
+    window._reply_hide_timer.setInterval(20)
+
+    window.assistant_input.setText("입력 중인 초안")
+    window._schedule_reply_hide()
+    QTest.qWait(80)
+    app.processEvents()
+
+    assert window.command_surface.isVisible()
+    assert window.assistant_input.text() == "입력 중인 초안"
+    window.close()
+
+
+def test_quick_chat_stays_visible_while_a_slow_request_is_processing():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(VerySlowRouteClient())
+    window.show_command_surface()
+    window._reply_hide_timer.setInterval(20)
+
+    window.assistant_input.setText("오래 걸리는 요청")
+    window.assistant_input.returnPressed.emit()
+    QTest.qWait(80)
+    app.processEvents()
+
+    assert window._busy is True
+    assert window.command_surface.isVisible()
+    _wait_for(app, lambda: not window._busy)
     window.close()
 
 

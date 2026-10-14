@@ -41,6 +41,11 @@ class SynchronousProjectResponseClient(FakeDesktopClient):
         }
 
 
+class MissingProfileClient(FakeDesktopClient):
+    def get_desktop_state(self, project_id=None):
+        raise RuntimeError("Project profile not found")
+
+
 def test_session_refreshes_selected_project_and_keeps_last_snapshot():
     client = FakeDesktopClient()
     session = DesktopSession(client)
@@ -150,3 +155,12 @@ def test_session_keeps_synchronous_configuration_response_blocked():
 
     assert snapshot["state"] == "blocked"
     assert snapshot["message"] == "외부 연결 설정이 필요해."
+
+
+def test_session_keeps_assistant_response_when_status_refresh_loses_project_profile():
+    session = DesktopSession(MissingProfileClient())
+
+    snapshot = session.route("안녕")
+
+    assert snapshot["assistantRoute"]["status"] == "ready"
+    assert snapshot["message"] == "created"

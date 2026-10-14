@@ -163,7 +163,16 @@ class PetWindow:
         on_open_chatgpt=None,
     ):
         try:
-            from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, QSize, QTimer, Qt
+            from PySide6.QtCore import (
+                QEvent,
+                QPoint,
+                QRect,
+                QSettings,
+                QSize,
+                QTimer,
+                Qt,
+                Signal,
+            )
             from PySide6.QtGui import (
                 QAction,
                 QColor,
@@ -198,6 +207,7 @@ class PetWindow:
             """Draw a scalable bubble asset behind dynamic response text."""
 
             _TAIL_Y_RATIO = _SPEECH_BUBBLE_TAIL_Y_RATIO
+            clicked = Signal()
 
             def __init__(self, bubble_pixmap, parent=None):
                 super().__init__(parent)
@@ -211,6 +221,23 @@ class PetWindow:
                 self.setContentsMargins(*self._base_contents_margins)
                 self.setMinimumHeight(96)
                 self.setTextFormat(Qt.TextFormat.PlainText)
+
+            def _text_area_rect(self):
+                """Return the actual text-only area above the image tail.
+
+                QLabel's default text painting uses the whole widget rect,
+                while the bottom of this asset is transparent tail artwork.
+                Keeping an explicit body rect makes the painted text follow
+                the same responsive geometry used by ``heightForWidth``.
+                """
+                left, top, right, bottom = self._base_contents_margins
+                body_height = max(1, round(self.height() * self._TAIL_Y_RATIO))
+                return QRect(
+                    left,
+                    top,
+                    max(1, self.width() - left - right),
+                    max(1, body_height - top - bottom),
+                )
 
             def _wrapped_text_height(self, width):
                 """Measure the text using the label's actual wrapped width."""
@@ -274,12 +301,25 @@ class PetWindow:
                     self.setContentsMargins(*target_margins)
 
             def paintEvent(self, event):
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
                 if self.bubble_pixmap is not None and not self.bubble_pixmap.isNull():
-                    painter = QPainter(self)
-                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
                     painter.drawPixmap(self.rect(), self.bubble_pixmap)
-                    painter.end()
-                super().paintEvent(event)
+                painter.setFont(self.font())
+                painter.setPen(QColor(0, 0, 0))
+                painter.drawText(
+                    self._text_area_rect(),
+                    Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                    self.text(),
+                )
+                painter.end()
+
+            def mousePressEvent(self, event):
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self.clicked.emit()
+                    event.accept()
+                    return
+                super().mousePressEvent(event)
 
         class _SpeechBubbleFrame(QFrame):
             """Use the same cat bubble as the only Quick Chat surface."""
@@ -528,7 +568,14 @@ class PetWindow:
                     | Qt.WindowType.Tool
                 )
                 self.reply_surface.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-                self.reply_surface.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                # A reply is also the entry point for the next request.  Do
+                # not make this top-level bubble mouse-transparent: clicking
+                # it must open a fresh composer instead of only extending the
+                # reply timeout.
+                self.reply_surface.setAttribute(
+                    Qt.WidgetAttribute.WA_TransparentForMouseEvents, False
+                )
+                self.reply_surface.clicked.connect(self._on_reply_bubble_clicked)
                 self.reply_surface.setMinimumWidth(360)
                 self.reply_surface.setMaximumWidth(640)
                 self.reply_surface.setStyleSheet(
@@ -853,12 +900,12 @@ class PetWindow:
                 if self.reply_surface.isVisible():
                     _force_windows_topmost(self.reply_surface)
 
-            def show_command_surface(self):
+            def show_command_surface(self, *, show_latest_reply=True):
                 # Quick Chat has one content mode at a time: the centered
                 # composer while waiting for input, or the centered reply
                 # after a request. Keeping both widgets visible was the source
                 # of the stacked greeting/status/input screenshot.
-                latest_reply = self.detail.text().strip()
+                latest_reply = self.detail.text().strip() if show_latest_reply else ""
                 if latest_reply in {
                     self._text("connecting"),
                     self._text("assistant_busy"),
@@ -879,6 +926,16 @@ class PetWindow:
                 self.command_surface.activateWindow()
                 self._enforce_topmost()
                 self.assistant_input.setFocus()
+
+            def _on_reply_bubble_clicked(self):
+                """Turn a visible answer bubble into a clean next-input state."""
+                if self._closing:
+                    return
+                self.detail.hide()
+                self.reply_surface.hide()
+                self._reply_hide_timer.stop()
+                self.quick_reply.clear()
+                self.show_command_surface(show_latest_reply=False)
 
             def _reposition_command_surface(self):
                 if self.command_surface.isVisible():

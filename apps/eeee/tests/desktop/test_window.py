@@ -328,6 +328,56 @@ def test_reply_bubble_size_hint_allocates_text_area_before_the_tail():
     window.close()
 
 
+def test_reply_bubble_text_area_grows_with_wrapped_document():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    text = "긴 답변입니다. " * 12
+
+    window.reply_surface.setText(text)
+    window.reply_surface.resize(360, 1)
+    window.reply_surface.show()
+    window.reply_surface.adjustSize()
+    app.processEvents()
+
+    document = QTextDocument()
+    document.setDocumentMargin(0)
+    document.setDefaultFont(window.reply_surface.font())
+    margins = window.reply_surface.contentsMargins()
+    document.setTextWidth(
+        window.reply_surface.width() - margins.left() - margins.right()
+    )
+    document.setPlainText(text)
+    text_rect = window.reply_surface._text_area_rect()
+
+    assert text_rect.height() >= int(document.size().height() + 0.9999)
+    assert text_rect.top() >= 0
+    assert text_rect.bottom() < window.reply_surface.height()
+    window.close()
+
+
+def test_clicking_reply_bubble_opens_a_fresh_input_bubble():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    _wait_for(app, lambda: window.current_state.get("state") == "idle")
+    window.show()
+    window.reply_surface.setText("이전 답변")
+    window.reply_surface.show()
+    window.reply_surface.adjustSize()
+    window._reposition_reply_surface()
+    app.processEvents()
+
+    assert window.reply_surface.isVisible()
+    QTest.mouseClick(window.reply_surface, Qt.MouseButton.LeftButton)
+    app.processEvents()
+
+    assert window.command_surface.isVisible()
+    assert window.assistant_input.isVisible()
+    assert window.assistant_input.text() == ""
+    assert window.quick_reply.isHidden()
+    assert window.assistant_input.hasFocus()
+    window.close()
+
+
 def test_idle_assistant_reply_is_not_replaced_by_greeting():
     app = QApplication.instance() or QApplication([])
     client = ClarificationClient()

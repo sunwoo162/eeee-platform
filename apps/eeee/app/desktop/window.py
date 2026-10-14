@@ -235,12 +235,13 @@ class PetWindow:
                     + self._base_contents_margins[1]
                     + self._base_contents_margins[3]
                 )
-                # QTextDocument reports the line box tightly. QLabel still
-                # needs a generous vertical safety room for Korean glyph
-                # ascenders/descenders, especially when the tail padding is
-                # applied. Keep the room proportional for larger fonts while
-                # preserving the 24px minimum that prevents visible clipping.
-                body_height += max(24, self.fontMetrics().lineSpacing())
+                # QTextDocument reports the line box tightly. The bubble's
+                # image tail also consumes part of the label's drawable
+                # height, so reserve one measured text block as the vertical
+                # safety area. This is deliberately derived from the actual
+                # wrapped text instead of a fixed pixel value: longer
+                # replies and larger fonts both get more room automatically.
+                body_height += max(1.0, text_height)
                 return int(body_height / self._TAIL_Y_RATIO + 0.9999)
 
             def heightForWidth(self, width):

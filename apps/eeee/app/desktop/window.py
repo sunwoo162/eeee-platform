@@ -361,11 +361,19 @@ class PetWindow:
             """Use the same cat bubble as the only Quick Chat surface."""
 
             _TAIL_Y_RATIO = _SPEECH_BUBBLE_TAIL_Y_RATIO
+            clicked = Signal()
 
             def __init__(self, bubble_pixmap, parent=None):
                 super().__init__(parent)
                 self.bubble_pixmap = bubble_pixmap
                 self._base_layout_margins = None
+
+            def mousePressEvent(self, event):
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self.clicked.emit()
+                    event.accept()
+                    return
+                super().mousePressEvent(event)
 
             def setBaseLayoutMargins(self, margins):
                 self._base_layout_margins = (
@@ -675,6 +683,7 @@ class PetWindow:
                 command_layout.setSpacing(8)
                 command_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.command_surface.setBaseLayoutMargins(command_layout.contentsMargins())
+                self.command_surface.clicked.connect(self._on_reply_bubble_clicked)
                 self.quick_status = QLabel()
                 self.quick_status.setObjectName("quickStatus")
                 self.quick_status.setWordWrap(True)

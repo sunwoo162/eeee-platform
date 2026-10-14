@@ -184,6 +184,7 @@ class PetWindow:
                 QPainterPath,
                 QPixmap,
                 QTextDocument,
+                QTextOption,
             )
             from PySide6.QtWidgets import (
                 QComboBox,
@@ -263,6 +264,11 @@ class PetWindow:
                     text_height
                     + self._base_contents_margins[1]
                     + self._base_contents_margins[3]
+                    # QTextDocument reports the line box height, while the
+                    # rasterized glyphs need a small breathing room at the
+                    # top/bottom of that box. Without it, two-line replies
+                    # can clip even though their measured height fits.
+                    + 4
                 )
                 return int(body_height / self._TAIL_Y_RATIO + 0.9999)
 
@@ -300,13 +306,30 @@ class PetWindow:
                 painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
                 if self.bubble_pixmap is not None and not self.bubble_pixmap.isNull():
                     painter.drawPixmap(self.rect(), self.bubble_pixmap)
-                painter.setFont(self.font())
-                painter.setPen(QColor(0, 0, 0))
-                painter.drawText(
-                    self._text_area_rect(),
-                    Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
-                    self.text(),
-                )
+                text_rect = self._text_area_rect()
+                if self.text().strip() and text_rect.width() > 0 and text_rect.height() > 0:
+                    # QPainter.drawText() is not reliable for explicit line
+                    # breaks in this scaled bubble: it can paint nothing even
+                    # when the same text measured correctly. Use the same Qt
+                    # document engine as the responsive height calculation so
+                    # wrapping, Korean glyphs, and newlines share one layout.
+                    document = QTextDocument()
+                    document.setDocumentMargin(0)
+                    document.setDefaultFont(self.font())
+                    option = QTextOption()
+                    option.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+                    document.setDefaultTextOption(option)
+                    document.setTextWidth(text_rect.width())
+                    document.setPlainText(self.text())
+                    text_height = document.size().height()
+                    painter.save()
+                    painter.translate(
+                        text_rect.left(),
+                        text_rect.top() + max(0.0, (text_rect.height() - text_height) / 2),
+                    )
+                    document.drawContents(painter)
+                    painter.restore()
                 painter.end()
 
             def mousePressEvent(self, event):

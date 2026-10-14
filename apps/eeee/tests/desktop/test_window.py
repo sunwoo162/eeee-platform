@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, QRect, QSize, Qt
-from PySide6.QtGui import QMouseEvent, QTextDocument
+from PySide6.QtGui import QImage, QMouseEvent, QPainter, QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -254,6 +254,45 @@ def test_two_line_korean_bubble_keeps_glyphs_inside_the_body():
 
     assert text_rect.height() >= int(document.size().height() + 0.9999)
     assert text_rect.height() <= int(document.size().height() + window.reply_surface.fontMetrics().lineSpacing() + 0.9999)
+    window.close()
+
+
+def test_bubble_paints_explicit_line_breaks_inside_the_text_area():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient(), initial_error="test")
+    window._timer.stop()
+    window._typing_timer.stop()
+    text = "line one\nline two"
+
+    window.reply_surface.setText(text)
+    window.reply_surface.setFixedWidth(280)
+    window.reply_surface.show()
+    window.reply_surface.adjustSize()
+    app.processEvents()
+
+    image = QImage(
+        window.reply_surface.size(),
+        QImage.Format.Format_ARGB32,
+    )
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    window.reply_surface.render(painter, QPoint(0, 0))
+    painter.end()
+
+    text_rect = window.reply_surface._text_area_rect().adjusted(6, 2, -6, -2)
+    dark_pixels = [
+        (x, y)
+        for y in range(text_rect.top(), text_rect.bottom() + 1)
+        for x in range(text_rect.left(), text_rect.right() + 1)
+        if (color := image.pixelColor(x, y)).alpha() > 0
+        and color.red() < 80
+        and color.green() < 80
+        and color.blue() < 80
+    ]
+
+    assert len(dark_pixels) >= 20
+    assert any(y < text_rect.center().y() for _, y in dark_pixels)
+    assert any(y > text_rect.center().y() for _, y in dark_pixels)
     window.close()
 
 

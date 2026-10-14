@@ -25,6 +25,7 @@ Plan: `docs/superpowers/plans/2026-10-15-eeee-core-stability.md`
 - Desktop GUI/runtime suite: 89 passed.
 - Local-provider and memory suite: 25 passed.
 - Full EEEE suite from `apps/eeee`: **800 passed, 1 skipped, 443 warnings**.
+- Full EEEE suite after the shutdown-handle fix: **802 passed, 1 skipped, 445 warnings**.
 - `python -m app.desktop --self-test`: exit code 0.
 - `python -m app.desktop --gui-self-test`: exit code 0.
 - Packaged `build\\desktop\\GleaveDesktop.exe` built successfully; packaged `--self-test` and `--gui-self-test` both exited 0.

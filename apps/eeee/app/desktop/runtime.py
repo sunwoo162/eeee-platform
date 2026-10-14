@@ -13,6 +13,7 @@ import subprocess
 import sys
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import uvicorn
 
@@ -28,6 +29,10 @@ _CHROME_CANDIDATES = (
 _NODE_CANDIDATES = (
     Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs/node.exe",
     Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/nodejs/node.exe",
+)
+_OLLAMA_CANDIDATES = (
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Ollama/ollama.exe",
+    Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Ollama/ollama.exe",
 )
 _CHATGPT_BROWSER_HEALTHY_STATUSES = frozenset({
     "ready",
@@ -66,6 +71,16 @@ def _resolve_node_executable(configured: str) -> str:
         if candidate.exists():
             return str(candidate)
     return configured
+
+
+def _resolve_ollama_executable() -> str | None:
+    discovered = shutil.which("ollama")
+    if discovered:
+        return discovered
+    for candidate in _OLLAMA_CANDIDATES:
+        if candidate.exists():
+            return str(candidate)
+    return None
 
 
 def _wait_for_tcp_port(host: str, port: int, timeout: float = 10.0) -> bool:
@@ -175,6 +190,7 @@ class EmbeddedApiRuntime:
         self._chatgpt_bridge: subprocess.Popen[str] | None = None
         self._chatgpt_browser: subprocess.Popen[str] | None = None
         self._chatgpt_bridge_log = None
+        self._ollama_process: subprocess.Popen[str] | None = None
 
     @property
     def is_running(self) -> bool:
@@ -192,6 +208,7 @@ class EmbeddedApiRuntime:
 
         self._error = None
         self._start_chatgpt_web_bridge(visible=False)
+        self._ensure_local_model_service()
         self._server = uvicorn.Server(
             uvicorn.Config(
                 create_app(self.settings),
@@ -221,6 +238,33 @@ class EmbeddedApiRuntime:
         detail = str(self._error) if self._error else "startup timed out"
         self.stop()
         raise ApiStartupError(f"Embedded API failed to start: {detail}")
+
+    def _ensure_local_model_service(self) -> None:
+        """Start the installed local Ollama service before building the API."""
+        parsed = urlsplit(self.settings.local_model_base_url)
+        if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
+            "127.0.0.1",
+            "localhost",
+        }:
+            return
+        port = parsed.port
+        if port is None or _wait_for_tcp_port(parsed.hostname, port, timeout=0.2):
+            return
+
+        executable = _resolve_ollama_executable()
+        if executable is None:
+            _runtime_debug("ollama executable not found; local service was not started")
+            return
+
+        _runtime_debug(f"starting local ollama executable={executable}")
+        self._ollama_process = subprocess.Popen(
+            [executable, "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **_background_process_kwargs(),
+        )
+        if not _wait_for_tcp_port(parsed.hostname, port, timeout=15.0):
+            _runtime_debug("ollama did not become ready before the startup deadline")
 
     def stop(self) -> None:
         if self._server is not None:

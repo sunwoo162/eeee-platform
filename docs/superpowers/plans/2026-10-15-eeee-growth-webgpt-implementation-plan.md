@@ -208,4 +208,3 @@ Review the diff against the spec, with special attention to fallback policy, mem
 - [ ] **Step 5: Fix Critical/Important findings with RED→GREEN tests and rerun the full suite**
 
 - [ ] **Step 6: Commit documentation/evidence and leave the branch ready for the user’s chosen integration action**
-

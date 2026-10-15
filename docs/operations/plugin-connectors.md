@@ -21,7 +21,11 @@ configuration:
       "authorizationEndpoint": "https://provider.example/oauth/authorize",
       "tokenEndpoint": "https://provider.example/oauth/token",
       "clientId": "public-client-id",
-      "scopes": ["mail.read", "mail.send"]
+      "scopes": ["mail.read", "mail.send"],
+      "scopeByPermission": {
+        "mail.read": ["provider.read"],
+        "mail.send": ["provider.send"]
+      }
     }
   }
 }
@@ -36,8 +40,10 @@ require one and keep it out of source control.
 ## User flow
 
 1. The user selects **Install** in EEEE's plugin control center.
-2. EEEE opens the provider's OAuth page in the user's browser after explicit
-   permission selection.
+2. EEEE opens the provider's OAuth page in the user's browser. The desktop
+   client selects the default read-only EEEE permissions automatically, and
+   `scopeByPermission` limits the provider scopes to those approved actions.
+   Write permissions remain opt-in.
 3. The local callback verifies state and PKCE, exchanges the code, health-checks
    the provider, and stores the resulting credential in the OS credential
    store.

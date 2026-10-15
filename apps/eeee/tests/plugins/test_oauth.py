@@ -26,6 +26,10 @@ def _config() -> OAuthProviderConfig:
         tokenEndpoint="https://provider.example/token",
         clientId="public-client",
         scopes=["mail.read", "mail.send"],
+        scopeByPermission={
+            "mail.read": ["provider.mail.read"],
+            "mail.send": ["provider.mail.send"],
+        },
     )
 
 
@@ -45,6 +49,20 @@ def test_start_builds_pkce_authorization_url_without_exposing_verifier() -> None
     assert "code_verifier" not in result.authorization_url
     assert result.state == query["state"][0]
     assert result.expires_at > datetime.now(timezone.utc)
+
+
+def test_start_requests_only_scopes_for_approved_permissions() -> None:
+    broker = OAuthBroker(FakeOAuthTransport(), ttl_seconds=300)
+
+    result = broker.start(
+        user_id="user-a", plugin_id="gmail", config=_config(),
+        redirect_uri="http://127.0.0.1:49152/oauth/callback",
+        approved_permissions={"mail.read"},
+    )
+
+    query = parse_qs(urlparse(result.authorization_url).query)
+    assert query["scope"] == ["provider.mail.read"]
+    assert "provider.mail.send" not in result.authorization_url
 
 
 def test_complete_exchanges_code_and_consumes_one_time_session() -> None:

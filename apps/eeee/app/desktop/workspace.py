@@ -406,12 +406,60 @@ class WorkspaceWindow:
                 plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
                 self._submit_background(
                     lambda: self.client.install_plugin(plugin_id),
-                    lambda _result: (
-                        self._set_plugin_hint("설치했어. 연결할 계정을 선택해줘." if self.language == "ko" else "Installed. Choose an account to connect."),
-                        self.refresh(),
-                    ),
+                    lambda result: self._finish_install(plugin, result),
                     lambda exc: self._set_plugin_hint(self._friendly_error(exc)),
                 )
+
+            def _finish_install(self, plugin: dict[str, object], result: object):
+                auth_mode = str(plugin.get("authMode", ""))
+                if auth_mode in {"oauth", "token-or-oauth"}:
+                    # Keep the UI in the connecting state even if the next catalog
+                    # refresh still contains the pre-install snapshot.
+                    plugin["status"] = "awaiting_authentication"
+                    self._select_plugin()
+                    permissions = self._default_oauth_permissions(plugin)
+                    if permissions:
+                        self._set_plugin_hint(
+                            "설치했어. 브라우저에서 로그인하고 권한을 승인해줘."
+                            if self.language == "ko"
+                            else "Installed. Sign in in the browser and approve access."
+                        )
+                        self._start_oauth_connection(plugin, permissions)
+                        return
+                    self._set_plugin_hint(
+                        "설치했어. 연결 권한을 확인해줘."
+                        if self.language == "ko"
+                        else "Installed. Review the connection permissions."
+                    )
+                    return
+                plugin["status"] = (
+                    str(result.get("status") or "available")
+                    if isinstance(result, dict)
+                    else "available"
+                )
+                self._select_plugin()
+                self.refresh()
+                self._set_plugin_hint(
+                    "설치했어. 연결할 계정을 선택해줘."
+                    if self.language == "ko"
+                    else "Installed. Choose an account to connect."
+                )
+
+            @staticmethod
+            def _default_oauth_permissions(plugin: dict[str, object]) -> list[str]:
+                details = plugin.get("permissionDetails", [])
+                if isinstance(details, list):
+                    defaults = [
+                        str(item.get("id"))
+                        for item in details
+                        if isinstance(item, dict) and item.get("id") and item.get("defaultApproved") is True
+                    ]
+                    if defaults:
+                        return defaults
+                permissions = plugin.get("permissions", [])
+                if not isinstance(permissions, list):
+                    return []
+                return [str(permission) for permission in permissions if str(permission).endswith(".read")]
 
             def _disconnect_selected_plugin(self):
                 plugin = self._selected_plugin

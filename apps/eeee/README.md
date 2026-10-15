@@ -69,6 +69,11 @@ Copy `.env.example` to `.env` when environment configuration is needed.
 | `EXECUTION_MODE` | `demo` or deterministic `workspace_verify` | `demo` |
 | `COMMAND_TIMEOUT_SECONDS` | Maximum duration of a verification command | `120` |
 | `MAX_COMMAND_OUTPUT_CHARS` | Output limit recorded per command | `8000` |
+| `EEEE_CONVERSATION_PROVIDER` | General conversation provider: `auto`, `ollama`, or `chatgpt_web` | `auto` |
+| `EEEE_OLLAMA_BASE_URL` | Ollama endpoint for local conversation generation | `http://127.0.0.1:11434` |
+| `EEEE_OLLAMA_MODEL` | Ollama model used by the local provider | empty |
+| `CHATGPT_WEB_ENABLED` | Enables the optional ChatGPT Web bridge | `false` |
+| `CHATGPT_WEB_BRIDGE_URL` | Local bridge URL used by the Web GPT adapter | `http://127.0.0.1:47831` |
 
 OpenHands is optional. Research, comparison, approval, and the UI remain available without `LLM_API_KEY` or `LLM_MODEL`; an execution run is recorded as `unavailable` with a configuration error until those values and a compatible OpenHands SDK are installed.
 
@@ -103,6 +108,24 @@ python -m app.desktop
 The local model proposes structured actions; EEEE remains responsible for
 workspace boundaries, command execution, evidence, QA, and ClaimLatch gates.
 
+### Conversation provider and growth memory
+
+The general conversation path uses one provider contract. With
+`EEEE_CONVERSATION_PROVIDER=auto`, EEEE selects the ChatGPT Web adapter when
+the configured local bridge is ready and otherwise uses Ollama. Set
+`ollama` to force local generation or `chatgpt_web` to require the Web adapter;
+the explicit Web mode fails clearly when the bridge is unavailable instead of
+silently falling back to a different model. `GET /v1/runtime` exposes the
+selected provider and readiness of both providers.
+
+User feedback is stored separately from assistant memory. Submit a rating to
+`POST /api/memory/feedback`; it is retained as a redacted feedback ledger entry
+and does not change assistant behavior by itself. Include `remember: true` and
+a non-empty `correction` only when the user explicitly wants the correction to
+become an active, editable routing memory. Only active, non-expired memories
+are bounded into later conversation context; raw conversation text and ordinary
+positive/negative ratings are never promoted automatically.
+
 ## Approval model
 
 The first execution always crosses an approval boundary:
@@ -129,6 +152,7 @@ GET  /api/runs?request_id={request_id}&status={status}&search={text}&created_aft
 POST /api/design/references
 GET  /api/design/references/{id}
 POST /api/design/verify
+POST /api/memory/feedback
 ```
 
 The older `/projects/{project_id}/...` endpoints remain available for the desktop coordinator flow. The default application uses demo candidates when no GitHub token is configured; tests inject a fake researcher and runtime so they never need live credentials.

@@ -1,8 +1,8 @@
 # EEEE v1 Acceptance Record
 
-Date: 2026-10-15  
-Branch: `codex/eeee-core-redesign`  
-Head at verification start: `dbeb0c4`
+Date: 2026-10-15
+Branch: `codex/eeee-main-sync`  
+Head at verification start: `08d99f0`
 
 This record separates deterministic checks from environment-dependent checks.
 It is intentionally not a claim that the local Ollama model, packaged Windows
@@ -22,9 +22,13 @@ executable, or live external connectors were verified in this environment.
 | Capability lifecycle and permission boundary | PASS | `tests/capabilities/test_manager.py`, `test_capability_manifest.py` |
 | Lazy optional runtime imports | PASS | `tests/agent/test_lazy_runtime.py`, `tests/packaging/test_package_boundaries.py` |
 | Explicit memory boundary | PASS | `tests/api/test_memory_api.py`, `tests/memory/test_conversation_boundary.py`, `tests/memory/test_memory_store.py` |
+| Selectable conversation provider | PASS (deterministic) | `tests/conversations/test_providers.py`, `tests/core/test_paths.py`, `tests/api/test_conversation_routes.py` |
+| Empty provider response quality gate | PASS | `tests/conversations/test_service.py` rejects blank assistant output as `provider_empty_response` |
+| Growth feedback ledger and explicit promotion | PASS | `tests/memory/test_growth_feedback.py`, `tests/api/test_memory_api.py`; ordinary feedback stays out of active memory |
+| Bounded approved-memory context | PASS | `tests/conversations/test_context.py`, `tests/memory/test_conversation_boundary.py` |
 | Warm Core health benchmark | PASS | 10 warm `/health` requests, average `0.7426 ms` in this run |
-| Full deterministic suite | PASS | `496 passed, 1 skipped, 1 warning` |
-| Local Ollama live generation | BLOCKED | `scripts/smoke_ollama.py` reports `model_missing`; no local model is configured |
+| Full deterministic suite | PASS | `858 passed, 1 skipped, 1 warning` in `237.76s` |
+| Local Ollama live generation | BLOCKED | `scripts/smoke_ollama.py` runs successfully and reports `model_missing` with exit code `2`; no local model is configured |
 | Packaged Windows EXE | NOT RUN | PyInstaller is not installed in this environment; static package-boundary checks pass |
 | Live ChatGPT Web / connector auth | NOT RUN | Requires a live browser session and user authentication |
 
@@ -40,7 +44,9 @@ python scripts/smoke_restart_recovery.py
 python scripts/smoke_ollama.py
 ```
 
-The final full suite result was `496 passed, 1 skipped, 1 warning`.
+The previous acceptance record predates the growth/Web GPT changes. The final
+full-suite result for this branch is `858 passed, 1 skipped, 1 warning` in
+`237.76s`.
 
 The Ollama command exits with code `2` when no model is configured. That is a
 truthful blocked result, not a test failure hidden as success.
@@ -56,3 +62,18 @@ truthful blocked result, not a test failure hidden as success.
 
 Those are environment-gated checks; the Core implementation does not mark
 them as complete until their evidence exists.
+
+## Fresh growth/Web GPT verification
+
+```powershell
+Set-Location C:\Users\user\Documents\eeee-core-redesign\apps\eeee
+python -m pytest tests -q
+python -m pytest tests/smoke/test_scripts.py -q
+python scripts/smoke_ollama.py  # expected exit code 2 when no model is configured
+```
+
+Result: `858 passed, 1 skipped, 1 warning in 237.76s (0:03:57)`.
+
+The remaining warning is the installed Starlette/httpx compatibility warning.
+No live Ollama model or ChatGPT Web bridge was claimed from this deterministic
+run.

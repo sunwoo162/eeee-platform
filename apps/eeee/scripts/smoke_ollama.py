@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import asdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agent.ollama_runtime import OllamaRuntime
 from app.config import Settings

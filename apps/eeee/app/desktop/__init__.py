@@ -1,7 +1,6 @@
 """Gleave Desktop client, session, and presentation layer."""
 
 from app.desktop.client import ApiError, DesktopApiClient, PetApiClient
-from app.desktop.control_center import ControlCenterWindow, ProjectOrganizationWindow
 from app.desktop.chat_window import AssistantChatWindow
 from app.desktop.presentation import BubbleGeometry, BubbleLayout, ConversationPresentation
 from app.desktop.session import ConversationSession, DesktopSession
@@ -18,7 +17,5 @@ __all__ = [
     "DesktopWindow",
     "PetApiClient",
     "PetWindow",
-    "ControlCenterWindow",
-    "ProjectOrganizationWindow",
     "AssistantChatWindow",
 ]

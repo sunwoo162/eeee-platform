@@ -24,7 +24,9 @@ def test_health_returns_ok():
     }
 
 
-def test_default_application_defers_optional_runtime_until_project_execution():
+def test_default_application_defers_optional_runtime_until_project_execution(monkeypatch):
+    monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
     application = create_app()
 
     assert isinstance(application.state.api_flow.runtime, LazyAgentRuntime)

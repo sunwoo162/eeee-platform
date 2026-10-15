@@ -53,6 +53,12 @@ class PetApiClient:
             raise ApiError("Plugin install response was not an object")
         return result
 
+    def get_plugin_launch_info(self, plugin_id: str) -> dict[str, object]:
+        result = self._request("GET", self._plugin_path(plugin_id, "/launch"))
+        if not isinstance(result, dict):
+            raise ApiError("Plugin launch response was not an object")
+        return result
+
     def get_plugin_connection(self, plugin_id: str) -> dict[str, object]:
         result = self._request("GET", self._plugin_path(plugin_id, "/connection"))
         if not isinstance(result, dict):
@@ -166,6 +172,44 @@ class PetApiClient:
         return self._request(
             "POST", "/api/assistant/route", json=payload,
             timeout=self.assistant_timeout_seconds,
+        )
+
+    def get_conversations(self, *, limit: int = 50) -> list[dict[str, object]]:
+        result = self._request(
+            "GET", "/api/assistant/conversations", params={"limit": limit}
+        )
+        if not isinstance(result, list):
+            raise ApiError("Conversation list response was not a list")
+        return [item for item in result if isinstance(item, dict)]
+
+    def get_conversation(
+        self,
+        conversation_id: str = "desktop-default",
+        *,
+        limit: int = 100,
+        before_id: int | None = None,
+    ) -> dict[str, object]:
+        conversation_id = conversation_id.strip()
+        if not conversation_id or "/" in conversation_id or "\\" in conversation_id:
+            raise ValueError("conversation_id must be a non-empty path segment")
+        params: dict[str, object] = {"limit": limit}
+        if before_id is not None:
+            params["beforeId"] = before_id
+        result = self._request(
+            "GET", f"/api/assistant/conversations/{conversation_id}", params=params
+        )
+        if not isinstance(result, dict):
+            raise ApiError("Conversation response was not an object")
+        return result
+
+    def send_conversation_message(
+        self,
+        text: str,
+        conversation_id: str = "desktop-default",
+        workspace: str | None = None,
+    ) -> dict[str, object]:
+        return self.route_assistant(
+            text, workspace=workspace, conversation_id=conversation_id
         )
 
     def open_project(self, project_id: str) -> dict[str, object]:

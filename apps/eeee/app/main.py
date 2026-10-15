@@ -106,6 +106,7 @@ def create_app(
     planning_service = PlanningService(store, activity_ledger)
     plugin_platform = PluginPlatformService(
         store,
+        plugin_install_root=app_settings.data_dir / "plugins",
         connectors={
             "notion": NotionConnector(
                 client_factory=lambda credential: NotionClient(

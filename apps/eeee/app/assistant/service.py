@@ -240,6 +240,30 @@ class AssistantService:
         memory_store.append_conversation_turn(conversation_id, "user", user_text)
         memory_store.append_conversation_turn(conversation_id, "assistant", assistant_text)
 
+    def list_conversations(self, *, limit: int = 50) -> list[dict[str, object]]:
+        memory_store = getattr(self.coordinator, "memory", None)
+        if memory_store is None:
+            return []
+        return memory_store.list_conversations(limit=limit)
+
+    def get_conversation(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 100,
+        before_id: int | None = None,
+    ) -> dict[str, object]:
+        memory_store = getattr(self.coordinator, "memory", None)
+        if memory_store is None:
+            return {
+                "conversationId": conversation_id,
+                "turns": [],
+                "nextBeforeId": None,
+            }
+        return memory_store.get_conversation_turns(
+            conversation_id, limit=limit, before_id=before_id
+        )
+
     def get_project_profile(self, project_id: str) -> ProjectProfile:
         return self.store.get_project_profile(project_id)
 

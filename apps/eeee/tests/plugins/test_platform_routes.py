@@ -102,6 +102,25 @@ def test_install_is_local_and_does_not_require_provider_connector(tmp_path) -> N
     assert gmail["nextAction"] == "configure"
 
 
+def test_chat_history_plugin_installs_and_exposes_a_separate_entrypoint(tmp_path) -> None:
+    client = TestClient(_application(tmp_path))
+
+    catalog = client.get("/api/plugins/catalog").json()
+    chat_history = next(item for item in catalog if item["id"] == "eeee-chat-history")
+    assert chat_history["authMode"] == "none"
+    assert chat_history["status"] == "not_installed"
+    assert chat_history["nextAction"] == "install"
+
+    installed = client.post("/api/plugins/eeee-chat-history/install")
+    assert installed.status_code == 200
+    assert installed.json()["status"] == "connected"
+
+    launch = client.get("/api/plugins/eeee-chat-history/launch")
+    assert launch.status_code == 200
+    assert launch.json()["pluginId"] == "eeee-chat-history"
+    assert launch.json()["entrypoint"].endswith("eeee_chat_history\\main.py")
+
+
 def test_malformed_user_scope_is_rejected(tmp_path) -> None:
     client = TestClient(_application(tmp_path))
     response = client.get(

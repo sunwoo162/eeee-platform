@@ -101,6 +101,49 @@ def test_assistant_route_keeps_the_desktop_conversation_id(monkeypatch):
     assert requests[0][2]["json"]["conversationId"] == "desktop-default"
 
 
+def test_client_can_read_and_continue_the_installed_chat_history_plugin(monkeypatch):
+    requests = []
+
+    def request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        if url.endswith("/assistant/conversations"):
+            return httpx.Response(200, json=[{"conversationId": "desktop-default"}])
+        if url.endswith("/assistant/conversations/desktop-default"):
+            return httpx.Response(200, json={"conversationId": "desktop-default", "turns": []})
+        return httpx.Response(200, json={"status": "completed", "message": "답변"})
+
+    monkeypatch.setattr(httpx, "request", request)
+    client = PetApiClient("http://127.0.0.1:8123")
+
+    assert client.get_conversations() == [{"conversationId": "desktop-default"}]
+    assert client.get_conversation("desktop-default", limit=20, before_id=7)["turns"] == []
+    assert client.send_conversation_message("계속해줘")["message"] == "답변"
+
+    assert requests == [
+        (
+            "GET",
+            "http://127.0.0.1:8123/api/assistant/conversations",
+            {"timeout": 5.0, "params": {"limit": 50}},
+        ),
+        (
+            "GET",
+            "http://127.0.0.1:8123/api/assistant/conversations/desktop-default",
+            {"timeout": 5.0, "params": {"limit": 20, "beforeId": 7}},
+        ),
+        (
+            "POST",
+            "http://127.0.0.1:8123/api/assistant/route",
+            {
+                "timeout": 180.0,
+                "json": {
+                    "text": "계속해줘",
+                    "conversationId": "desktop-default",
+                },
+            },
+        ),
+    ]
+
+
 def test_client_can_open_the_project_map(monkeypatch):
     requests = []
 
@@ -116,6 +159,26 @@ def test_client_can_open_the_project_map(monkeypatch):
         (
             "GET",
             "http://127.0.0.1:8123/api/projects/project-1/map",
+            {"timeout": 5.0},
+        )
+    ]
+
+
+def test_client_can_resolve_an_installed_plugin_entrypoint(monkeypatch):
+    requests = []
+
+    def request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        return httpx.Response(200, json={"pluginId": "eeee-chat-history", "entrypoint": "C:/plugins/main.py"})
+
+    monkeypatch.setattr(httpx, "request", request)
+    result = PetApiClient("http://127.0.0.1:8123").get_plugin_launch_info("eeee-chat-history")
+
+    assert result["pluginId"] == "eeee-chat-history"
+    assert requests == [
+        (
+            "GET",
+            "http://127.0.0.1:8123/api/plugins/eeee-chat-history/launch",
             {"timeout": 5.0},
         )
     ]

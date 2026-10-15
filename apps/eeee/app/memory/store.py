@@ -116,6 +116,77 @@ class MemoryStore:
             for row in reversed(rows)
         ]
 
+    def get_conversation_turns(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 100,
+        before_id: int | None = None,
+    ) -> dict[str, object]:
+        """Return a bounded chronological page for an installed chat plugin."""
+
+        conversation_id = conversation_id.strip()
+        if not conversation_id:
+            raise ValueError("conversation_id is required")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if before_id is not None and before_id <= 0:
+            raise ValueError("before_id must be positive")
+        parameters: list[object] = [conversation_id]
+        cursor_clause = ""
+        if before_id is not None:
+            cursor_clause = " AND id < ?"
+            parameters.append(before_id)
+        parameters.append(limit + 1)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, role, content, created_at FROM conversation_turns "
+                f"WHERE conversation_id = ?{cursor_clause} ORDER BY id DESC LIMIT ?",
+                parameters,
+            ).fetchall()
+        has_older = len(rows) > limit
+        selected = rows[:limit]
+        turns = [
+            {
+                "id": int(row["id"]),
+                "role": str(row["role"]),
+                "content": str(row["content"]),
+                "createdAt": str(row["created_at"]),
+            }
+            for row in reversed(selected)
+        ]
+        return {
+            "conversationId": conversation_id,
+            "turns": turns,
+            "nextBeforeId": int(selected[-1]["id"]) if has_older and selected else None,
+        }
+
+    def list_conversations(self, *, limit: int = 50) -> list[dict[str, object]]:
+        """List chat threads newest-first without loading their full transcripts."""
+
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT latest.conversation_id, latest.created_at AS updated_at, "
+                "latest.content AS preview, totals.message_count "
+                "FROM conversation_turns AS latest "
+                "JOIN (SELECT conversation_id, MAX(id) AS latest_id, COUNT(*) AS message_count "
+                "FROM conversation_turns GROUP BY conversation_id) AS totals "
+                "ON totals.latest_id = latest.id "
+                "ORDER BY latest.id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "conversationId": str(row["conversation_id"]),
+                "messageCount": int(row["message_count"]),
+                "updatedAt": str(row["updated_at"]),
+                "preview": str(row["preview"]),
+            }
+            for row in rows
+        ]
+
     def save_candidate(self, candidate: MemoryCandidate) -> MemoryRecord:
         record = MemoryRecord(
             id=candidate.candidate_id,

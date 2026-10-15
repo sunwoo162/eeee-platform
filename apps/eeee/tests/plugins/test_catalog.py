@@ -58,6 +58,15 @@ def test_catalog_includes_first_party_connector_candidates() -> None:
     }.issubset(ids)
 
 
+def test_catalog_includes_installable_eeee_chat_history_plugin() -> None:
+    entry = PluginCatalog().get("eeee-chat-history")
+
+    assert entry.name == "EEEE 채팅 기록"
+    assert entry.auth_mode == "none"
+    assert entry.permissions == ["conversation.read", "conversation.write"]
+    assert entry.connector == "eeee-core"
+
+
 def test_catalog_exposes_credential_fields_and_safe_permission_defaults() -> None:
     notion = PluginCatalog().get("notion")
 

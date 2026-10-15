@@ -286,6 +286,18 @@ def build_plugin_router(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @router.get("/{plugin_id}/launch")
+    def launch_plugin(plugin_id: str, request: Request) -> dict[str, object]:
+        if platform is None:
+            raise HTTPException(status_code=503, detail="Plugin platform is unavailable")
+        _require_local_desktop(request)
+        try:
+            return platform.launch_info(plugin_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @router.delete("/{plugin_id}/install", status_code=204)
     def uninstall_plugin(plugin_id: str) -> Response:
         if platform is None:
@@ -646,6 +658,32 @@ def build_assistant_router(
                     payload.workspace,
                     conversation_id=payload.conversation_id,
                 ).model_dump()
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/assistant/conversations")
+    def list_assistant_conversations(
+        request: Request,
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> list[dict[str, object]]:
+        _require_local_desktop(request)
+        try:
+            return service.list_conversations(limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/assistant/conversations/{conversation_id}")
+    def get_assistant_conversation(
+        conversation_id: str,
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=200),
+        before_id: int | None = Query(default=None, alias="beforeId", ge=1),
+    ) -> dict[str, object]:
+        _require_local_desktop(request)
+        try:
+            return service.get_conversation(
+                conversation_id, limit=limit, before_id=before_id
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

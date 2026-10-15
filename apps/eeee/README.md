@@ -156,6 +156,18 @@ python -m app.desktop
 
 The desktop flow supports the same `demo` and explicit `workspace_verify` modes. In `workspace_verify`, only bounded compile, test, and git-diff checks run inside the approved workspace with `shell=False`; no install, delete, commit, push, or deployment command is performed automatically.
 
+### EEEE chat history plugin
+
+`EEEE 채팅 기록` is an optional first-party plugin. Install it from the local
+plugin catalog, then open it to get a phone-shaped chat window containing the
+same `desktop-default` conversation used by the pet. It reads and writes through
+the local EEEE API, so Ollama and `conversation_turns` remain single shared
+services; the plugin does not start another model or create a second database.
+
+The plugin is launched as a separate child process. Uninstalling its package
+does not delete the conversation history. Older messages are loaded with a
+cursor so a long chat is not rendered into one unbounded widget.
+
 ## Sample artifacts
 
 Each API run writes evidence below `<workspace>/<run_id>/`:

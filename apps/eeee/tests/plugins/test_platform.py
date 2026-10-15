@@ -133,6 +133,21 @@ def test_unconfigured_catalog_connector_can_install_but_cannot_connect(tmp_path)
         platform.begin_oauth("user-a", "gmail", {"mail.read"}, None)
 
 
+def test_eeee_chat_history_is_installable_and_ready_without_provider_auth(tmp_path) -> None:
+    platform = _platform(tmp_path, FakeConnector())
+
+    assert platform.status("eeee-chat-history") == "not_installed"
+    installed = platform.install("eeee-chat-history")
+
+    assert installed.plugin_id == "eeee-chat-history"
+    assert installed.status == "connected"
+    assert platform.status("eeee-chat-history") == "connected"
+    assert platform.capabilities() == []
+
+    platform.uninstall("eeee-chat-history")
+    assert platform.status("eeee-chat-history") == "not_installed"
+
+
 def test_connected_first_party_provider_projects_action_capabilities_and_invokes_action(tmp_path) -> None:
     connector = GenericFakeConnector()
     store = SQLiteStore(tmp_path / "state.sqlite3")

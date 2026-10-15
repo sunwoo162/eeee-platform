@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -115,6 +116,27 @@ class PluginWorkspaceClient(WorkspaceClient):
         return {"pluginId": plugin_id, "status": "not_installed"}
 
 
+class ChatHistoryPluginWorkspaceClient(WorkspaceClient):
+    base_url = "http://127.0.0.1:8123"
+
+    def get_plugin_catalog(self):
+        return [{
+            "id": "eeee-chat-history",
+            "name": "EEEE 채팅 기록",
+            "description": "EEEE 대화를 기록하고 이어서 보내기",
+            "authMode": "none",
+            "permissions": ["conversation.read", "conversation.write"],
+            "status": "connected",
+        }]
+
+    def get_plugin_launch_info(self, plugin_id):
+        assert plugin_id == "eeee-chat-history"
+        return {
+            "pluginId": plugin_id,
+            "entrypoint": str(Path(__file__).parents[2] / "plugins" / "eeee_chat_history" / "main.py"),
+        }
+
+
 def test_workspace_is_a_desktop_control_center_and_renders_project_map():
     app = QApplication.instance() or QApplication([])
     window = WorkspaceWindow(WorkspaceClient())
@@ -186,6 +208,28 @@ def test_workspace_plugin_screen_exposes_install_and_disconnect_actions():
     _settle()
     assert client.calls[-1] == ("disconnect", "notion")
     assert window.plugin_connect_button.isEnabled()
+    window.close()
+
+
+def test_workspace_opens_eeee_chat_history_as_a_separate_plugin_process(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = WorkspaceWindow(ChatHistoryPluginWorkspaceClient())
+    _settle()
+    window.nav.setCurrentRow(3)
+    _settle()
+
+    assert window.plugin_open_button.isEnabled()
+    launched = []
+    monkeypatch.setattr(
+        "app.desktop.workspace.subprocess.Popen",
+        lambda command, **kwargs: launched.append((command, kwargs)),
+    )
+    window._open_selected_plugin()
+    _settle()
+
+    assert launched
+    assert "--api-url" in launched[0][0]
+    assert "eeee_chat_history" in launched[0][0][1]
     window.close()
 
 

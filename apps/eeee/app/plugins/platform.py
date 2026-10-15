@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+import shutil
 from typing import Mapping
 from uuid import uuid4
 
@@ -67,6 +69,8 @@ _GENERIC_PLUGIN_ACTIONS: dict[str, tuple[dict[str, object], ...]] = {
     ),
 }
 
+_FIRST_PARTY_UI_PLUGIN_IDS = {"eeee-chat-history"}
+
 
 class PluginInstallationView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
@@ -96,12 +100,15 @@ class PluginPlatformService:
         catalog: PluginCatalog | None = None,
         credentials=None,
         connectors: Mapping[str, PluginConnector] | None = None,
+        plugin_install_root: str | Path | None = None,
     ) -> None:
         self.catalog_source = catalog or PluginCatalog()
         self.installations = PluginInstallationStore(store)
         self.connections = PluginConnectionStore(store)
         self.credentials = credentials or KeyringCredentialStore()
         self.connectors = dict(connectors or {})
+        self.plugin_install_root = Path(plugin_install_root) if plugin_install_root else None
+        self._bundled_plugin_root = Path(__file__).resolve().parents[2] / "plugins"
 
     def catalog(self) -> list[PluginCatalogEntry]:
         return self.catalog_source.list()
@@ -110,9 +117,21 @@ class PluginPlatformService:
         entry = self.catalog_source.get(plugin_id)
         # Installation is a local catalog decision. Provider availability and
         # account connection are checked later at connect/OAuth time.
+        if entry.id in _FIRST_PARTY_UI_PLUGIN_IDS:
+            source = self._bundled_plugin_root / "eeee_chat_history"
+            if not source.is_dir():
+                raise RuntimeError(f"bundled plugin package is missing: {entry.id}")
+            if self.plugin_install_root is not None:
+                self.plugin_install_root.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(
+                    source,
+                    self.plugin_install_root / "eeee_chat_history",
+                    dirs_exist_ok=True,
+                )
         installation = self.installations.install(entry.id, entry.version)
         return PluginInstallationView(
-            pluginId=installation.plugin_id, version=installation.version, status="available"
+            pluginId=installation.plugin_id, version=installation.version,
+            status="connected" if entry.id in _FIRST_PARTY_UI_PLUGIN_IDS else "available",
         )
 
     def uninstall(self, plugin_id: str) -> None:
@@ -124,6 +143,35 @@ class PluginPlatformService:
                 self.credentials.delete(connection.credential_ref)
             self.connections.remove(connection.user_id, plugin_id)
         self.installations.remove(plugin_id)
+        if plugin_id in _FIRST_PARTY_UI_PLUGIN_IDS and self.plugin_install_root is not None:
+            target = (self.plugin_install_root / "eeee_chat_history").resolve()
+            root = self.plugin_install_root.resolve()
+            try:
+                target.relative_to(root)
+            except ValueError as exc:
+                raise RuntimeError("plugin install path escaped its root") from exc
+            if target.exists():
+                shutil.rmtree(target)
+
+    def launch_info(self, plugin_id: str) -> dict[str, object]:
+        """Return the installed entrypoint for a separately launched UI plugin."""
+
+        self.catalog_source.get(plugin_id)
+        if plugin_id not in _FIRST_PARTY_UI_PLUGIN_IDS:
+            raise RuntimeError("this plugin does not expose a desktop UI")
+        if not self.installations.is_installed(plugin_id):
+            raise RuntimeError("plugin must be installed before opening")
+        if self.plugin_install_root is None:
+            raise RuntimeError("plugin launch is unavailable")
+        entrypoint = (self.plugin_install_root / "eeee_chat_history" / "main.py").resolve()
+        root = self.plugin_install_root.resolve()
+        try:
+            entrypoint.relative_to(root)
+        except ValueError as exc:
+            raise RuntimeError("plugin entrypoint escaped its root") from exc
+        if not entrypoint.is_file():
+            raise RuntimeError("installed plugin entrypoint is missing")
+        return {"pluginId": plugin_id, "entrypoint": str(entrypoint)}
 
     def status(self, plugin_id: str, user_id: str = "local-user") -> str:
         """Return the actionable lifecycle state used by assistant routing.
@@ -136,6 +184,8 @@ class PluginPlatformService:
         entry = self.catalog_source.get(plugin_id)
         if not self.installations.is_installed(plugin_id):
             return "not_installed"
+        if entry.id in _FIRST_PARTY_UI_PLUGIN_IDS:
+            return "connected"
         if entry.connector not in self.connectors:
             return "installed"
         try:

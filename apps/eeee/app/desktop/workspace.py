@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 
@@ -319,6 +322,10 @@ class WorkspaceWindow:
                 })
                 self.plugin_resume_button.setEnabled(status == "paused")
                 self.plugin_open_button.setEnabled(status == "connected")
+                self.plugin_open_button.setText(
+                    "열기" if str(plugin.get("id") or plugin.get("pluginId")) == "eeee-chat-history"
+                    else ("관리" if self.language == "ko" else "Manage")
+                )
                 self.plugin_disconnect_button.setEnabled(status in {"connected", "paused"})
                 self.plugin_uninstall_button.setEnabled(status not in {"not_installed", "disabled", "unknown"})
                 self.plugin_connect_button.setText(
@@ -360,6 +367,18 @@ class WorkspaceWindow:
                 plugin = self._selected_plugin
                 if plugin is None:
                     return
+                plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
+                if plugin_id == "eeee-chat-history":
+                    getter = getattr(self.client, "get_plugin_launch_info", None)
+                    if not callable(getter):
+                        self._set_plugin_hint("채팅 기록 플러그인을 열 수 없어." if self.language == "ko" else "The chat history plugin cannot be opened.")
+                        return
+                    self._submit_background(
+                        lambda: getter(plugin_id),
+                        self._launch_chat_history_plugin,
+                        lambda exc: self._set_plugin_hint(self._friendly_error(exc)),
+                    )
+                    return
                 permissions = plugin.get("approvedPermissions", [])
                 account = plugin.get("accountLabel")
                 self._set_plugin_hint(
@@ -367,6 +386,35 @@ class WorkspaceWindow:
                     if self.language == "ko"
                     else f"Connected account: {account or 'default'}\nApproved permissions: {', '.join(str(item) for item in permissions) if isinstance(permissions, list) else 'none'}"
                 )
+
+            def _launch_chat_history_plugin(self, payload: object):
+                if not isinstance(payload, dict):
+                    self._set_plugin_hint("플러그인 실행 정보가 올바르지 않아." if self.language == "ko" else "Plugin launch information is invalid.")
+                    return
+                entrypoint = str(payload.get("entrypoint", ""))
+                base_url = str(getattr(self.client, "base_url", ""))
+                if not entrypoint or not Path(entrypoint).is_file() or not base_url:
+                    self._set_plugin_hint("설치된 채팅 기록 플러그인을 찾을 수 없어." if self.language == "ko" else "The installed chat history plugin was not found.")
+                    return
+                command = (
+                    [sys.executable, "--chat-history-plugin"]
+                    if getattr(sys, "frozen", False)
+                    else [sys.executable, entrypoint]
+                ) + [
+                    "--api-url", base_url,
+                    "--conversation-id", "desktop-default",
+                ]
+                try:
+                    creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    subprocess.Popen(
+                        command,
+                        cwd=str(Path(entrypoint).parent),
+                        creationflags=creation_flags,
+                    )
+                except OSError as exc:
+                    self._set_plugin_hint(f"채팅 기록 플러그인을 실행하지 못했어: {exc}")
+                    return
+                self._set_plugin_hint("채팅 기록 플러그인을 열었어." if self.language == "ko" else "Chat history plugin opened.")
 
             def _set_plugin_hint(self, text: str):
                 if hasattr(self, "plugin_hint"):

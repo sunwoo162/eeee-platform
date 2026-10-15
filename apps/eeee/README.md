@@ -178,6 +178,27 @@ $env:QT_QPA_PLATFORM = "offscreen"
 python -m pytest -q
 ```
 
+The redesign keeps deterministic tests separate from local-runtime checks:
+
+```powershell
+$env:PYTHONPATH = "."
+python -m pytest tests -q
+python scripts/benchmark_core.py
+python scripts/smoke_restart_recovery.py
+python scripts/smoke_ollama.py
+```
+
+`benchmark_core.py` measures a warm Core process. `smoke_restart_recovery.py`
+must report an `interrupted` request after recovery. `smoke_ollama.py` returns
+exit code `0` only when the configured Ollama endpoint and model are ready; a
+missing server or model is reported as `blocked`/`unavailable`, never as a
+completed assistant response. A local Ollama installation is not required for
+the deterministic test suite.
+
+Core dependencies do not include PySide6, Node, Playwright, ISEOL, or
+OpenHands. PySide6 is only in the `desktop` extra, and optional project
+runtimes are lazy-loaded when a project execution is actually selected.
+
 The suite uses deterministic fakes for GitHub and agent execution. A warning from the installed Starlette/httpx compatibility layer may appear; it does not affect the test result.
 
 On Windows, if pytest cannot create its default temporary directory, provide a writable basetemp explicitly:

@@ -91,7 +91,7 @@ class ConversationStore:
         model: str | None = None,
         error_code: str | None = None,
     ) -> ConversationMessage:
-        if not content.strip():
+        if not content.strip() and role != MessageRole.ASSISTANT:
             raise ValueError("message content must not be empty")
         now = _now()
         with self.store._connect() as connection:
@@ -136,6 +136,38 @@ class ConversationStore:
             row = connection.execute(
                 "SELECT * FROM messages WHERE id = ?", (message_id,)
             ).fetchone()
+        return _message_from_row(row)
+
+    def update_message(
+        self,
+        message_id: str,
+        *,
+        content: str,
+        status: MessageStatus,
+        error_code: str | None = None,
+    ) -> ConversationMessage:
+        now = _now()
+        terminal = {
+            MessageStatus.COMPLETED,
+            MessageStatus.FAILED,
+            MessageStatus.CANCELLED,
+            MessageStatus.INTERRUPTED,
+        }
+        with self.store._connect() as connection:
+            connection.execute(
+                "UPDATE messages SET content = ?, status = ?, error_code = ?, completed_at = ? "
+                "WHERE id = ?",
+                (
+                    content, status.value, error_code,
+                    _iso(now) if status in terminal else None,
+                    message_id,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM messages WHERE id = ?", (message_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Message not found: {message_id}")
         return _message_from_row(row)
 
     def create_request(

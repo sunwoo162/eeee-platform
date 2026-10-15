@@ -17,6 +17,7 @@ MemoryKind = Literal[
     "user_preference",
 ]
 PromotionState = Literal["candidate", "active", "superseded", "revoked"]
+FeedbackRating = Literal["positive", "negative"]
 
 
 class MemoryStatus(str, Enum):
@@ -64,3 +65,18 @@ class MemoryRecord(BaseModel):
     superseded_by_id: str | None = None
     approved_by: str | None = None
     user_editable: bool = True
+
+
+class GrowthFeedback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    conversation_id: str = Field(min_length=1)
+    request_id: str | None = None
+    message_id: str = Field(min_length=1)
+    rating: FeedbackRating
+    correction: str | None = None
+    remember: bool = False
+    memory_id: str | None = None
+    actor: str = Field(min_length=1)
+    created_at: datetime

@@ -6,11 +6,12 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.service import ApiFlowService
 from app.assistant.models import CapabilitySelection
+from app.assistant.growth import GrowthFeedbackError, GrowthService
 from app.capabilities.status import canonical_plugin_status
 from app.assistant.service import AssistantRouteResult, AssistantService
 from app.assistant.background import JobTransitionError
@@ -20,7 +21,7 @@ from app.design.references import DesignService, ReferencePack
 from app.design.visual_verify import VisualReport
 from app.integrations.contracts import ProjectBriefV1, ProjectOutcomeReportV1
 from app.integrations.contracts import GithubReviewResultV1
-from app.memory.models import MemoryRecord, MemoryStatus
+from app.memory.models import GrowthFeedback, MemoryRecord, MemoryStatus
 from app.mobile.bridge import MobileBridge, MobileBridgeError
 from app.plugins.host import PluginHost
 from app.plugins.models import PluginHealth, PluginManifest
@@ -153,6 +154,27 @@ class MemoryCreatePayload(BaseModel):
     actor: str = Field(min_length=1)
     kind: str = "agent_routing_hint"
     scope: dict[str, object] = Field(default_factory=dict)
+
+    model_config = {"populate_by_name": True}
+
+
+class MemoryFeedbackPayload(BaseModel):
+    client_feedback_id: str = Field(alias="clientFeedbackId", min_length=1, max_length=200)
+    conversation_id: str = Field(alias="conversationId", min_length=1, max_length=160)
+    message_id: str = Field(alias="messageId", min_length=1, max_length=200)
+    request_id: str | None = Field(default=None, alias="requestId", max_length=200)
+    rating: Literal["positive", "negative"]
+    correction: str | None = Field(default=None, max_length=2_000)
+    remember: bool = False
+    actor: str = Field(default="user", min_length=1, max_length=120)
+
+    model_config = {"populate_by_name": True}
+
+
+class MemoryFeedbackResponse(BaseModel):
+    feedback_id: str = Field(alias="feedbackId")
+    feedback: GrowthFeedback
+    memory: MemoryRecord | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -1111,6 +1133,39 @@ def build_api_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/memory/feedback", response_model=MemoryFeedbackResponse)
+    def record_memory_feedback(payload: MemoryFeedbackPayload) -> JSONResponse:
+        already_exists = False
+        try:
+            flow.coordinator.memory.get_feedback(payload.client_feedback_id)
+            already_exists = True
+        except KeyError:
+            pass
+        try:
+            growth = GrowthService(flow.coordinator.memory)
+            feedback = growth.record_feedback(
+                client_feedback_id=payload.client_feedback_id,
+                conversation_id=payload.conversation_id,
+                request_id=payload.request_id,
+                message_id=payload.message_id,
+                rating=payload.rating,
+                correction=payload.correction,
+                remember=payload.remember,
+                actor=payload.actor,
+            )
+            memory = growth.memory_for_feedback(feedback)
+        except GrowthFeedbackError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        response = MemoryFeedbackResponse(
+            feedback_id=feedback.id,
+            feedback=feedback,
+            memory=memory,
+        )
+        return JSONResponse(
+            status_code=200 if already_exists else 201,
+            content=response.model_dump(mode="json", by_alias=True),
+        )
 
     @router.post("/memory", response_model=MemoryRecord, status_code=201)
     def create_explicit_memory(payload: MemoryCreatePayload) -> MemoryRecord:

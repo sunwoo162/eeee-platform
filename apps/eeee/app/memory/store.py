@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from app.memory.models import MemoryCandidate, MemoryRecord, MemoryStatus
+from app.memory.models import GrowthFeedback, MemoryCandidate, MemoryRecord, MemoryStatus
 
 
 _CONVERSATION_SECRET_PATTERN = re.compile(
@@ -76,10 +76,24 @@ class MemoryStore:
                     content TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS assistant_feedback (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    request_id TEXT,
+                    message_id TEXT NOT NULL,
+                    rating TEXT NOT NULL CHECK (rating IN ('positive', 'negative')),
+                    correction TEXT,
+                    remember INTEGER NOT NULL DEFAULT 0,
+                    memory_id TEXT,
+                    actor TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_memory_status ON memory_records (status);
                 CREATE INDEX IF NOT EXISTS idx_memory_project ON memory_records (source_project_id);
                 CREATE INDEX IF NOT EXISTS idx_conversation_turns_lookup
                     ON conversation_turns (conversation_id, id);
+                CREATE INDEX IF NOT EXISTS idx_assistant_feedback_conversation
+                    ON assistant_feedback (conversation_id, created_at);
                 """
             )
             columns = {
@@ -130,6 +144,125 @@ class MemoryStore:
             {"role": str(row["role"]), "content": str(row["content"])}
             for row in reversed(rows)
         ]
+
+    def save_feedback(
+        self,
+        *,
+        feedback_id: str,
+        conversation_id: str,
+        message_id: str,
+        rating: str,
+        correction: str | None = None,
+        remember: bool = False,
+        actor: str = "user",
+        request_id: str | None = None,
+    ) -> GrowthFeedback:
+        """Persist one user rating without promoting it to memory by default."""
+
+        feedback_id = feedback_id.strip()
+        conversation_id = conversation_id.strip()
+        message_id = message_id.strip()
+        actor = actor.strip()
+        request_id = request_id.strip() if request_id else None
+        correction = _redact_conversation_content(correction.strip()) if correction else None
+        if not feedback_id or not conversation_id or not message_id or not actor:
+            raise ValueError("feedback requires an id, conversation, message, and actor")
+        if rating not in {"positive", "negative"}:
+            raise ValueError("feedback rating must be positive or negative")
+        if correction == "":
+            correction = None
+        now = _now()
+        feedback = GrowthFeedback(
+            id=feedback_id,
+            conversation_id=conversation_id,
+            request_id=request_id,
+            message_id=message_id,
+            rating=rating,
+            correction=correction,
+            remember=remember,
+            actor=actor,
+            created_at=now,
+        )
+        with self._connect() as connection:
+            existing_row = connection.execute(
+                "SELECT * FROM assistant_feedback WHERE id = ?", (feedback_id,)
+            ).fetchone()
+            if existing_row is not None:
+                existing = _feedback_from_row(existing_row)
+                if any(
+                    getattr(existing, field) != getattr(feedback, field)
+                    for field in (
+                        "conversation_id",
+                        "request_id",
+                        "message_id",
+                        "rating",
+                        "correction",
+                        "remember",
+                        "actor",
+                    )
+                ):
+                    raise MemoryConflictError(
+                        f"Feedback {feedback_id} already exists with different content"
+                    )
+                return existing
+            connection.execute(
+                "INSERT INTO assistant_feedback "
+                "(id, conversation_id, request_id, message_id, rating, correction, "
+                "remember, memory_id, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    feedback.id,
+                    feedback.conversation_id,
+                    feedback.request_id,
+                    feedback.message_id,
+                    feedback.rating,
+                    feedback.correction,
+                    int(feedback.remember),
+                    None,
+                    feedback.actor,
+                    _iso(feedback.created_at),
+                ),
+            )
+        return feedback
+
+    def get_feedback(self, feedback_id: str) -> GrowthFeedback:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM assistant_feedback WHERE id = ?", (feedback_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Feedback not found: {feedback_id}")
+        return _feedback_from_row(row)
+
+    def attach_feedback_memory(self, feedback_id: str, memory_id: str) -> GrowthFeedback:
+        if not memory_id.strip():
+            raise ValueError("memory_id is required")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM assistant_feedback WHERE id = ?", (feedback_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Feedback not found: {feedback_id}")
+            current = _feedback_from_row(row)
+            if current.memory_id is not None and current.memory_id != memory_id:
+                raise MemoryConflictError(
+                    f"Feedback {feedback_id} already points to another memory"
+                )
+            connection.execute(
+                "UPDATE assistant_feedback SET memory_id = ? WHERE id = ?",
+                (memory_id, feedback_id),
+            )
+            return current.model_copy(update={"memory_id": memory_id})
+
+    def list_feedback(self, *, limit: int = 100) -> list[GrowthFeedback]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM assistant_feedback ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [_feedback_from_row(row) for row in rows]
 
     def save_candidate(self, candidate: MemoryCandidate) -> MemoryRecord:
         record = MemoryRecord(
@@ -235,6 +368,9 @@ class MemoryStore:
         actor: str,
         kind: str = "agent_routing_hint",
         scope: dict[str, Any] | None = None,
+        source_project_id: str | None = None,
+        evidence_ids: list[str] | None = None,
+        verification_ids: list[str] | None = None,
     ) -> MemoryRecord:
         if not content.strip() or not source_message_id.strip() or not actor.strip():
             raise ValueError("explicit memory requires content, source message, and actor")
@@ -244,9 +380,11 @@ class MemoryStore:
             kind=kind,
             content=content.strip(),
             scope=scope or {},
-            source_project_id=f"conversation:{source_message_id}",
+            source_project_id=source_project_id or f"conversation:{source_message_id}",
             source_type="conversation",
             source_message_id=source_message_id,
+            evidence_ids=evidence_ids or [],
+            verification_ids=verification_ids or [],
             confidence=1.0,
             status=MemoryStatus.ACTIVE,
             created_at=now,
@@ -535,6 +673,21 @@ def _record_from_row(row: sqlite3.Row) -> MemoryRecord:
         superseded_by_id=row["superseded_by_id"],
         approved_by=row["approved_by"],
         user_editable=bool(row["user_editable"]),
+    )
+
+
+def _feedback_from_row(row: sqlite3.Row) -> GrowthFeedback:
+    return GrowthFeedback(
+        id=row["id"],
+        conversation_id=row["conversation_id"],
+        request_id=row["request_id"],
+        message_id=row["message_id"],
+        rating=row["rating"],
+        correction=row["correction"],
+        remember=bool(row["remember"]),
+        memory_id=row["memory_id"],
+        actor=row["actor"],
+        created_at=row["created_at"],
     )
 
 

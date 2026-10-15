@@ -117,3 +117,23 @@ def test_memory_api_keeps_query_and_scope_filters_with_lifecycle_filters(tmp_pat
 
     assert response.status_code == 200
     assert [item["id"] for item in response.json()] == [web["id"]]
+
+
+def test_memory_feedback_can_be_explicitly_promoted_and_is_idempotent(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspace")
+    with TestClient(create_app(settings)) as client:
+        payload = {
+            "clientFeedbackId": "feedback-api-1",
+            "conversationId": "conversation-api-1",
+            "messageId": "message-api-1",
+            "rating": "negative",
+            "correction": "답변은 항상 결론부터 말해줘.",
+            "remember": True,
+        }
+        first = client.post("/api/memory/feedback", json=payload)
+        second = client.post("/api/memory/feedback", json=payload)
+
+    assert first.status_code == 201
+    assert second.status_code == 200
+    assert first.json()["feedbackId"] == second.json()["feedbackId"]
+    assert first.json()["memory"]["status"] == "active"

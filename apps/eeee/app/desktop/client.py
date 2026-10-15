@@ -1,4 +1,7 @@
-"""Small HTTP client used by the desktop shell."""
+"""HTTP clients used by the thin Desktop shell."""
+
+from collections.abc import Iterator
+import json
 
 import httpx
 from typing import Any
@@ -139,6 +142,76 @@ class PetApiClient:
 
     def get_health(self) -> dict[str, object]:
         return self._request("GET", "/health")
+
+    def get_runtime_status(self) -> dict[str, object]:
+        return self._request("GET", "/v1/runtime")
+
+    def create_conversation(self, title: str = "새 대화") -> dict[str, object]:
+        return self._request("POST", "/v1/conversations", json={"title": title})
+
+    def list_conversations(self, limit: int = 50) -> dict[str, object]:
+        return self._request("GET", "/v1/conversations", params={"limit": limit})
+
+    def get_conversation_messages(
+        self, conversation_id: str, *, after_sequence: int = 0, limit: int = 100
+    ) -> dict[str, object]:
+        return self._request(
+            "GET",
+            f"/v1/conversations/{conversation_id}/messages",
+            params={"afterSequence": after_sequence, "limit": limit},
+        )
+
+    def submit_turn(
+        self, conversation_id: str, content: str, client_message_id: str
+    ) -> dict[str, object]:
+        return self._request(
+            "POST",
+            f"/v1/conversations/{conversation_id}/turns",
+            json={"clientMessageId": client_message_id, "content": content},
+        )
+
+    def stream_request_events(
+        self,
+        request_id: str,
+        *,
+        after_sequence: int = 0,
+        timeout_seconds: float = 60.0,
+    ) -> Iterator[dict[str, object]]:
+        with httpx.stream(
+            "GET",
+            f"{self.base_url}/v1/requests/{request_id}/events",
+            params={
+                "afterSequence": after_sequence,
+                "timeoutSeconds": timeout_seconds,
+            },
+            timeout=timeout_seconds + 5,
+        ) as response:
+            if response.is_error:
+                try:
+                    detail = response.json().get("detail", response.text)
+                except ValueError:
+                    detail = response.text
+                raise ApiError(str(detail))
+            for line in response.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                try:
+                    event = json.loads(line[6:])
+                except json.JSONDecodeError as exc:
+                    raise ApiError("Core returned an invalid conversation event") from exc
+                if isinstance(event, dict):
+                    yield event
+
+    def cancel_request(self, request_id: str) -> dict[str, object]:
+        return self._request("POST", f"/v1/requests/{request_id}/cancel")
+
+    def retry_request(self, request_id: str) -> dict[str, object]:
+        return self._request("POST", f"/v1/requests/{request_id}/retry")
+
+    @staticmethod
+    def chatgpt_login_url() -> str:
+        """Return the browser login page used by the local ChatGPT runtime."""
+        return "https://chatgpt.com/auth/login"
 
     def get_desktop_state(self, project_id: str | None = None) -> dict[str, object]:
         kwargs: dict[str, object] = {}

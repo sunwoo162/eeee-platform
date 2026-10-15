@@ -145,6 +145,24 @@ def test_explicit_provider_config_is_wired_into_plugin_platform_and_oauth(monkey
     assert application.state.plugin_platform.status("gmail") == "not_installed"
 
 
+def test_gmail_builtin_profile_is_wired_from_operator_settings(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+        gmail_oauth_client_id="gmail-client",
+        gmail_oauth_client_secret="gmail-secret",
+    )
+
+    application = create_app(settings)
+
+    assert set(application.state.plugin_platform.connectors) == {"notion", "gmail"}
+    assert application.state.oauth_configs["gmail"].client_id == "gmail-client"
+    assert application.state.oauth_configs["gmail"].client_secret == "gmail-secret"
+
+
 def test_invalid_provider_config_fails_during_app_creation(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)

@@ -38,9 +38,9 @@ def _operation(method: str, path: str, permission: str) -> HttpOperation:
 
 _SPECS = {
     "gmail": ProviderSpec(
-        "gmail", "/profile", {
-            "mail.list": _operation("GET", "/messages", "mail.read"),
-            "mail.send": _operation("POST", "/messages/send", "mail.send"),
+        "gmail", "/users/me/profile", {
+            "mail.list": _operation("GET", "/users/me/messages", "mail.read"),
+            "mail.send": _operation("POST", "/users/me/messages/send", "mail.send"),
         },
     ),
     "google-calendar": ProviderSpec(
@@ -108,19 +108,55 @@ _SPECS = {
 INITIAL_PROVIDER_IDS = frozenset(_SPECS)
 
 
-def load_provider_configs(raw: str | None) -> dict[str, ProviderConfig]:
+def build_gmail_provider_config(client_id: str, client_secret: str | None = None) -> ProviderConfig:
+    """Build the first-party Gmail profile from operator-only client settings."""
+
+    return ProviderConfig(
+        baseUrl="https://gmail.googleapis.com/gmail/v1",
+        healthPath=_SPECS["gmail"].health_path,
+        oauth=OAuthProviderConfig(
+            authorizationEndpoint="https://accounts.google.com/o/oauth2/v2/auth",
+            tokenEndpoint="https://oauth2.googleapis.com/token",
+            clientId=client_id,
+            clientSecret=client_secret,
+            scopes=[
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.send",
+            ],
+            scopeByPermission={
+                "mail.read": ["https://www.googleapis.com/auth/gmail.readonly"],
+                "mail.send": ["https://www.googleapis.com/auth/gmail.send"],
+            },
+            authorizationParams={
+                "access_type": "offline",
+                "include_granted_scopes": "true",
+            },
+        ),
+    )
+
+
+def load_provider_configs(
+    raw: str | None,
+    *,
+    gmail_client_id: str | None = None,
+    gmail_client_secret: str | None = None,
+) -> dict[str, ProviderConfig]:
     if raw is None or not raw.strip():
-        return {}
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError("EEEE_PLUGIN_PROVIDER_CONFIG_JSON is invalid JSON") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("EEEE_PLUGIN_PROVIDER_CONFIG_JSON must be an object")
-    return {
-        plugin_id: ProviderConfig.model_validate(config)
-        for plugin_id, config in payload.items()
-    }
+        configs: dict[str, ProviderConfig] = {}
+    else:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("EEEE_PLUGIN_PROVIDER_CONFIG_JSON is invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("EEEE_PLUGIN_PROVIDER_CONFIG_JSON must be an object")
+        configs = {
+            plugin_id: ProviderConfig.model_validate(config)
+            for plugin_id, config in payload.items()
+        }
+    if gmail_client_id and "gmail" not in configs:
+        configs["gmail"] = build_gmail_provider_config(gmail_client_id, gmail_client_secret)
+    return configs
 
 
 def build_provider_connectors(

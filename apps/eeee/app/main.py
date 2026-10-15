@@ -82,7 +82,11 @@ def create_app(
     from app.agent.hybrid_runtime import HybridAssistantRuntime
 
     app_settings = settings or Settings()
-    configured_provider_configs = load_provider_configs(app_settings.plugin_provider_config_json)
+    configured_provider_configs = load_provider_configs(
+        app_settings.plugin_provider_config_json,
+        gmail_client_id=app_settings.gmail_oauth_client_id,
+        gmail_client_secret=app_settings.gmail_oauth_client_secret,
+    )
     provider_connectors = build_provider_connectors(configured_provider_configs)
     configured_oauth_configs: dict[str, OAuthProviderConfig] = {
         plugin_id: config.oauth

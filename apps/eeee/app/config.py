@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     notion_api_base: str = "https://api.notion.com"
     notion_api_version: str = "2026-03-11"
     plugin_provider_config_json: str | None = None
+    gmail_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("EEEE_GMAIL_OAUTH_CLIENT_ID", "GMAIL_OAUTH_CLIENT_ID"),
+    )
+    gmail_oauth_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("EEEE_GMAIL_OAUTH_CLIENT_SECRET", "GMAIL_OAUTH_CLIENT_SECRET"),
+    )
     iseol_bridge_token: str | None = None
     claim_latch_adapter_url: str | None = None
     claim_latch_auto_start: bool = True

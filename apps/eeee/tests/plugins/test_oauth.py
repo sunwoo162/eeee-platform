@@ -30,6 +30,7 @@ def _config() -> OAuthProviderConfig:
             "mail.read": ["provider.mail.read"],
             "mail.send": ["provider.mail.send"],
         },
+        authorizationParams={"access_type": "offline", "prompt": "consent"},
     )
 
 
@@ -63,6 +64,20 @@ def test_start_requests_only_scopes_for_approved_permissions() -> None:
     query = parse_qs(urlparse(result.authorization_url).query)
     assert query["scope"] == ["provider.mail.read"]
     assert "provider.mail.send" not in result.authorization_url
+
+
+def test_start_preserves_provider_authorization_parameters() -> None:
+    broker = OAuthBroker(FakeOAuthTransport(), ttl_seconds=300)
+
+    result = broker.start(
+        user_id="user-a", plugin_id="gmail", config=_config(),
+        redirect_uri="http://127.0.0.1:49152/oauth/callback",
+        approved_permissions={"mail.read"},
+    )
+
+    query = parse_qs(urlparse(result.authorization_url).query)
+    assert query["access_type"] == ["offline"]
+    assert query["prompt"] == ["consent"]
 
 
 def test_complete_exchanges_code_and_consumes_one_time_session() -> None:

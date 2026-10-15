@@ -37,6 +37,9 @@ class OAuthProviderConfig(BaseModel):
     scope_by_permission: dict[str, list[str]] = Field(
         default_factory=dict, alias="scopeByPermission"
     )
+    authorization_params: dict[str, str] = Field(
+        default_factory=dict, alias="authorizationParams"
+    )
 
     def scopes_for_permissions(self, approved_permissions: set[str] | frozenset[str]) -> list[str]:
         """Return only the provider scopes needed by the approved EEEE permissions."""
@@ -205,6 +208,7 @@ class OAuthBroker:
             account_label=account_label,
         )
         query = urlencode({
+            **config.authorization_params,
             "response_type": "code",
             "client_id": config.client_id,
             "redirect_uri": redirect_uri,

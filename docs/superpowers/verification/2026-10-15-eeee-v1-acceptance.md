@@ -30,8 +30,8 @@ external plugin connector authentication were verified in this environment.
 | Warm Core health benchmark | PASS | 10 warm `/health` requests, average `0.7426 ms` in this run |
 | Full deterministic suite | PASS | `870 passed, 1 skipped, 1 warning` in `135.05s` |
 | Web GPT active-brain policy | PASS | Default EEEE route uses Web GPT; missing Web GPT never silently falls back to Ollama |
-| Local Ollama live generation | BLOCKED | `scripts/smoke_ollama.py` runs successfully and reports `model_missing` with exit code `2`; no local model is configured |
-| Packaged Windows EXE | NOT RUN | PyInstaller is not installed in this environment; static package-boundary checks pass |
+| Local Ollama live generation | PASS (explicit legacy lane) | Explicit `qwen3:4b` status was `ready`; real stream returned 12 chunks and a Korean response. Default EEEE provider remains Web GPT; default `qwen2.5:7b` smoke remains `model_missing` and is not auto-selected |
+| Packaged Windows EXE | PASS | `scripts/build-desktop.ps1` produced `build/desktop/GleaveDesktop.exe`; packaged `--self-test` and `--gui-self-test` both exited `0`; a two-run restart cycle exited `0 → 0`; no secret-like files were bundled |
 | Live ChatGPT Web bridge | PASS | Dedicated browser bridge reported `ready`; direct `/chat` completed; EEEE API round trip emitted `request.accepted`, `message.started`, `message.delta`, and `message.completed`, then persisted user + assistant messages |
 | External plugin connector auth | NOT RUN | Plugin-specific OAuth/login sessions still require separate user-authorized verification |
 
@@ -56,10 +56,10 @@ truthful blocked result, not a test failure hidden as success.
 
 ## Remaining acceptance work
 
-1. Install/configure the intended Ollama model and verify real streaming,
-   timeout, cancel, retry, and Korean response quality.
-2. Build the Windows package with PyInstaller and run the packaged
-   `--self-test` plus a real idle/restart cycle.
+1. Verify timeout, cancel, retry, and Korean response quality for the
+   explicitly selected legacy Ollama lane if it is retained for debugging.
+2. Optional visual idle observation remains manual; the automated packaged
+   restart cycle and GUI import self-test are complete.
 3. Verify each external plugin connector's OAuth/login flow in a live user
    session. The ChatGPT Web bridge itself is verified below.
 
@@ -88,3 +88,31 @@ dedicated browser profile:
   `message.completed`, and two persisted messages;
 - response encoding check: stored Korean response `연결 확인됐어요!` preserved
   as UTF-8.
+
+The explicit legacy Ollama check also completed separately with
+`qwen3:4b`: status `ready`, 12 streamed chunks, and a Korean response. The
+default smoke command still reports `model_missing` because its configured
+legacy model is `qwen2.5:7b`; this does not affect the Web GPT primary route.
+
+## Post-live completion verification
+
+```powershell
+.\scripts\build-desktop.ps1
+.\scripts\verify-all.ps1 -Full
+Set-Location apps\eeee
+$env:PYTHONPATH='.'
+python -m pytest tests/plugins tests/capabilities tests/api/test_plugin_control_center.py tests/api/test_plugin_oauth_routes.py -q
+```
+
+Results:
+
+- Packaged Desktop: `GleaveDesktop.exe` built; `--self-test` and
+  `--gui-self-test` passed.
+- Unified verification: `870 passed, 1 skipped, 1 warning`; ISEOL 25 tests,
+  ClaimLatch adapter 5 tests, and Mobile 1 test passed.
+- Plugin lifecycle contracts: `65 passed, 1 warning`.
+- Generated package contained no `.env`, key, certificate, or secret-like
+  files.
+- Desktop persistence: `C:\Users\user\AppData\Local\Gleave\config.json`
+  stores Web GPT enabled/autostart settings and the dedicated profile path;
+  `connect_desktop_api()` loaded that profile and returned Core health `ok`.

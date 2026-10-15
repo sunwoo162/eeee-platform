@@ -11,9 +11,6 @@ from app.agent.local_runtime import LocalAgentRuntime, LocalConversationRuntime,
 from app.agent.local_model_discovery import discover_fast_local_model, discover_local_model
 from app.agent.ollama_runtime import OllamaRuntime
 from app.agent.protocol import AgentRuntime
-from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
-from app.agent.chatgpt_web_agent_runtime import ChatGptWebAgentRuntime
-from app.agent.hybrid_runtime import HybridAssistantRuntime
 from app.activity.store import ActivityLedger
 from app.agent.lazy_runtime import LazyAgentRuntime
 from app.api.service import ApiFlowService
@@ -79,6 +76,10 @@ def create_app(
     oauth_broker: OAuthBroker | None = None,
     oauth_configs: Mapping[str, OAuthProviderConfig] | None = None,
 ) -> FastAPI:
+    from app.agent.chatgpt_web_agent_runtime import ChatGptWebAgentRuntime
+    from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
+    from app.agent.hybrid_runtime import HybridAssistantRuntime
+
     app_settings = settings or Settings()
     configured_provider_configs = load_provider_configs(app_settings.plugin_provider_config_json)
     provider_connectors = build_provider_connectors(configured_provider_configs)
@@ -106,11 +107,6 @@ def create_app(
             conversation_store,
             max_context_tokens=app_settings.ollama_context_tokens,
         ),
-    )
-    core_lifecycle = CoreLifecycle(
-        store,
-        conversation_service,
-        lock=ProcessLock(app_settings.data_dir / "core.lock"),
     )
     core_lifecycle = CoreLifecycle(
         store,

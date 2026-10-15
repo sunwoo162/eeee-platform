@@ -19,6 +19,8 @@ _LEGACY_PLUGIN_STATUS: dict[str, CanonicalCapabilityStatus] = {
     "not_installed": "not_installed",
     "awaiting_authentication": "auth_required",
     "connected": "ready",
+    "connecting": "installed",
+    "paused": "degraded",
     "disabled": "degraded",
     "failed": "failed",
     "installed": "installed",

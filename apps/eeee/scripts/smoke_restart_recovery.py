@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import gc
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.conversations.models import MessageRole, MessageStatus, RequestState
 from app.conversations.service import ConversationService

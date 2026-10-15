@@ -6,8 +6,8 @@ Head at verification start: `08d99f0`
 Final verification head: `7f2182a`
 
 This record separates deterministic checks from environment-dependent checks.
-It is intentionally not a claim that the local Ollama model, packaged Windows
-executable, or live external connectors were verified in this environment.
+It does not claim that the local Ollama model, packaged Windows executable, or
+external plugin connector authentication were verified in this environment.
 
 ## Acceptance matrix
 
@@ -32,7 +32,8 @@ executable, or live external connectors were verified in this environment.
 | Web GPT active-brain policy | PASS | Default EEEE route uses Web GPT; missing Web GPT never silently falls back to Ollama |
 | Local Ollama live generation | BLOCKED | `scripts/smoke_ollama.py` runs successfully and reports `model_missing` with exit code `2`; no local model is configured |
 | Packaged Windows EXE | NOT RUN | PyInstaller is not installed in this environment; static package-boundary checks pass |
-| Live ChatGPT Web / connector auth | NOT RUN | Requires a live browser session and user authentication |
+| Live ChatGPT Web bridge | PASS | Dedicated browser bridge reported `ready`; direct `/chat` completed; EEEE API round trip emitted `request.accepted`, `message.started`, `message.delta`, and `message.completed`, then persisted user + assistant messages |
+| External plugin connector auth | NOT RUN | Plugin-specific OAuth/login sessions still require separate user-authorized verification |
 
 ## Commands run
 
@@ -59,8 +60,8 @@ truthful blocked result, not a test failure hidden as success.
    timeout, cancel, retry, and Korean response quality.
 2. Build the Windows package with PyInstaller and run the packaged
    `--self-test` plus a real idle/restart cycle.
-3. Verify the external ChatGPT Web bridge and connector authentication in a
-   live user session.
+3. Verify each external plugin connector's OAuth/login flow in a live user
+   session. The ChatGPT Web bridge itself is verified below.
 
 Those are environment-gated checks; the Core implementation does not mark
 them as complete until their evidence exists.
@@ -77,5 +78,13 @@ python scripts/smoke_ollama.py  # expected exit code 2 when no model is configur
 Result: `870 passed, 1 skipped, 1 warning in 135.05s (0:02:15)`.
 
 The remaining warning is the installed Starlette/httpx compatibility warning.
-No live Ollama model or ChatGPT Web bridge was claimed from this deterministic
-run.
+No live Ollama model was claimed from this deterministic run. The separate
+live Web GPT check completed successfully after the user authenticated the
+dedicated browser profile:
+
+- bridge health: `connected=true`, `browserStatus=ready`;
+- bridge smoke response: `status=completed` with a conversation reference;
+- EEEE round trip: runtime provider `chatgpt_web`, terminal events through
+  `message.completed`, and two persisted messages;
+- response encoding check: stored Korean response `연결 확인됐어요!` preserved
+  as UTF-8.

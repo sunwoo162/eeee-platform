@@ -5,7 +5,9 @@
 Proposed architecture approved at the approach level by the user on 2026-10-15.
 Implementation is intentionally not started by this document. The next gate is
 review of this written specification, followed by a separate implementation
-plan.
+plan. This document was supplemented after the architecture evaluation with
+explicit v1 scope, API, provider, persistence, lifecycle, and verification
+contracts so implementation does not depend on unstated assumptions.
 
 ## Decision
 
@@ -403,4 +405,223 @@ EEEE Core redesign is not complete until all of these are demonstrated:
 - adding a vector database before SQLite FTS5 is measured and found
   insufficient;
 - claiming that passing unit tests proves live AI or connector behavior.
+
+## 13. Pre-implementation contracts
+
+This section turns the architecture into implementation constraints. These
+contracts are intentionally concrete enough to test, but they do not commit
+the implementation to a particular Python module layout.
+
+### 13.1 EEEE v1 scope
+
+The first implementation milestone is a complete EEEE Core and Desktop Shell,
+not a complete plugin ecosystem. “Complete” for this milestone means:
+
+1. one local Core process can start, report health, and stop cleanly;
+2. Ollama is the only ordinary conversation provider;
+3. a user can create/select a conversation, send a message, receive a
+   streamed answer, retry a failed turn, and cancel an active turn;
+4. user and assistant messages survive Core and Desktop restarts;
+5. interrupted turns are visible and retryable;
+6. the Desktop Shell renders input, streaming, answer, error, and hidden
+   states without stealing focus or opening another application;
+7. the five-second bubble rule and content-driven layout work for short and
+   long messages;
+8. Core clearly reports that project execution, external connectors, or
+   memory actions are unavailable when their optional capability is not
+   installed.
+
+The following are explicitly after v1 Core stabilization: Chat History as a
+separate client, ISEOL project execution, ChatGPT Web automation, external
+provider connectors, public plugin discovery, and plugin-specific UI.
+
+### 13.2 Local Core API contract
+
+The loopback API is versioned under `/v1`. Every response includes a stable
+`requestId` when it belongs to a turn and an error object when it fails. The
+Core is the source of truth; clients must not infer completion from a socket
+disconnect or from a UI timer.
+
+Minimum endpoints:
+
+| Endpoint | Purpose | Required behavior |
+| --- | --- | --- |
+| `GET /health` | process liveness | returns Core version, schema version, and process status without requiring Ollama |
+| `GET /v1/runtime` | dependency readiness | reports Ollama/model readiness and optional capability states separately |
+| `POST /v1/conversations` | create a conversation | creates a durable conversation before returning its ID |
+| `GET /v1/conversations` | list conversations | cursor-paginated and bounded; never returns the entire transcript by default |
+| `GET /v1/conversations/{id}/messages` | read transcript | cursor-paginated with stable sequence ordering |
+| `POST /v1/conversations/{id}/turns` | submit a user turn | persists the user message before provider work and returns `requestId` immediately |
+| `GET /v1/requests/{requestId}/events` | stream lifecycle/output | replays events after a supplied cursor and then streams new events |
+| `POST /v1/requests/{requestId}/cancel` | cancel a turn | idempotent; a terminal turn remains unchanged |
+| `POST /v1/requests/{requestId}/retry` | retry a failed/interrupted turn | creates a new attempt linked to the original request; does not duplicate the user message |
+
+The turn request must contain `conversationId`, `clientMessageId`, and
+`content`. `clientMessageId` is unique within a conversation and makes a
+repeated Desktop submission idempotent. The response contains the durable
+user message ID, `requestId`, and the initial state.
+
+Event types are limited to a documented set: `request.accepted`,
+`request.classified`, `message.started`, `message.delta`, `message.completed`,
+`request.failed`, `request.cancelled`, `request.interrupted`, and
+`approval.required`. Each event has `eventId`, `requestId`, `sequence`,
+`createdAt`, and a JSON payload. `message.delta` is transient output attached
+to a still-open assistant message; the final `message.completed` event is the
+only event that marks the assistant message complete.
+
+Legal request transitions are:
+
+```text
+received -> persisted_user_message -> classified
+classified -> generating | awaiting_approval | failed
+generating -> streaming | failed | cancelled | interrupted
+streaming -> completed | failed | cancelled | interrupted
+awaiting_approval -> executing | cancelled | failed
+executing -> streaming | completed | failed | cancelled | interrupted
+```
+
+No client may create a `completed` request directly. An unknown event,
+duplicate event, or out-of-order event is ignored or rejected according to the
+event sequence and must not corrupt the transcript.
+
+### 13.3 Ollama provider policy
+
+The default provider is a local Ollama adapter configured by explicit local
+settings, for example `EEEE_OLLAMA_BASE_URL`, `EEEE_OLLAMA_MODEL`, connection
+timeout, generation timeout, and maximum context tokens. The exact setting
+names may change during implementation, but the behavior may not:
+
+- Core never silently falls back to ChatGPT Web, OpenHands, or a cloud model.
+- Missing Ollama, missing model, timeout, malformed output, and provider
+  shutdown each map to a distinct retryable error code.
+- `/v1/runtime` can report that Ollama is unavailable without making ordinary
+  Core health fail.
+- The adapter supports streaming deltas and a cancellation signal.
+- Context construction is bounded by token budget. It contains the current
+  conversation's recent messages plus explicitly eligible memory; it does not
+  load an unlimited transcript.
+- The model is asked for either normal answer text, a clarification, or a
+  typed action proposal. Arbitrary executable paths, plugin commands, and
+  provider credentials are never accepted as free-form model instructions.
+- The system prompt identifies EEEE as a local assistant and requires the
+  model to be honest about unavailable capabilities. It must not claim an
+  external action completed without a Core execution result.
+
+For v1, natural-language classification is deliberately hybrid: deterministic
+safety/capability checks run first, and Ollama handles ordinary conversation
+and ambiguous intent. This prevents an LLM outage from blocking harmless local
+health/status operations and prevents a model from bypassing approval policy.
+
+### 13.4 Persistence, migration, and restart contract
+
+The Core database is one SQLite file in an explicit per-user application data
+directory, not in the current working directory. On Windows the default is a
+stable EEEE data directory under `%LOCALAPPDATA%`, with an override for tests
+and portable installations. The path is shown in diagnostics and is never
+silently changed by restarting the app.
+
+Required persistence rules:
+
+- schema migrations are numbered, transactional, and recorded in a schema
+  table;
+- existing project/request/memory tables are preserved and migrated without a
+  destructive reset;
+- a unique constraint protects `(conversation_id, client_message_id)`;
+- message and event writes are committed before their API acknowledgement;
+- foreign keys, WAL mode, and a busy timeout are enabled consistently;
+- one Core instance owns the write connection; a process lock prevents a
+  second Core from starting against the same data directory;
+- read clients use bounded queries and do not hold the write transaction;
+- credentials and provider tokens are stored through the existing secure
+  credential path, never in transcript content or event payloads.
+
+On startup Core must:
+
+1. acquire the process lock and open the database;
+2. apply pending migrations;
+3. mark stale `generating`, `streaming`, or `executing` requests as
+   `interrupted` using a startup recovery timestamp;
+4. expose `/health` even if Ollama is unavailable;
+5. allow the Desktop Shell to reconnect and replay events from its last cursor.
+
+On clean shutdown Core stops accepting new turns, asks active providers to
+cancel, flushes event/message writes, and releases the lock. A forced process
+termination may leave a turn interrupted, but may not remove completed
+messages.
+
+### 13.5 Capability and plugin lifecycle contract
+
+Capabilities have independent readiness states: `not_installed`, `installed`,
+`auth_required`, `ready`, `degraded`, `running`, `failed`, and `removed`.
+`installed` never means `ready`, and `failed` never becomes a fake successful
+answer.
+
+Every optional capability declares a versioned manifest containing identity,
+entry point, protocol version, actions, input/output schemas, permissions,
+side-effect level, authentication method, health check, and memory scope.
+Core validates the manifest before registration. Installation and permission
+approval are explicit user actions. A capability worker starts only when an
+approved request selects it, and it is stopped after an idle policy or an
+explicit disconnect. Worker crashes become visible capability failures and
+do not crash the Core or Desktop Shell.
+
+The future Chat History plugin is a Core API client. It may maintain UI-local
+view state, but it may not start Ollama, create a second transcript database,
+or bypass Core permissions. This keeps “separate plugin” behavior without
+duplicating the expensive runtime.
+
+### 13.6 Desktop/Core boundary and user-flow rules
+
+Desktop communicates only through the versioned Core API. It does not import
+Ollama, SQLite repositories, provider clients, or project execution classes.
+When Core is unavailable, Desktop shows a reconnect/error state and keeps the
+typed draft locally until the user retries; it does not silently switch to a
+different AI provider.
+
+The shell must satisfy these user-flow cases:
+
+- click the cat: reveal the input bubble without opening or focusing another
+  application;
+- submit with Enter: show the submitted text centered, then transition to the
+  streamed answer without leaving the old input text underneath it;
+- click an answer bubble: start a fresh input turn and reset the timer rather
+  than merely extending the old answer;
+- receive a long answer: measure the text block first, add asset padding, and
+  grow the bubble to the measured content; no fixed one-line or 24px text
+  area;
+- while streaming, focused, or awaiting approval: do not auto-hide;
+- after a terminal answer or terminal error: hide only the bubble after five
+  seconds, while preserving the transcript and request state;
+- when the user is working in another application: do not raise a browser,
+  terminal, ChatGPT Web, or project window automatically.
+
+### 13.7 Verification matrix
+
+Completion reports must identify the evidence class for every result:
+
+| Evidence class | Minimum v1 proof |
+| --- | --- |
+| deterministic | Core unit/API/state/migration tests pass from the documented working directory |
+| local runtime | real Ollama model streams a short answer, a long answer, a timeout, a cancellation, and an unavailable-model error |
+| persistence | stop/restart preserves conversations, rejects duplicate client submissions, and recovers an interrupted turn |
+| packaged desktop | packaged Shell starts without optional runtimes, reconnects to Core, and does not spawn Chrome/Node/ISEOL at idle |
+| UI acceptance | input centering, answer centering, long-text growth, answer-click-to-new-input, five-second hide, focus preservation, and draft recovery are manually or browser/Qt tested |
+| capability boundary | an uninstalled optional capability reports its actual state and never returns a fabricated completed result |
+
+The old `450 passed, 1 skipped, 1 warning` result remains useful but belongs
+only to the deterministic evidence class. It must not be reported as proof of
+the local model, packaged application, live connector, or full user flow.
+
+### 13.8 Definition of done for the first implementation plan
+
+The implementation plan may begin only when it maps every item below to a
+concrete task and test:
+
+- API schemas and event transitions are written down;
+- Ollama configuration and error behavior are fixed;
+- database path, migration order, indexes, and recovery rules are fixed;
+- v1 capability scope is fixed;
+- Core/Shell import and process boundaries are enforceable;
+- the verification matrix has named commands or repeatable manual steps;
+- no legacy endpoint is removed without a compatibility or migration note.
 

@@ -12,11 +12,19 @@ from pathlib import Path
 from threading import Lock
 import time
 from typing import Any
+from dataclasses import dataclass
 
 import httpx
 
 from app.agent.protocol import AgentRequest, AgentResult
 from app.assistant.profile import load_profile
+
+
+@dataclass(frozen=True)
+class ChatGptWebStatus:
+    status: str
+    error_code: str | None = None
+    message: str | None = None
 
 
 class ChatGptWebRuntime:
@@ -42,6 +50,38 @@ class ChatGptWebRuntime:
         self.conversation_ref: str | None = (
             None if fresh_conversation else self._load_conversation_ref()
         )
+
+    def status(self) -> ChatGptWebStatus:
+        """Check the bridge health without opening a browser or sending a prompt."""
+
+        try:
+            response = httpx.get(f"{self.base_url}/health", timeout=0.5)
+            if response.status_code >= 400:
+                return ChatGptWebStatus(
+                    status="unavailable",
+                    error_code="chatgpt_web_unavailable",
+                    message=f"ChatGPT Web bridge returned HTTP {response.status_code}",
+                )
+            payload = response.json()
+            ready = (
+                isinstance(payload, dict)
+                and payload.get("service") == "chatgpt-web-bridge"
+                and payload.get("connected") is True
+                and payload.get("browserStatus") == "ready"
+            )
+            if ready:
+                return ChatGptWebStatus(status="ready")
+            return ChatGptWebStatus(
+                status="unavailable",
+                error_code="chatgpt_web_not_ready",
+                message="ChatGPT Web bridge is not connected",
+            )
+        except (httpx.HTTPError, OSError, ValueError, json.JSONDecodeError) as exc:
+            return ChatGptWebStatus(
+                status="unavailable",
+                error_code="chatgpt_web_unavailable",
+                message=str(exc) or "ChatGPT Web bridge is unavailable",
+            )
 
     def run(self, request: AgentRequest) -> AgentResult:
         # The bridge conversation reference is mutable shared state.  A

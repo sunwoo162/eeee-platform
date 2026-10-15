@@ -54,3 +54,18 @@ def test_explicit_memory_keeps_provenance_and_supports_edit_and_revoke(tmp_path:
     assert edited.source_message_id == "message-1"
     assert revoked.status is MemoryStatus.REVOKED
     assert memory.search("수정된") == []
+
+
+def test_explicit_memory_redacts_credentials_before_persistence(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path / "memory.sqlite3")
+    memory.init()
+
+    saved = memory.save_explicit_memory(
+        "Authorization: Bearer direct-secret cookie=direct-cookie",
+        source_message_id="message-1",
+        actor="user",
+    )
+
+    assert "direct-secret" not in saved.content
+    assert "direct-cookie" not in saved.content
+    assert "direct-secret" not in memory.get(saved.id).content

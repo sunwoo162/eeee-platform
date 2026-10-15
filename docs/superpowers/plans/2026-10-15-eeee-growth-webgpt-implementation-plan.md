@@ -14,7 +14,7 @@
 
 - Preserve existing project, request, conversation, and memory data.
 - Never silently convert provider failure into a completed assistant answer.
-- `auto` may select Web GPT only when it is configured; explicit `chatgpt_web` never falls back to Ollama.
+- `auto` may select Web GPT only when the bridge is ready; explicit `chatgpt_web` never falls back to Ollama.
 - Raw conversation and unapproved feedback never become active memory.
 - Do not modify Chat History plugin or ISEOL internals in this plan.
 - Keep provider credentials out of messages, events, and feedback payloads.

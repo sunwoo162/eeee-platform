@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.conversations.store import ConversationStore
 from app.memory.models import MemoryStatus
 from app.memory.store import MemoryStore
@@ -39,7 +41,7 @@ class ConversationContextBuilder:
             memory_budget = max_characters // 2
             memory_used = 0
             for memory in memories:
-                if memory.status is not MemoryStatus.ACTIVE:
+                if not _is_usable_memory(memory, conversation_id, automatic=not memory_ids):
                     continue
                 item = {
                     "role": "system",
@@ -72,3 +74,19 @@ class ConversationContextBuilder:
         # Memories are only sourced from active records. Raw conversation turns
         # remain transcript context and are never promoted implicitly.
         return memory_items + list(reversed(transcript))
+
+
+def _is_usable_memory(memory, conversation_id: str, *, automatic: bool) -> bool:
+    if memory.status is not MemoryStatus.ACTIVE:
+        return False
+    if memory.expires_at is not None:
+        expires_at = memory.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            return False
+    if automatic:
+        scoped_conversation = memory.scope.get("conversationId")
+        if scoped_conversation is not None and scoped_conversation != conversation_id:
+            return False
+    return True

@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.conversations.context import ConversationContextBuilder
@@ -113,3 +114,46 @@ def test_explicit_memory_ids_remain_authoritative(tmp_path: Path) -> None:
     contents = [item["content"] for item in context]
     assert any(selected.content in content for content in contents)
     assert not any(other.content in content for content in contents)
+
+
+def test_automatic_context_does_not_cross_conversation_memory_scope(tmp_path: Path) -> None:
+    conversations, memory = _stores(tmp_path)
+    first = conversations.create_conversation()
+    second = conversations.create_conversation()
+    memory.save_explicit_memory(
+        "첫 대화 전용 비밀 규칙",
+        source_message_id="message-first",
+        actor="user",
+        scope={"conversationId": first.id},
+    )
+    memory.save_explicit_memory(
+        "두 번째 대화 규칙",
+        source_message_id="message-second",
+        actor="user",
+        scope={"conversationId": second.id},
+    )
+
+    context = ConversationContextBuilder(conversations, memory_store=memory).build(second.id)
+
+    contents = [item["content"] for item in context]
+    assert any("두 번째 대화 규칙" in content for content in contents)
+    assert not any("첫 대화 전용 비밀 규칙" in content for content in contents)
+
+
+def test_explicit_memory_ids_skip_expired_records(tmp_path: Path) -> None:
+    conversations, memory = _stores(tmp_path)
+    conversation = conversations.create_conversation()
+    saved = memory.save_explicit_memory(
+        "만료된 규칙", source_message_id="message-expired", actor="user"
+    )
+    with memory._connect() as connection:
+        connection.execute(
+            "UPDATE memory_records SET expires_at = ? WHERE id = ?",
+            ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(), saved.id),
+        )
+
+    context = ConversationContextBuilder(conversations, memory_store=memory).build(
+        conversation.id, memory_ids=[saved.id]
+    )
+
+    assert not any("만료된 규칙" in item["content"] for item in context)

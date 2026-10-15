@@ -16,6 +16,25 @@ _CONVERSATION_SECRET_PATTERN = re.compile(
     r"((?:api[_ -]?key|apikey|access[_ -]?token|refresh[_ -]?token|password|비밀번호|토큰|secret)\s*[:=]\s*)[^\s,]+",
     re.IGNORECASE,
 )
+_AUTHORIZATION_PATTERN = re.compile(
+    r"(\b(?:authorization|proxy-authorization)\s*:\s*bearer\s+)[^\s,;]+",
+    re.IGNORECASE,
+)
+_COOKIE_PATTERN = re.compile(
+    r"(\b(?:cookie|set-cookie)\s*[:=]\s*)[^\s,;]+",
+    re.IGNORECASE,
+)
+_JSON_SECRET_PATTERN = re.compile(
+    r"([\"']?(?:api[_ -]?key|apikey|access[_ -]?token|refresh[_ -]?token|password|secret)[\"']?\s*:\s*[\"'])[^\"']+([\"'])",
+    re.IGNORECASE,
+)
+_JWT_PATTERN = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"
+)
+_PRIVATE_KEY_PATTERN = re.compile(
+    r"-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]+?-----END [^-\r\n]*PRIVATE KEY-----",
+    re.IGNORECASE,
+)
 
 
 class MemoryConflictError(RuntimeError):
@@ -184,6 +203,7 @@ class MemoryStore:
             created_at=now,
         )
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             existing_row = connection.execute(
                 "SELECT * FROM assistant_feedback WHERE id = ?", (feedback_id,)
             ).fetchone()
@@ -224,6 +244,98 @@ class MemoryStore:
             )
         return feedback
 
+    def save_feedback_with_memory(
+        self,
+        *,
+        feedback_id: str,
+        conversation_id: str,
+        message_id: str,
+        rating: str,
+        correction: str,
+        actor: str = "user",
+        request_id: str | None = None,
+    ) -> GrowthFeedback:
+        """Atomically write feedback and its explicit active memory."""
+
+        feedback = _build_feedback(
+            feedback_id=feedback_id,
+            conversation_id=conversation_id,
+            request_id=request_id,
+            message_id=message_id,
+            rating=rating,
+            correction=correction,
+            remember=True,
+            actor=actor,
+        )
+        if feedback.correction is None:
+            raise ValueError("explicit memory promotion requires correction")
+        memory_id = f"feedback-memory-{hashlib.sha256(feedback.id.encode('utf-8')).hexdigest()[:32]}"
+        memory = MemoryRecord(
+            id=memory_id,
+            kind="agent_routing_hint",
+            content=feedback.correction,
+            scope={"conversationId": feedback.conversation_id, "source": "feedback"},
+            source_project_id=f"conversation:{feedback.conversation_id}",
+            source_type="conversation",
+            source_message_id=feedback.message_id,
+            evidence_ids=[feedback.id],
+            verification_ids=[feedback.id],
+            confidence=1.0,
+            status=MemoryStatus.ACTIVE,
+            created_at=feedback.created_at,
+            last_verified_at=feedback.created_at,
+            approved_by=feedback.actor,
+            user_editable=True,
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing_row = connection.execute(
+                "SELECT * FROM assistant_feedback WHERE id = ?", (feedback.id,)
+            ).fetchone()
+            if existing_row is not None:
+                existing = _feedback_from_row(existing_row)
+                _ensure_same_feedback(existing, feedback)
+                if existing.memory_id is not None:
+                    return existing
+            else:
+                connection.execute(
+                    "INSERT INTO assistant_feedback "
+                    "(id, conversation_id, request_id, message_id, rating, correction, "
+                    "remember, memory_id, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        feedback.id,
+                        feedback.conversation_id,
+                        feedback.request_id,
+                        feedback.message_id,
+                        feedback.rating,
+                        feedback.correction,
+                        1,
+                        memory.id,
+                        feedback.actor,
+                        _iso(feedback.created_at),
+                    ),
+                )
+            memory_row = connection.execute(
+                "SELECT * FROM memory_records WHERE id = ?", (memory.id,)
+            ).fetchone()
+            if memory_row is None:
+                _insert_record(connection, memory)
+                _append_event(connection, memory.id, "explicit_created", feedback.actor, {
+                    "sourceMessageId": feedback.message_id,
+                    "feedbackId": feedback.id,
+                })
+            else:
+                existing_memory = _record_from_row(memory_row)
+                if existing_memory.content != memory.content:
+                    raise MemoryConflictError(
+                        f"Feedback {feedback.id} already maps to different memory content"
+                    )
+            connection.execute(
+                "UPDATE assistant_feedback SET memory_id = ? WHERE id = ?",
+                (memory.id, feedback.id),
+            )
+        return feedback.model_copy(update={"memory_id": memory.id})
+
     def get_feedback(self, feedback_id: str) -> GrowthFeedback:
         with self._connect() as connection:
             row = connection.execute(
@@ -244,6 +356,11 @@ class MemoryStore:
             if row is None:
                 raise KeyError(f"Feedback not found: {feedback_id}")
             current = _feedback_from_row(row)
+            memory_row = connection.execute(
+                "SELECT id FROM memory_records WHERE id = ?", (memory_id,)
+            ).fetchone()
+            if memory_row is None:
+                raise KeyError(f"Memory not found: {memory_id}")
             if current.memory_id is not None and current.memory_id != memory_id:
                 raise MemoryConflictError(
                     f"Feedback {feedback_id} already points to another memory"
@@ -378,7 +495,7 @@ class MemoryStore:
         record = MemoryRecord(
             id=f"memory-{uuid4().hex}",
             kind=kind,
-            content=content.strip(),
+            content=_redact_conversation_content(content.strip()),
             scope=scope or {},
             source_project_id=source_project_id or f"conversation:{source_message_id}",
             source_type="conversation",
@@ -676,6 +793,60 @@ def _record_from_row(row: sqlite3.Row) -> MemoryRecord:
     )
 
 
+def _build_feedback(
+    *,
+    feedback_id: str,
+    conversation_id: str,
+    request_id: str | None,
+    message_id: str,
+    rating: str,
+    correction: str | None,
+    remember: bool,
+    actor: str,
+) -> GrowthFeedback:
+    feedback_id = feedback_id.strip()
+    conversation_id = conversation_id.strip()
+    message_id = message_id.strip()
+    actor = actor.strip()
+    request_id = request_id.strip() if request_id else None
+    correction = _redact_conversation_content(correction.strip()) if correction else None
+    if not feedback_id or not conversation_id or not message_id or not actor:
+        raise ValueError("feedback requires an id, conversation, message, and actor")
+    if rating not in {"positive", "negative"}:
+        raise ValueError("feedback rating must be positive or negative")
+    if correction == "":
+        correction = None
+    return GrowthFeedback(
+        id=feedback_id,
+        conversation_id=conversation_id,
+        request_id=request_id,
+        message_id=message_id,
+        rating=rating,
+        correction=correction,
+        remember=remember,
+        actor=actor,
+        created_at=_now(),
+    )
+
+
+def _ensure_same_feedback(existing: GrowthFeedback, incoming: GrowthFeedback) -> None:
+    if any(
+        getattr(existing, field) != getattr(incoming, field)
+        for field in (
+            "conversation_id",
+            "request_id",
+            "message_id",
+            "rating",
+            "correction",
+            "remember",
+            "actor",
+        )
+    ):
+        raise MemoryConflictError(
+            f"Feedback {incoming.id} already exists with different content"
+        )
+
+
 def _feedback_from_row(row: sqlite3.Row) -> GrowthFeedback:
     return GrowthFeedback(
         id=row["id"],
@@ -716,4 +887,9 @@ def _iso(value: datetime) -> str:
 
 
 def _redact_conversation_content(content: str) -> str:
-    return _CONVERSATION_SECRET_PATTERN.sub(r"\1[민감정보]", content)
+    redacted = _PRIVATE_KEY_PATTERN.sub("[민감정보]", content)
+    redacted = _AUTHORIZATION_PATTERN.sub(r"\1[민감정보]", redacted)
+    redacted = _COOKIE_PATTERN.sub(r"\1[민감정보]", redacted)
+    redacted = _JSON_SECRET_PATTERN.sub(r"\1[민감정보]\2", redacted)
+    redacted = _JWT_PATTERN.sub("[민감정보]", redacted)
+    return _CONVERSATION_SECRET_PATTERN.sub(r"\1[민감정보]", redacted)

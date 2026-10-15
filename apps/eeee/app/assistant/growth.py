@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.conversations.store import ConversationStore
 from app.memory.models import GrowthFeedback, MemoryRecord
 from app.memory.store import MemoryConflictError, MemoryStore
 
@@ -11,8 +12,13 @@ class GrowthFeedbackError(ValueError):
 class GrowthService:
     """Turn explicit user feedback into durable, user-editable assistant memory."""
 
-    def __init__(self, memory: MemoryStore) -> None:
+    def __init__(
+        self,
+        memory: MemoryStore,
+        conversation_store: ConversationStore | None = None,
+    ) -> None:
         self.memory = memory
+        self.conversation_store = conversation_store
         self.memory.init()
 
     def record_feedback(
@@ -31,37 +37,31 @@ class GrowthService:
             raise GrowthFeedbackError(
                 "remember=true requires a non-empty correction"
             )
+        self._validate_source(
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
         try:
-            feedback = self.memory.save_feedback(
+            if remember:
+                return self.memory.save_feedback_with_memory(
+                    feedback_id=client_feedback_id,
+                    conversation_id=conversation_id,
+                    request_id=request_id,
+                    message_id=message_id,
+                    rating=rating,
+                    correction=correction or "",
+                    actor=actor,
+                )
+            return self.memory.save_feedback(
                 feedback_id=client_feedback_id,
                 conversation_id=conversation_id,
                 request_id=request_id,
                 message_id=message_id,
                 rating=rating,
                 correction=correction,
-                remember=remember,
+                remember=False,
                 actor=actor,
             )
-            if not remember or feedback.memory_id is not None:
-                return feedback
-            if feedback.correction is None:
-                raise GrowthFeedbackError(
-                    "remember=true requires a non-empty correction"
-                )
-            memory = self.memory.save_explicit_memory(
-                feedback.correction,
-                source_message_id=feedback.message_id,
-                source_project_id=f"conversation:{feedback.conversation_id}",
-                actor=feedback.actor,
-                kind="agent_routing_hint",
-                scope={
-                    "conversationId": feedback.conversation_id,
-                    "source": "feedback",
-                },
-                evidence_ids=[feedback.id],
-                verification_ids=[feedback.id],
-            )
-            return self.memory.attach_feedback_memory(feedback.id, memory.id)
         except GrowthFeedbackError:
             raise
         except (KeyError, MemoryConflictError, ValueError) as exc:
@@ -76,3 +76,14 @@ class GrowthService:
             raise GrowthFeedbackError(
                 f"Feedback {feedback.id} points to missing memory {feedback.memory_id}"
             ) from exc
+
+    def _validate_source(self, *, conversation_id: str, message_id: str) -> None:
+        if self.conversation_store is None:
+            return
+        try:
+            conversation = self.conversation_store.get_conversation(conversation_id)
+            message = self.conversation_store.get_message(message_id)
+        except KeyError as exc:
+            raise GrowthFeedbackError("feedback source conversation or message was not found") from exc
+        if message.conversation_id != conversation.id:
+            raise GrowthFeedbackError("feedback message does not belong to the conversation")

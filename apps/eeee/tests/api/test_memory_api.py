@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.conversations.models import MessageRole, MessageStatus
 from app.integrations.contracts import ProjectOutcomeReportV1
 from app.main import create_app
 
@@ -121,11 +122,20 @@ def test_memory_api_keeps_query_and_scope_filters_with_lifecycle_filters(tmp_pat
 
 def test_memory_feedback_can_be_explicitly_promoted_and_is_idempotent(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspace")
-    with TestClient(create_app(settings)) as client:
+    application = create_app(settings)
+    with TestClient(application) as client:
+        conversation = client.post("/v1/conversations", json={}).json()
+        message = application.state.conversation_store.add_message(
+            conversation["id"],
+            role=MessageRole.USER,
+            content="기억으로 승격할 원문",
+            status=MessageStatus.COMPLETED,
+            client_message_id="memory-feedback-source",
+        )
         payload = {
             "clientFeedbackId": "feedback-api-1",
-            "conversationId": "conversation-api-1",
-            "messageId": "message-api-1",
+            "conversationId": conversation["id"],
+            "messageId": message.id,
             "rating": "negative",
             "correction": "답변은 항상 결론부터 말해줘.",
             "remember": True,
@@ -137,3 +147,24 @@ def test_memory_feedback_can_be_explicitly_promoted_and_is_idempotent(tmp_path) 
     assert second.status_code == 200
     assert first.json()["feedbackId"] == second.json()["feedbackId"]
     assert first.json()["memory"]["status"] == "active"
+
+
+def test_memory_feedback_rejects_unknown_source_message(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspace")
+    application = create_app(settings)
+    with TestClient(application) as client:
+        conversation = client.post("/v1/conversations", json={}).json()
+        response = client.post(
+            "/api/memory/feedback",
+            json={
+                "clientFeedbackId": "feedback-missing-source",
+                "conversationId": conversation["id"],
+                "messageId": "message-does-not-exist",
+                "rating": "negative",
+                "correction": "이 기억은 저장되면 안 돼.",
+                "remember": True,
+            },
+        )
+
+    assert response.status_code == 400
+    assert "source" in response.json()["detail"]

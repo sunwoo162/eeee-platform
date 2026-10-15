@@ -59,6 +59,7 @@ def build_conversation_router(
     ollama: OllamaRuntime,
     provider_selection: ConversationProviderSelection | None = None,
     web_configured: bool = False,
+    web_status: str | None = None,
     lifecycle: Any | None = None,
     capabilities: Any | None = None,
     core_version: str = "0.1.0",
@@ -106,7 +107,7 @@ def build_conversation_router(
                     "model": provider_status.model,
                 },
                 "chatgpt_web": {
-                    "status": "configured" if web_configured else "not_configured",
+                    "status": web_status or ("configured" if web_configured else "not_configured"),
                 },
             },
             "capabilities": capabilities.snapshot() if capabilities is not None else {},

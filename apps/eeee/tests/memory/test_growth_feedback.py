@@ -87,3 +87,45 @@ def test_duplicate_feedback_is_idempotent(tmp_path: Path) -> None:
 
     assert second == first
     assert len(store.list_records(status=MemoryStatus.ACTIVE)) == 1
+
+
+def test_feedback_and_promoted_memory_redact_common_credentials(tmp_path: Path) -> None:
+    service, store = _service(tmp_path)
+    secret_text = (
+        'Authorization: Bearer bearer-secret cookie=session-secret '
+        '"api_key": "json-secret" eyJhbGciOiJIUzI1NiJ9.payload.signature'
+    )
+
+    feedback = service.record_feedback(
+        client_feedback_id="feedback-secret",
+        conversation_id="conversation-1",
+        message_id="message-1",
+        rating="negative",
+        correction=secret_text,
+        remember=True,
+    )
+
+    stored_feedback = store.get_feedback(feedback.id)
+    stored_memory = store.get(feedback.memory_id)
+    for stored in (stored_feedback.correction or "", stored_memory.content):
+        assert "bearer-secret" not in stored
+        assert "session-secret" not in stored
+        assert "json-secret" not in stored
+        assert "eyJhbGciOiJIUzI1NiJ9.payload.signature" not in stored
+
+
+def test_feedback_promotion_is_retry_safe_after_existing_feedback_row(tmp_path: Path) -> None:
+    service, store = _service(tmp_path)
+    kwargs = {
+        "client_feedback_id": "feedback-retry",
+        "conversation_id": "conversation-1",
+        "message_id": "message-1",
+        "rating": "negative",
+        "correction": "재시도해도 기억은 하나만 만들어야 해.",
+        "remember": True,
+    }
+    first = service.record_feedback(**kwargs)
+    second = service.record_feedback(**kwargs)
+
+    assert second.memory_id == first.memory_id
+    assert len(store.list_records(status=MemoryStatus.ACTIVE)) == 1

@@ -1,5 +1,6 @@
 from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,11 @@ class FakeWebRuntime:
     def run(self, request: AgentRequest) -> AgentResult:
         self.requests.append(request)
         return self.result
+
+
+class UnreadyWebRuntime(FakeWebRuntime):
+    def status(self):
+        return SimpleNamespace(status="unavailable", model=None, message="bridge down")
 
 
 class FakeOllama:
@@ -87,3 +93,45 @@ def test_auto_reports_unavailable_when_no_provider_is_configured() -> None:
         list(selection.provider.stream([]))
 
     assert error.value.code == "assistant_provider_unavailable"
+
+
+def test_auto_falls_back_to_ollama_when_web_bridge_is_not_ready() -> None:
+    selection = build_conversation_provider(
+        "auto",
+        ollama=FakeOllama(),
+        web=UnreadyWebRuntime(),
+    )
+
+    assert selection.provider_name == "ollama"
+    assert selection.reason == "auto_selected_local_provider"
+
+
+def test_explicit_web_reports_unready_bridge_without_fallback() -> None:
+    selection = build_conversation_provider(
+        "chatgpt_web",
+        ollama=FakeOllama(),
+        web=UnreadyWebRuntime(),
+    )
+
+    assert selection.provider_name == "chatgpt_web"
+    assert selection.status == "unavailable"
+    with pytest.raises(ConversationProviderError) as error:
+        list(selection.provider.stream([]))
+    assert error.value.code == "chatgpt_web_unavailable"
+
+
+def test_web_prompt_respects_provider_context_budget() -> None:
+    web = FakeWebRuntime()
+    selection = build_conversation_provider(
+        "chatgpt_web",
+        ollama=FakeOllama(),
+        web=web,
+        context_tokens=32,
+    )
+
+    list(selection.provider.stream([
+        {"role": "user", "content": "오래된 내용 " * 100},
+        {"role": "user", "content": "마지막 요청"},
+    ]))
+
+    assert len(web.requests[0].prompt) <= 128

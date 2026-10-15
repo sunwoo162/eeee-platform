@@ -15,6 +15,7 @@ from app.assistant.growth import GrowthFeedbackError, GrowthService
 from app.capabilities.status import canonical_plugin_status
 from app.assistant.service import AssistantRouteResult, AssistantService
 from app.assistant.background import JobTransitionError
+from app.conversations.store import ConversationStore
 from app.coordinator.service import Coordinator
 from app.domain.errors import ApprovalError
 from app.design.references import DesignService, ReferencePack
@@ -1030,6 +1031,7 @@ def build_api_router(
     evidence: ProjectEvidenceService | None = None,
     *,
     iseol_bridge_token: str | None = None,
+    conversation_store: ConversationStore | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -1134,7 +1136,12 @@ def build_api_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @router.post("/memory/feedback", response_model=MemoryFeedbackResponse)
+    @router.post(
+        "/memory/feedback",
+        response_model=MemoryFeedbackResponse,
+        status_code=201,
+        responses={200: {"model": MemoryFeedbackResponse}},
+    )
     def record_memory_feedback(payload: MemoryFeedbackPayload) -> JSONResponse:
         already_exists = False
         try:
@@ -1143,7 +1150,7 @@ def build_api_router(
         except KeyError:
             pass
         try:
-            growth = GrowthService(flow.coordinator.memory)
+            growth = GrowthService(flow.coordinator.memory, conversation_store)
             feedback = growth.record_feedback(
                 client_feedback_id=payload.client_feedback_id,
                 conversation_id=payload.conversation_id,

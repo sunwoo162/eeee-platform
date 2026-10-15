@@ -108,6 +108,7 @@ def create_app(
             profile_path=app_settings.assistant_profile_path,
             conversation_state_path=app_settings.data_dir / "chatgpt-assistant-conversation.json",
         )
+    web_runtime_status = web_runtime.status() if web_runtime is not None else None
     provider_selection = None
     selected_conversation_provider = conversation_provider
     if selected_conversation_provider is None:
@@ -116,6 +117,8 @@ def create_app(
             ollama=ollama_runtime,
             web=web_runtime,
             workspace=app_settings.workspace_root,
+            context_tokens=app_settings.ollama_context_tokens,
+            web_status=web_runtime_status,
         )
         selected_conversation_provider = provider_selection.provider
     conversation_store = ConversationStore(store)
@@ -437,6 +440,7 @@ def create_app(
             ollama=ollama_runtime,
             provider_selection=provider_selection,
             web_configured=web_runtime is not None,
+            web_status=getattr(web_runtime_status, "status", None),
             lifecycle=core_lifecycle,
             capabilities=capability_manager,
             schema_version=1,
@@ -461,6 +465,7 @@ def create_app(
             api_flow,
             project_evidence,
             iseol_bridge_token=app_settings.iseol_bridge_token,
+            conversation_store=conversation_store,
         )
     )
     application.include_router(build_design_router(design_service))

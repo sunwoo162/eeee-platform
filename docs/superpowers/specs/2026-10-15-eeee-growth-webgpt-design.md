@@ -51,7 +51,7 @@ raw conversation이나 단순 긍정 피드백은 자동으로 active memory가 
 
 ## Provider 규칙
 
-- `auto`: Web GPT configured → Web GPT, otherwise Ollama.
+- `auto`: Web GPT bridge ready → Web GPT, otherwise Ollama.
 - `chatgpt_web`: Web GPT configured가 아니면 `chatgpt_web_unavailable` 실패.
 - `ollama`: Ollama만 사용.
 - provider 오류는 assistant의 `completed` message가 되지 않는다.
@@ -71,7 +71,7 @@ raw conversation이나 단순 긍정 피드백은 자동으로 active memory가 
 
 ## 완료 기준
 
-1. Web GPT configured 환경에서 일반 대화가 Ollama가 아니라 Web GPT adapter를
+1. Web GPT bridge가 ready인 환경에서 일반 대화가 Ollama가 아니라 Web GPT adapter를
    선택한다.
 2. Web GPT를 명시했는데 연결이 없으면 fallback 없이 오류 상태로 끝난다.
 3. 기존 Ollama 경로와 테스트 provider가 계속 동작한다.

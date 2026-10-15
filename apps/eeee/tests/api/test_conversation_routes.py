@@ -1,4 +1,5 @@
 import json
+import time
 
 from fastapi.testclient import TestClient
 
@@ -34,7 +35,11 @@ def test_v1_conversation_turn_persists_and_replays_events(tmp_path) -> None:
     request_id = submitted.json()["requestId"]
     assert submitted.json()["state"] in {"persisted_user_message", "completed"}
 
+    deadline = time.monotonic() + 2
     events = client.get(f"/v1/requests/{request_id}/events")
+    while time.monotonic() < deadline and "message.completed" not in events.text:
+        time.sleep(0.01)
+        events = client.get(f"/v1/requests/{request_id}/events")
     assert events.status_code == 200
     event_lines = [
         json.loads(line.removeprefix("data: "))

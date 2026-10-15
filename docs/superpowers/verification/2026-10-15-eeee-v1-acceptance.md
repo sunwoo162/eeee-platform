@@ -3,7 +3,7 @@
 Date: 2026-10-15
 Branch: `codex/eeee-main-sync`
 Head at verification start: `08d99f0`
-Final verification head: `pending — review hardening in progress`
+Final verification head: `d39ce9e`
 
 This record separates deterministic checks from environment-dependent checks.
 It does not claim that external plugin connector authentication was verified in

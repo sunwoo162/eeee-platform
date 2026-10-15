@@ -4,6 +4,7 @@ from app.config import Settings
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.agent.lazy_runtime import LazyAgentRuntime
 
 
 def test_health_returns_ok():
@@ -21,6 +22,13 @@ def test_health_returns_ok():
             "engineVersion": "0.3.86",
         },
     }
+
+
+def test_default_application_defers_optional_runtime_until_project_execution():
+    application = create_app()
+
+    assert isinstance(application.state.api_flow.runtime, LazyAgentRuntime)
+    assert application.state.api_flow.runtime.loaded is False
 
 
 def test_execution_settings_require_supported_mode_and_positive_limits():

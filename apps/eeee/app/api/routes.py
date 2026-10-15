@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from app.api.service import ApiFlowService
 from app.assistant.models import CapabilitySelection
+from app.capabilities.status import canonical_plugin_status
 from app.assistant.service import AssistantRouteResult, AssistantService
 from app.assistant.background import JobTransitionError
 from app.coordinator.service import Coordinator
@@ -214,6 +215,7 @@ def _plugin_registration_payload(registration: object) -> dict[str, object]:
         "manifestVersion": registration.manifest_version,
         "manifest": registration.manifest,
         "status": registration.status,
+        "capabilityStatus": canonical_plugin_status(registration.status),
         "createdAt": registration.created_at,
         "updatedAt": registration.updated_at,
     }

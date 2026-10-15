@@ -57,6 +57,7 @@ def build_conversation_router(
     *,
     ollama: OllamaRuntime,
     lifecycle: Any | None = None,
+    capabilities: Any | None = None,
     core_version: str = "0.1.0",
     schema_version: int = 1,
 ) -> APIRouter:
@@ -84,7 +85,7 @@ def build_conversation_router(
                 "errorCode": provider_status.error_code,
                 "message": provider_status.message,
             },
-            "capabilities": {},
+            "capabilities": capabilities.snapshot() if capabilities is not None else {},
         }
 
     @router.post("/conversations", status_code=status.HTTP_201_CREATED)

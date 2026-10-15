@@ -161,7 +161,7 @@ class PluginHost:
 
     def _health_probe(self, manifest: PluginManifest) -> PluginHealth:
         try:
-            self._call(manifest, "__health__", {}, manifest.id)
+            self._call(manifest, manifest.health.action, {}, manifest.id)
         except Exception as exc:
             return PluginHealth(plugin_id=manifest.id, status="unhealthy", reason=str(exc))
         return PluginHealth(plugin_id=manifest.id, status="healthy", reason="health check passed")

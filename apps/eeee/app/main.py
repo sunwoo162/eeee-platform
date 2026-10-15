@@ -1,5 +1,4 @@
 from contextlib import asynccontextmanager
-from contextlib import asynccontextmanager
 from pathlib import Path
 from collections.abc import Mapping
 
@@ -11,12 +10,12 @@ from fastapi.staticfiles import StaticFiles
 from app.agent.local_runtime import LocalAgentRuntime, LocalConversationRuntime, OllamaBackend
 from app.agent.local_model_discovery import discover_fast_local_model, discover_local_model
 from app.agent.ollama_runtime import OllamaRuntime
-from app.agent.openhands_runtime import OpenHandsRuntime
 from app.agent.protocol import AgentRuntime
 from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
 from app.agent.chatgpt_web_agent_runtime import ChatGptWebAgentRuntime
 from app.agent.hybrid_runtime import HybridAssistantRuntime
 from app.activity.store import ActivityLedger
+from app.agent.lazy_runtime import LazyAgentRuntime
 from app.api.service import ApiFlowService
 from app.api.routes import (
     build_api_router,
@@ -33,13 +32,12 @@ from app.assistant.registry import build_default_registry
 from app.assistant.router import CapabilityRouter
 from app.assistant.background import BackgroundExecutionSupervisor
 from app.assistant.service import AssistantService
+from app.capabilities.registry import build_core_capability_manager
 from app.config import Settings
 from app.conversations.context import ConversationContextBuilder
 from app.conversations.service import ConversationProvider, ConversationService
 from app.conversations.store import ConversationStore
 from app.contracts import LocalEventBus
-from app.core.lifecycle import CoreLifecycle
-from app.core.lock import ProcessLock
 from app.core.lifecycle import CoreLifecycle
 from app.core.lock import ProcessLock
 from app.coordinator.service import Coordinator
@@ -170,6 +168,7 @@ def create_app(
         build_default_registry(),
         plugin_status_provider=plugin_platform.status,
     )
+    capability_manager = build_core_capability_manager()
     configured_connectors = {
         connector_id
         for connector_id, configured in {
@@ -251,7 +250,7 @@ def create_app(
     application.state.conversation_store = conversation_store
     application.state.conversation_service = conversation_service
     application.state.core_lifecycle = core_lifecycle
-
+    application.state.capabilities = capability_manager
     @asynccontextmanager
     async def application_lifespan(_application: FastAPI):
         core_lifecycle.start()
@@ -288,11 +287,7 @@ def create_app(
             command_timeout_seconds=app_settings.command_timeout_seconds,
         )
     if runtime is None:
-        runtime = OpenHandsRuntime(
-            api_key=app_settings.llm_api_key,
-            model=app_settings.llm_model,
-            base_url=app_settings.llm_base_url,
-        )
+        runtime = LazyAgentRuntime(lambda: _build_optional_runtime(app_settings))
     web_runtime: AgentRuntime | None = None
     if app_settings.chatgpt_web_enabled and app_settings.chatgpt_web_bridge_url:
         web_runtime = ChatGptWebRuntime(
@@ -430,6 +425,7 @@ def create_app(
             conversation_service,
             ollama=ollama_runtime,
             lifecycle=core_lifecycle,
+            capabilities=capability_manager,
             schema_version=1,
         )
     )
@@ -481,6 +477,54 @@ def _current_project_revision(store: SQLiteStore):
             return None
 
     return resolve
+
+
+def _build_optional_runtime(settings: Settings):
+    if settings.agent_runtime == "openhands":
+        return _build_openhands_runtime(settings)
+    if settings.iseol_control_plane_url:
+        return _build_iseol_runtime(settings)
+    return _build_chatgpt_web_runtime(settings)
+
+
+def _build_openhands_runtime(settings: Settings):
+    from app.agent.openhands_runtime import OpenHandsRuntime
+
+    return OpenHandsRuntime(
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+        base_url=settings.llm_base_url,
+    )
+
+
+def _build_iseol_runtime(settings: Settings):
+    from app.agent.iseol_runtime import IseolProjectRuntime, IseolProjectRuntimeConfig
+
+    return IseolProjectRuntime(IseolProjectRuntimeConfig(
+        base_url=settings.iseol_control_plane_url or "",
+        token=settings.iseol_control_plane_token,
+        timeout_seconds=settings.chatgpt_web_timeout_seconds,
+    ))
+
+
+def _build_chatgpt_web_runtime(settings: Settings):
+    from app.agent.chatgpt_web_runtime import (
+        ChatGptWebRuntime,
+        default_chatgpt_web_runtime_config,
+    )
+
+    repository_root = Path(__file__).resolve().parents[3]
+    bridge_script = settings.iseol_bridge_script
+    if not bridge_script.is_absolute():
+        bridge_script = repository_root / bridge_script
+    return ChatGptWebRuntime(
+        config=default_chatgpt_web_runtime_config(
+            bridge_script=bridge_script,
+            node_executable=settings.iseol_node_executable,
+            working_directory=bridge_script.parent.parent,
+            timeout_seconds=settings.chatgpt_web_timeout_seconds,
+        )
+    )
 
 
 def run(host: str = "127.0.0.1", port: int = 8000) -> None:

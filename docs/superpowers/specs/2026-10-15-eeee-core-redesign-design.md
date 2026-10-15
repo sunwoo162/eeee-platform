@@ -51,9 +51,9 @@ that the current product is complete.
 
 ### 1.2 What is not actually complete
 
-- The default EEEE runtime is `chatgpt_web`, not Ollama. There is no Ollama
-  adapter in `apps/eeee/app/agent`; local Ollama adapters exist elsewhere in
-  ISEOL but are not the default EEEE conversation path.
+- The default EEEE runtime is `chatgpt_web`, not Ollama. The Ollama adapter is
+  retained only as an explicit migration/debug override and is not the active
+  EEEE conversation path or an automatic fallback.
 - Routing is deterministic trigger-phrase matching. It is not a general
   natural-language assistant router.
 - `personal-secretary`, `knowledge-documents`, and `presence` are planning
@@ -373,8 +373,9 @@ EEEE Core redesign is not complete until all of these are demonstrated:
 
 1. A clean Core installation starts without ISEOL, ChatGPT Web, Node, Chrome,
    PySide6, or plugins.
-2. Ollama is the default local conversation provider when a local model is
-   configured; unavailable Ollama produces an explicit waiting/error state.
+2. Web GPT is the active conversation provider; if it is not connected EEEE
+   produces an explicit waiting/error state and never silently switches to
+   Ollama.
 3. A user message is persisted before generation and the assistant response is
    persisted after completion or failure.
 4. Restarting Core preserves the transcript and marks interrupted turns
@@ -418,7 +419,8 @@ The first implementation milestone is a complete EEEE Core and Desktop Shell,
 not a complete plugin ecosystem. “Complete” for this milestone means:
 
 1. one local Core process can start, report health, and stop cleanly;
-2. Ollama is the only ordinary conversation provider;
+2. Web GPT is the ordinary conversation provider; Ollama is available only
+   through an explicit migration/debug setting;
 3. a user can create/select a conversation, send a message, receive a
    streamed answer, retry a failed turn, and cancel an active turn;
 4. user and assistant messages survive Core and Desktop restarts;
@@ -484,18 +486,19 @@ No client may create a `completed` request directly. An unknown event,
 duplicate event, or out-of-order event is ignored or rejected according to the
 event sequence and must not corrupt the transcript.
 
-### 13.3 Ollama provider policy
+### 13.3 Web GPT provider policy
 
-The default provider is a local Ollama adapter configured by explicit local
-settings, for example `EEEE_OLLAMA_BASE_URL`, `EEEE_OLLAMA_MODEL`, connection
-timeout, generation timeout, and maximum context tokens. The exact setting
-names may change during implementation, but the behavior may not:
+The default provider is the ChatGPT Web adapter configured by the local bridge.
+The legacy Ollama adapter may be selected explicitly for migration/debugging;
+the exact setting names may change during implementation, but the behavior may
+not:
 
-- Core never silently falls back to ChatGPT Web, OpenHands, or a cloud model.
-- Missing Ollama, missing model, timeout, malformed output, and provider
-  shutdown each map to a distinct retryable error code.
-- `/v1/runtime` can report that Ollama is unavailable without making ordinary
-  Core health fail.
+- Core never silently falls back from Web GPT to Ollama, OpenHands, or another
+  cloud model.
+- Missing Web GPT bridge, authentication, timeout, malformed output, and
+  provider shutdown each map to a distinct retryable error code.
+- `/v1/runtime` can report that Web GPT is unavailable without making ordinary
+  Core health fail; Ollama readiness is diagnostic unless explicitly selected.
 - The adapter supports streaming deltas and a cancellation signal.
 - Context construction is bounded by token budget. It contains the current
   conversation's recent messages plus explicitly eligible memory; it does not

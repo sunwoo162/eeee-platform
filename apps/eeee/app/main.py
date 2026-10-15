@@ -285,18 +285,21 @@ def create_app(
             assistant_supervisor.shutdown()
 
     application.router.lifespan_context = application_lifespan
-    local_model_name = app_settings.local_model or discover_local_model(
-        app_settings.local_model_base_url, timeout_seconds=0.2
-    )
-    # Ordinary conversation must remain responsive. A stronger model can be
-    # selected explicitly with local_conversation_model, while auto-discovery
-    # uses the installed fast model so a greeting never waits on a long
-    # reasoning trace or silently falls into the Web/GPT lane.
-    local_conversation_model_name = (
-        app_settings.local_conversation_model
-        or discover_fast_local_model(app_settings.local_model_base_url, timeout_seconds=0.2)
-        or local_model_name
-    )
+    # Ollama is an explicit migration/debug lane only. EEEE's active
+    # assistant brain is Web GPT; it must not silently discover or start a
+    # local model and then route ordinary conversation through it.
+    ollama_legacy_enabled = app_settings.conversation_provider == "ollama"
+    local_model_name = None
+    local_conversation_model_name = None
+    if ollama_legacy_enabled:
+        local_model_name = app_settings.local_model or discover_local_model(
+            app_settings.local_model_base_url, timeout_seconds=0.2
+        )
+        local_conversation_model_name = (
+            app_settings.local_conversation_model
+            or discover_fast_local_model(app_settings.local_model_base_url, timeout_seconds=0.2)
+            or local_model_name
+        )
     runtime = agent_runtime
     if runtime is None and local_model_name:
         runtime = LocalAgentRuntime(
@@ -308,15 +311,20 @@ def create_app(
             workspace_root=app_settings.workspace_root,
             command_timeout_seconds=app_settings.command_timeout_seconds,
         )
+    web_agent_runtime = None
+    if runtime is None and web_runtime is not None:
+        web_agent_runtime = ChatGptWebAgentRuntime(
+            web_runtime=web_runtime,
+            workspace_root=app_settings.workspace_root,
+            timeout_seconds=app_settings.chatgpt_web_agent_timeout_seconds,
+        )
+        runtime = web_agent_runtime
     if runtime is None:
-        runtime = LazyAgentRuntime(lambda: _build_optional_runtime(app_settings))
-    # The general conversation lane must never inherit the project/ISEOL
-    # runtime.  ``agent_runtime`` is the project execution provider and may
-    # be ChatGPT Web; reusing it here silently turns a greeting into a slow
-    # browser request.  Keep ordinary conversation on the local fast model
-    # whenever one is installed, and let HybridAssistantRuntime use Web only
-    # for complex/tool requests or as a truthful fallback.
-    if local_conversation_model_name:
+        runtime = HybridAssistantRuntime(web=None)
+    # Ordinary EEEE conversation is Web GPT-backed. The local lane can only
+    # be opted into explicitly for migration/debugging and is never selected
+    # by default or by a missing Web bridge fallback.
+    if ollama_legacy_enabled and local_conversation_model_name:
         local_general_runtime = LocalConversationRuntime(
             backend=OllamaBackend(
                 model=local_conversation_model_name,
@@ -325,32 +333,14 @@ def create_app(
             )
         )
     else:
-        # Do not present the canned emergency lane as a real AI provider. If
-        # the local model is absent, the hybrid runtime must either use the
-        # explicitly connected Web lane or report the provider as unavailable.
-        # This prevents every casual message from becoming the same fake reply.
         local_general_runtime = None
-    # Keep the general assistant lane separate from the ISEOL project runtime.
-    # Even with no configured provider, use the hybrid facade so the user gets
-    # a truthful unavailable response instead of an OpenHands/API-key error.
+    active_web_runtime = None if ollama_legacy_enabled else web_runtime
     general_runtime: AgentRuntime = HybridAssistantRuntime(
-        local=local_general_runtime, web=web_runtime
+        local=local_general_runtime, web=active_web_runtime
     )
-    if agent_runtime is not None:
-        project_agent_runtime = agent_runtime
-    elif web_runtime is not None:
-        project_agent_runtime = ChatGptWebAgentRuntime(
-            web_runtime=web_runtime,
-            workspace_root=app_settings.workspace_root,
-            timeout_seconds=app_settings.chatgpt_web_agent_timeout_seconds,
-        )
-    else:
-        # Do not route an unconfigured installation through OpenHands. That
-        # leaks an implementation-specific LLM_API_KEY error after a project
-        # job has already been accepted. The local model is intentionally
-        # reserved for ordinary conversation; projects belong to the
-        # GPT-Web/ISEOL lane and must fail closed when that lane is absent.
-        project_agent_runtime = HybridAssistantRuntime(web=web_runtime)
+    # The same Web GPT brain handles project execution when connected. The
+    # injected runtime remains available for tests and controlled embedding.
+    project_agent_runtime = runtime
     api_flow = ApiFlowService(
         coordinator,
         store,

@@ -41,7 +41,7 @@ def test_unconfigured_project_lane_uses_provider_neutral_runtime(monkeypatch, tm
     assert "LLM_API_KEY" not in (result.error or "")
 
 
-def test_app_auto_discovers_an_installed_local_model_for_general_chat(monkeypatch, tmp_path):
+def test_app_does_not_wire_discovered_ollama_into_general_chat(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "app.main.discover_local_model",
         lambda url, **kwargs: "qwen2.5:3b",
@@ -52,10 +52,10 @@ def test_app_auto_discovers_an_installed_local_model_for_general_chat(monkeypatc
     application = create_app(settings)
     handler = application.state.kernel.router.registry.resolve("general-conversation").handler
 
-    assert handler.runtime.local.backend.model == "qwen2.5:3b"
+    assert handler.runtime.local is None
 
 
-def test_general_chat_uses_the_responsive_local_model_without_changing_project_model(monkeypatch, tmp_path):
+def test_general_chat_does_not_create_a_local_model_even_when_one_is_installed(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: "qwen3:4b")
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: "qwen2.5:1.5b")
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
@@ -63,11 +63,11 @@ def test_general_chat_uses_the_responsive_local_model_without_changing_project_m
     application = create_app(settings)
     general = application.state.kernel.router.registry.resolve("general-conversation").handler
 
-    assert general.runtime.local.backend.model == "qwen2.5:1.5b"
-    assert application.state.api_flow.runtime.backend.model == "qwen3:4b"
+    assert general.runtime.local is None
+    assert application.state.api_flow.runtime.__class__.__name__ == "HybridAssistantRuntime"
 
 
-def test_general_chat_stays_local_when_project_runtime_is_injected(monkeypatch, tmp_path):
+def test_general_chat_uses_web_when_project_runtime_is_injected(monkeypatch, tmp_path):
     """A configured ISEOL/project runtime must not hijack ordinary chat."""
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: "qwen3:4b")
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: "qwen2.5:1.5b")
@@ -85,29 +85,16 @@ def test_general_chat_stays_local_when_project_runtime_is_injected(monkeypatch, 
     application = create_app(settings, agent_runtime=ProjectRuntime())
     general = application.state.kernel.router.registry.resolve("general-conversation").handler
 
-    assert general.runtime.local.backend.model == "qwen2.5:1.5b"
+    assert general.runtime.local is None
     assert general.runtime.web is not None
 
 
-def test_general_route_exposes_local_provider(monkeypatch, tmp_path):
+def test_general_route_does_not_expose_local_provider(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: "qwen3:4b")
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: "qwen2.5:1.5b")
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
 
-    class ConversationRuntime:
-        def run(self, request):
-            from app.agent.protocol import AgentResult
-
-            return AgentResult(
-                status="completed",
-                summary="로컬 응답",
-                events=[{"type": "local.conversation", "provider": "ollama"}],
-                changed_files=[], test_commands=[], error=None,
-            )
-
     application = create_app(settings)
-    handler = application.state.kernel.router.registry.resolve("general-conversation").handler
-    handler.runtime.local = ConversationRuntime()
 
     from fastapi.testclient import TestClient
 
@@ -115,7 +102,8 @@ def test_general_route_exposes_local_provider(monkeypatch, tmp_path):
         response = client.post("/api/assistant/route", json={"text": "안녕"})
 
     assert response.status_code == 200
-    assert response.json()["provider"] == "local"
+    assert response.json()["status"] == "blocked"
+    assert response.json()["provider"] in {None, "unavailable"}
 
 
 def test_connected_chatgpt_web_is_primary_when_no_real_local_model_exists(monkeypatch, tmp_path):

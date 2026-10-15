@@ -10,9 +10,10 @@ EEEE를 고정 응답형 로컬 챗봇이 아니라, Web GPT를 판단 provider�
 
 이번 변경은 EEEE Core에 한정한다.
 
-- 일반 대화 provider를 `auto`, `chatgpt_web`, `ollama` 중 하나로 선택한다.
-- `auto`에서는 Web GPT가 연결되어 있으면 Web GPT를 우선하고, 없을 때만
-  Ollama를 사용한다.
+- 일반 대화 provider는 기본적으로 `chatgpt_web`을 사용한다.
+- 기존 설치 호환을 위해 `auto`를 허용하지만, Web GPT만 선택하며 Ollama로
+  자동 전환하지 않는다.
+- `ollama`는 마이그레이션/진단 목적의 명시적 예외 경로로만 남긴다.
 - 명시적으로 `chatgpt_web`을 선택했는데 연결되지 않으면 Ollama로 몰래
   전환하지 않고 명확한 오류를 반환한다.
 - Web GPT, Ollama, 테스트 provider가 모두 같은 `ConversationProvider` 계약을
@@ -51,7 +52,7 @@ raw conversation이나 단순 긍정 피드백은 자동으로 active memory가 
 
 ## Provider 규칙
 
-- `auto`: Web GPT bridge ready → Web GPT, otherwise Ollama.
+- `auto`: Web GPT bridge ready → Web GPT, otherwise `chatgpt_web_unavailable`.
 - `chatgpt_web`: Web GPT configured가 아니면 `chatgpt_web_unavailable` 실패.
 - `ollama`: Ollama만 사용.
 - provider 오류는 assistant의 `completed` message가 되지 않는다.
@@ -71,10 +72,9 @@ raw conversation이나 단순 긍정 피드백은 자동으로 active memory가 
 
 ## 완료 기준
 
-1. Web GPT bridge가 ready인 환경에서 일반 대화가 Ollama가 아니라 Web GPT adapter를
-   선택한다.
-2. Web GPT를 명시했는데 연결이 없으면 fallback 없이 오류 상태로 끝난다.
-3. 기존 Ollama 경로와 테스트 provider가 계속 동작한다.
+1. Web GPT bridge가 ready인 환경에서 일반 대화가 Web GPT adapter를 선택한다.
+2. Web GPT를 명시했는데 연결이 없으면 Ollama fallback 없이 오류 상태로 끝난다.
+3. 기존 Ollama adapter는 명시적 migration/debug 경로에서만 동작한다.
 4. 빈 provider 응답이 completed로 저장되지 않는다.
 5. active memory가 다음 대화에 포함되고, revoked/superseded memory는 포함되지
    않는다.

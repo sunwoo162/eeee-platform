@@ -4,7 +4,7 @@
 
 **Goal:** Make EEEE a growth-oriented assistant core with explicit Web GPT selection, verified provider failure handling, and user-approved memory feedback.
 
-**Architecture:** Keep one EEEE Core and SQLite source of truth. A provider selector chooses Web GPT or Ollama for the existing conversation service; the desktop and future Chat History plugin continue to consume the same API. Growth signals are stored separately from active memory, and only explicit user-approved feedback is promoted into bounded conversation context.
+**Architecture:** Keep one EEEE Core and SQLite source of truth. Web GPT is the active EEEE conversation brain; Ollama remains only as an explicit migration/debug adapter and is never an automatic fallback. The desktop and future Chat History plugin continue to consume the same API. Growth signals are stored separately from active memory, and only explicit user-approved feedback is promoted into bounded conversation context.
 
 **Tech Stack:** Python 3.12, FastAPI, Pydantic, SQLite, pytest, existing `ChatGptWebRuntime` and `OllamaRuntime` adapters.
 
@@ -14,7 +14,7 @@
 
 - Preserve existing project, request, conversation, and memory data.
 - Never silently convert provider failure into a completed assistant answer.
-- `auto` may select Web GPT only when the bridge is ready; explicit `chatgpt_web` never falls back to Ollama.
+- `auto` may select Web GPT only when the bridge is ready; it reports Web GPT unavailable instead of falling back to Ollama.
 - Raw conversation and unapproved feedback never become active memory.
 - Do not modify Chat History plugin or ISEOL internals in this plan.
 - Keep provider credentials out of messages, events, and feedback payloads.

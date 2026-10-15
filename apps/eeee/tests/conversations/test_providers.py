@@ -92,18 +92,22 @@ def test_auto_reports_unavailable_when_no_provider_is_configured() -> None:
     with pytest.raises(ConversationProviderError) as error:
         list(selection.provider.stream([]))
 
-    assert error.value.code == "assistant_provider_unavailable"
+    assert error.value.code == "chatgpt_web_unavailable"
 
 
-def test_auto_falls_back_to_ollama_when_web_bridge_is_not_ready() -> None:
+def test_auto_does_not_fall_back_to_ollama_when_web_bridge_is_not_ready() -> None:
     selection = build_conversation_provider(
         "auto",
         ollama=FakeOllama(),
         web=UnreadyWebRuntime(),
     )
 
-    assert selection.provider_name == "ollama"
-    assert selection.reason == "auto_selected_local_provider"
+    assert selection.provider_name == "chatgpt_web"
+    assert selection.status == "unavailable"
+    assert selection.reason == "auto_selected_web_provider_but_not_ready"
+    with pytest.raises(ConversationProviderError) as error:
+        list(selection.provider.stream([]))
+    assert error.value.code == "chatgpt_web_unavailable"
 
 
 def test_explicit_web_reports_unready_bridge_without_fallback() -> None:

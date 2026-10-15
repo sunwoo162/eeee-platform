@@ -69,7 +69,7 @@ Copy `.env.example` to `.env` when environment configuration is needed.
 | `EXECUTION_MODE` | `demo` or deterministic `workspace_verify` | `demo` |
 | `COMMAND_TIMEOUT_SECONDS` | Maximum duration of a verification command | `120` |
 | `MAX_COMMAND_OUTPUT_CHARS` | Output limit recorded per command | `8000` |
-| `EEEE_CONVERSATION_PROVIDER` | General conversation provider: `auto`, `ollama`, or `chatgpt_web` | `auto` |
+| `EEEE_CONVERSATION_PROVIDER` | General conversation provider: `chatgpt_web` by default; `ollama` is an explicit migration/debug override | `chatgpt_web` |
 | `EEEE_OLLAMA_BASE_URL` | Ollama endpoint for local conversation generation | `http://127.0.0.1:11434` |
 | `EEEE_OLLAMA_MODEL` | Ollama model used by the local provider | empty |
 | `CHATGPT_WEB_ENABLED` | Enables the optional ChatGPT Web bridge | `false` |
@@ -96,7 +96,12 @@ runtime is not configured. The pinned `openhands-sdk` and `openhands-tools`
 versions are installed together because the distributions are released as a
 matched pair.
 
-For the keyless local-first path, install Ollama separately, pull a local model,
+Ollama is not part of the active EEEE assistant path. The legacy local-agent
+path can still be enabled explicitly for migration/debugging by setting
+`EEEE_CONVERSATION_PROVIDER=ollama`, but a missing Web GPT bridge never falls
+back to it.
+
+For that explicit legacy path, install Ollama separately, pull a local model,
 and configure only `LOCAL_MODEL`:
 
 ```powershell
@@ -110,13 +115,12 @@ workspace boundaries, command execution, evidence, QA, and ClaimLatch gates.
 
 ### Conversation provider and growth memory
 
-The general conversation path uses one provider contract. With
-`EEEE_CONVERSATION_PROVIDER=auto`, EEEE selects the ChatGPT Web adapter when
-the configured local bridge is ready and otherwise uses Ollama. Set
-`ollama` to force local generation or `chatgpt_web` to require the Web adapter;
-the explicit Web mode fails clearly when the bridge is unavailable instead of
-silently falling back to a different model. `GET /v1/runtime` exposes the
-selected provider and readiness of both providers.
+The general conversation path uses one provider contract. EEEE uses the
+ChatGPT Web adapter as its active assistant brain. `chatgpt_web` is the default
+and `auto` is retained only as a migration alias that also refuses to fall back
+to Ollama. Set `ollama` only for an explicit local migration/debug run; normal
+Web GPT failures remain visible instead of silently switching models.
+`GET /v1/runtime` exposes the selected provider and readiness of both providers.
 
 User feedback is stored separately from assistant memory. Submit a rating to
 `POST /api/memory/feedback`; it is retained as a redacted feedback ledger entry

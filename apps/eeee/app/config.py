@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     local_conversation_model: str | None = None
     local_model_timeout_seconds: float = 120.0
     conversation_provider: Literal["auto", "chatgpt_web", "ollama"] = Field(
-        default="auto",
+        default="chatgpt_web",
         validation_alias=AliasChoices("EEEE_CONVERSATION_PROVIDER", "CONVERSATION_PROVIDER"),
     )
     ollama_base_url: str = Field(

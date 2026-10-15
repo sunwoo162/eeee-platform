@@ -19,7 +19,7 @@ def test_settings_exposes_ollama_defaults_and_accepts_eeee_environment(monkeypat
     settings = Settings()
 
     assert settings.data_dir == tmp_path / "data"
-    assert settings.conversation_provider == "auto"
+    assert settings.conversation_provider == "chatgpt_web"
     assert settings.ollama_base_url == "http://ollama.local:11434"
     assert settings.ollama_model == "qwen2.5:7b"
 

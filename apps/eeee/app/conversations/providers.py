@@ -150,9 +150,17 @@ def build_conversation_provider(
             ),
             provider_name="chatgpt_web",
             status="configured",
-            reason="auto_selected_configured_web_provider",
+            reason="auto_selected_web_provider",
         )
-    return _ollama_selection(ollama, reason="auto_selected_local_provider")
+    return ConversationProviderSelection(
+        provider=UnavailableConversationProvider(
+            code="chatgpt_web_unavailable",
+            message="Web GPT 연결이 필요해. EEEE는 Ollama로 자동 전환하지 않아.",
+        ),
+        provider_name="chatgpt_web",
+        status="unavailable",
+        reason="auto_selected_web_provider_but_not_ready",
+    )
 
 
 def _ollama_selection(ollama: Any | None, *, reason: str) -> ConversationProviderSelection:

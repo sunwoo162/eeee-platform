@@ -4,7 +4,7 @@ from app.config import Settings
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.agent.lazy_runtime import LazyAgentRuntime
+from app.agent.hybrid_runtime import HybridAssistantRuntime
 
 
 def test_health_returns_ok():
@@ -24,13 +24,14 @@ def test_health_returns_ok():
     }
 
 
-def test_default_application_defers_optional_runtime_until_project_execution(monkeypatch):
+def test_default_application_has_no_ollama_runtime_without_explicit_opt_in(monkeypatch):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
     application = create_app()
 
-    assert isinstance(application.state.api_flow.runtime, LazyAgentRuntime)
-    assert application.state.api_flow.runtime.loaded is False
+    assert isinstance(application.state.api_flow.runtime, HybridAssistantRuntime)
+    assert application.state.api_flow.runtime.local is None
+    assert application.state.api_flow.runtime.web is None
 
 
 def test_execution_settings_require_supported_mode_and_positive_limits():

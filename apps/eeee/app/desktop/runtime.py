@@ -240,7 +240,10 @@ class EmbeddedApiRuntime:
         raise ApiStartupError(f"Embedded API failed to start: {detail}")
 
     def _ensure_local_model_service(self) -> None:
-        """Start the installed local Ollama service before building the API."""
+        """Start Ollama only for the explicit legacy provider lane."""
+        if self.settings.conversation_provider != "ollama":
+            _runtime_debug("ollama startup skipped; Web GPT is the active provider")
+            return
         parsed = urlsplit(self.settings.local_model_base_url)
         if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
             "127.0.0.1",

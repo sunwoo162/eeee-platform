@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.memory.models import MemoryCandidate, MemoryRecord, MemoryStatus
 
@@ -45,6 +46,9 @@ class MemoryStore:
                     content TEXT NOT NULL,
                     scope_json TEXT NOT NULL,
                     source_project_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL DEFAULT 'project_outcome',
+                    source_message_id TEXT,
+                    source_request_id TEXT,
                     source_artifact_ids_json TEXT NOT NULL,
                     evidence_ids_json TEXT NOT NULL,
                     verification_ids_json TEXT NOT NULL,
@@ -78,6 +82,18 @@ class MemoryStore:
                     ON conversation_turns (conversation_id, id);
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(memory_records)").fetchall()
+            }
+            if "source_type" not in columns:
+                connection.execute(
+                    "ALTER TABLE memory_records ADD COLUMN source_type TEXT NOT NULL DEFAULT 'project_outcome'"
+                )
+            if "source_message_id" not in columns:
+                connection.execute("ALTER TABLE memory_records ADD COLUMN source_message_id TEXT")
+            if "source_request_id" not in columns:
+                connection.execute("ALTER TABLE memory_records ADD COLUMN source_request_id TEXT")
 
     def append_conversation_turn(self, conversation_id: str, role: str, content: str) -> None:
         """Persist one local conversation turn for short-term continuity."""
@@ -210,6 +226,59 @@ class MemoryStore:
         if row is None:
             raise KeyError(f"Memory not found: {memory_id}")
         return _record_from_row(row)
+
+    def save_explicit_memory(
+        self,
+        content: str,
+        *,
+        source_message_id: str,
+        actor: str,
+        kind: str = "agent_routing_hint",
+        scope: dict[str, Any] | None = None,
+    ) -> MemoryRecord:
+        if not content.strip() or not source_message_id.strip() or not actor.strip():
+            raise ValueError("explicit memory requires content, source message, and actor")
+        now = _now()
+        record = MemoryRecord(
+            id=f"memory-{uuid4().hex}",
+            kind=kind,
+            content=content.strip(),
+            scope=scope or {},
+            source_project_id=f"conversation:{source_message_id}",
+            source_type="conversation",
+            source_message_id=source_message_id,
+            confidence=1.0,
+            status=MemoryStatus.ACTIVE,
+            created_at=now,
+            last_verified_at=now,
+            approved_by=actor,
+            user_editable=True,
+        )
+        with self._connect() as connection:
+            _insert_record(connection, record)
+            _append_event(connection, record.id, "explicit_created", actor, {
+                "sourceMessageId": source_message_id,
+            })
+        return record
+
+    def edit(self, memory_id: str, content: str, *, actor: str) -> MemoryRecord:
+        if not content.strip() or not actor.strip():
+            raise ValueError("memory edit requires content and actor")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM memory_records WHERE id = ?", (memory_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Memory not found: {memory_id}")
+            record = _record_from_row(row)
+            if not record.user_editable:
+                raise MemoryPromotionError("Memory is not user editable")
+            connection.execute(
+                "UPDATE memory_records SET content = ?, approved_by = ? WHERE id = ?",
+                (content.strip(), actor, memory_id),
+            )
+            _append_event(connection, memory_id, "edited", actor, {"content": content.strip()})
+            return record.model_copy(update={"content": content.strip(), "approved_by": actor})
 
     def list_records(
         self,
@@ -417,15 +486,19 @@ class MemoryStore:
 def _insert_record(connection: sqlite3.Connection, record: MemoryRecord) -> None:
     connection.execute(
         "INSERT INTO memory_records (id, kind, content, scope_json, source_project_id, "
-        "source_artifact_ids_json, evidence_ids_json, verification_ids_json, confidence, "
+        "source_type, source_message_id, source_request_id, source_artifact_ids_json, "
+        "evidence_ids_json, verification_ids_json, confidence, "
         "status, created_at, last_verified_at, expires_at, superseded_by_id, approved_by, user_editable) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             record.id,
             record.kind,
             record.content,
             json.dumps(record.scope),
             record.source_project_id,
+            record.source_type,
+            record.source_message_id,
+            record.source_request_id,
             json.dumps(record.source_artifact_ids),
             json.dumps(record.evidence_ids),
             json.dumps(record.verification_ids),
@@ -448,6 +521,9 @@ def _record_from_row(row: sqlite3.Row) -> MemoryRecord:
         content=row["content"],
         scope=json.loads(row["scope_json"]),
         source_project_id=row["source_project_id"],
+        source_type=row["source_type"],
+        source_message_id=row["source_message_id"],
+        source_request_id=row["source_request_id"],
         source_artifact_ids=json.loads(row["source_artifact_ids_json"]),
         evidence_ids=json.loads(row["evidence_ids_json"]),
         verification_ids=json.loads(row["verification_ids_json"]),

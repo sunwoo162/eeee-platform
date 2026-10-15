@@ -50,9 +50,12 @@ class MemoryRecord(BaseModel):
     content: str = Field(min_length=1)
     scope: dict[str, Any]
     source_project_id: str = Field(min_length=1)
-    source_artifact_ids: list[str] = Field(min_length=1)
-    evidence_ids: list[str] = Field(min_length=1)
-    verification_ids: list[str] = Field(min_length=1)
+    source_type: Literal["conversation", "project_outcome"] = "project_outcome"
+    source_message_id: str | None = None
+    source_request_id: str | None = None
+    source_artifact_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    verification_ids: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
     status: MemoryStatus
     created_at: datetime

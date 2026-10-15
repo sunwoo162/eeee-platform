@@ -12,6 +12,8 @@ from app.harness.state import AgentTask, ProjectState
 from app.domain.errors import AlreadyApprovedError, ApprovalError, CandidateSetChangedError
 from app.integrations.claimlatch_audit import ClaimLatchAuditStore
 from app.memory.store import MemoryStore
+from app.storage.migrations import apply_migrations
+from app.storage.migrations import apply_migrations
 from app.project_runtime.models import ProjectDocumentRecord, ProjectEvidenceRecord, ProjectProfile
 from app.planning.models import PlanningArtifact, PlanningDecision, PlanningHandoff, PlanningSession
 from app.domain.models import (
@@ -207,6 +209,9 @@ class SQLiteStore:
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row
         connection.create_function("utc_timestamp", 1, _normalise_run_timestamp, deterministic=True)
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA journal_mode = WAL")
         return connection
 
     def init(self) -> None:
@@ -387,6 +392,7 @@ class SQLiteStore:
                 "CREATE INDEX IF NOT EXISTS idx_plugin_connections_user "
                 "ON plugin_connections (user_id, plugin_id)"
             )
+            apply_migrations(connection)
         # EEEE memory intentionally shares the durable state database so a
         # restart cannot separate project state from the evidence-backed memory.
         MemoryStore(self.path).init()

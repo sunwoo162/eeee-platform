@@ -3,6 +3,7 @@
 Date: 2026-10-15
 Branch: `codex/eeee-main-sync`
 Head at verification start: `08d99f0`
+Final verification head: `34bad7f`
 
 This record separates deterministic checks from environment-dependent checks.
 It is intentionally not a claim that the local Ollama model, packaged Windows
@@ -27,7 +28,7 @@ executable, or live external connectors were verified in this environment.
 | Growth feedback ledger and explicit promotion | PASS | `tests/memory/test_growth_feedback.py`, `tests/api/test_memory_api.py`; ordinary feedback stays out of active memory |
 | Bounded approved-memory context | PASS | `tests/conversations/test_context.py`, `tests/memory/test_conversation_boundary.py` |
 | Warm Core health benchmark | PASS | 10 warm `/health` requests, average `0.7426 ms` in this run |
-| Full deterministic suite | PASS | `858 passed, 1 skipped, 1 warning` in `237.76s` |
+| Full deterministic suite | PASS | `869 passed, 1 skipped, 1 warning` in `285.56s` |
 | Local Ollama live generation | BLOCKED | `scripts/smoke_ollama.py` runs successfully and reports `model_missing` with exit code `2`; no local model is configured |
 | Packaged Windows EXE | NOT RUN | PyInstaller is not installed in this environment; static package-boundary checks pass |
 | Live ChatGPT Web / connector auth | NOT RUN | Requires a live browser session and user authentication |
@@ -45,8 +46,8 @@ python scripts/smoke_ollama.py
 ```
 
 The previous acceptance record predates the growth/Web GPT changes. The final
-full-suite result for this branch is `858 passed, 1 skipped, 1 warning` in
-`237.76s`.
+full-suite result for this branch is `869 passed, 1 skipped, 1 warning` in
+`285.56s`.
 
 The Ollama command exits with code `2` when no model is configured. That is a
 truthful blocked result, not a test failure hidden as success.
@@ -72,7 +73,7 @@ python -m pytest tests/smoke/test_scripts.py -q
 python scripts/smoke_ollama.py  # expected exit code 2 when no model is configured
 ```
 
-Result: `858 passed, 1 skipped, 1 warning in 237.76s (0:03:57)`.
+Result: `869 passed, 1 skipped, 1 warning in 285.56s (0:04:45)`.
 
 The remaining warning is the installed Starlette/httpx compatibility warning.
 No live Ollama model or ChatGPT Web bridge was claimed from this deterministic

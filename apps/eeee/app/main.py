@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.agent.local_runtime import LocalAgentRuntime, LocalConversationRuntime, OllamaBackend
 from app.agent.local_model_discovery import discover_fast_local_model, discover_local_model
+from app.agent.ollama_runtime import OllamaRuntime
 from app.agent.openhands_runtime import OpenHandsRuntime
 from app.agent.protocol import AgentRuntime
 from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
@@ -25,11 +26,15 @@ from app.api.routes import (
     build_project_view_router,
     build_router,
 )
+from app.api.conversation_routes import build_conversation_router
 from app.assistant.registry import build_default_registry
 from app.assistant.router import CapabilityRouter
 from app.assistant.background import BackgroundExecutionSupervisor
 from app.assistant.service import AssistantService
 from app.config import Settings
+from app.conversations.context import ConversationContextBuilder
+from app.conversations.service import ConversationProvider, ConversationService
+from app.conversations.store import ConversationStore
 from app.contracts import LocalEventBus
 from app.coordinator.service import Coordinator
 from app.design.references import DesignService
@@ -65,6 +70,7 @@ def create_app(
     *,
     researcher: GitHubResearcher | None = None,
     agent_runtime: AgentRuntime | None = None,
+    conversation_provider: ConversationProvider | None = None,
     notion_client: NotionClient | None = None,
     oauth_broker: OAuthBroker | None = None,
     oauth_configs: Mapping[str, OAuthProviderConfig] | None = None,
@@ -81,6 +87,22 @@ def create_app(
     store = SQLiteStore(app_settings.data_dir / "state.sqlite3")
     store.init()
     assistant_supervisor = BackgroundExecutionSupervisor(store, max_workers=1)
+    ollama_runtime = OllamaRuntime(
+        base_url=app_settings.ollama_base_url,
+        model=app_settings.ollama_model,
+        connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
+        generation_timeout_seconds=app_settings.ollama_generation_timeout_seconds,
+        context_tokens=app_settings.ollama_context_tokens,
+    )
+    conversation_store = ConversationStore(store)
+    conversation_service = ConversationService(
+        conversation_store,
+        provider=conversation_provider or ollama_runtime,
+        context_builder=ConversationContextBuilder(
+            conversation_store,
+            max_context_tokens=app_settings.ollama_context_tokens,
+        ),
+    )
     mobile_bridge = MobileBridge(
         store.path,
         enabled=app_settings.mobile_bridge_enabled,
@@ -207,6 +229,9 @@ def create_app(
     @application.on_event("shutdown")
     async def stop_assistant_supervisor() -> None:
         assistant_supervisor.shutdown()
+    application.state.ollama_runtime = ollama_runtime
+    application.state.conversation_store = conversation_store
+    application.state.conversation_service = conversation_service
     local_model_name = app_settings.local_model or discover_local_model(
         app_settings.local_model_base_url, timeout_seconds=0.2
     )
@@ -368,6 +393,13 @@ def create_app(
         return {"status": "ok", "claimLatch": trust_gate.health_payload()}
 
     application.include_router(build_router(coordinator))
+    application.include_router(
+        build_conversation_router(
+            conversation_service,
+            ollama=ollama_runtime,
+            schema_version=1,
+        )
+    )
     application.include_router(build_project_view_router(project_view))
     application.include_router(build_assistant_router(assistant_service, project_documents))
     application.include_router(build_mobile_router(mobile_bridge, assistant_service, mobile_snapshot))

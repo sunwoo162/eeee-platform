@@ -65,6 +65,26 @@ class ConversationStore:
             archived_at=_datetime(row["archived_at"]),
         )
 
+    def list_conversations(self, *, limit: int = 50) -> list[Conversation]:
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM conversations WHERE archived_at IS NULL "
+                "ORDER BY updated_at DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            Conversation(
+                id=row["id"],
+                title=row["title"],
+                created_at=_datetime(row["created_at"]),
+                updated_at=_datetime(row["updated_at"]),
+                archived_at=_datetime(row["archived_at"]),
+            )
+            for row in rows
+        ]
+
     def get_messages(
         self, conversation_id: str, *, after_sequence: int = 0, limit: int = 100
     ) -> list[ConversationMessage]:
@@ -77,6 +97,15 @@ class ConversationStore:
                 (conversation_id, after_sequence, limit),
             ).fetchall()
         return [_message_from_row(row) for row in rows]
+
+    def get_message(self, message_id: str) -> ConversationMessage:
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM messages WHERE id = ?", (message_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Message not found: {message_id}")
+        return _message_from_row(row)
 
     def add_message(
         self,
@@ -197,6 +226,17 @@ class ConversationStore:
                 ),
             )
         return request
+
+    def find_request_by_client_message(
+        self, conversation_id: str, client_message_id: str
+    ) -> AssistantRequest | None:
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM assistant_requests WHERE conversation_id = ? "
+                "AND client_message_id = ? ORDER BY attempt DESC LIMIT 1",
+                (conversation_id, client_message_id),
+            ).fetchone()
+        return _request_from_row(row) if row is not None else None
 
     def get_request(self, request_id: str) -> AssistantRequest:
         with self.store._connect() as connection:

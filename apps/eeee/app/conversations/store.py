@@ -124,6 +124,9 @@ class ConversationStore:
             raise ValueError("message content must not be empty")
         now = _now()
         with self.store._connect() as connection:
+            # Serialize the read/sequence/insert critical section so two
+            # retries with the same client id cannot allocate the same turn.
+            connection.execute("BEGIN IMMEDIATE")
             conversation = connection.execute(
                 "SELECT id FROM conversations WHERE id = ?", (conversation_id,)
             ).fetchone()
@@ -203,6 +206,19 @@ class ConversationStore:
         self, conversation_id: str, user_message_id: str, client_message_id: str,
         *, parent_request_id: str | None = None, attempt: int = 1,
     ) -> AssistantRequest:
+        request, _created = self.create_request_with_status(
+            conversation_id,
+            user_message_id,
+            client_message_id,
+            parent_request_id=parent_request_id,
+            attempt=attempt,
+        )
+        return request
+
+    def create_request_with_status(
+        self, conversation_id: str, user_message_id: str, client_message_id: str,
+        *, parent_request_id: str | None = None, attempt: int = 1,
+    ) -> tuple[AssistantRequest, bool]:
         now = _now()
         request = AssistantRequest(
             id=f"request-{uuid4().hex}",
@@ -216,6 +232,18 @@ class ConversationStore:
             updated_at=now,
         )
         with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM assistant_requests WHERE conversation_id = ? "
+                "AND client_message_id = ?",
+                (conversation_id, client_message_id),
+            ).fetchone()
+            if existing is not None:
+                if existing["user_message_id"] != user_message_id:
+                    raise ValueError(
+                        "client_message_id was reused with a different user message"
+                    )
+                return _request_from_row(existing), False
             connection.execute(
                 "INSERT INTO assistant_requests (id, conversation_id, user_message_id, "
                 "client_message_id, state, parent_request_id, attempt, error_code, created_at, "
@@ -225,7 +253,7 @@ class ConversationStore:
                     request.state.value, parent_request_id, attempt, _iso(now), _iso(now),
                 ),
             )
-        return request
+        return request, True
 
     def find_request_by_client_message(
         self, conversation_id: str, client_message_id: str

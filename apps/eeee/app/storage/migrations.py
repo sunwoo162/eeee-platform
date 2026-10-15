@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-LATEST_SCHEMA_VERSION = 1
+LATEST_SCHEMA_VERSION = 2
 
 
 def apply_migrations(connection: sqlite3.Connection) -> None:
@@ -89,4 +89,16 @@ def apply_migrations(connection: sqlite3.Connection) -> None:
         connection.execute(
             "INSERT INTO schema_migrations(version, applied_at) "
             "VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        )
+        current = 1
+    if current < 2:
+        # The request key is the durable idempotency boundary. Keep this as an
+        # index migration so databases created by v1 receive the same guard.
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_client_message "
+            "ON assistant_requests(conversation_id, client_message_id)"
+        )
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) "
+            "VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
         )

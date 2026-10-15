@@ -78,3 +78,27 @@ def test_request_events_are_cursor_ordered(tmp_path) -> None:
 
     assert [event.sequence for event in events] == [1, 2]
     assert [event.event_type for event in events] == ["request.classified", "message.started"]
+
+
+def test_duplicate_request_client_message_is_idempotent(tmp_path) -> None:
+    conversations = make_store(tmp_path)
+    conversation = conversations.create_conversation()
+    user = conversations.add_message(
+        conversation.id,
+        role=MessageRole.USER,
+        content="요청 중복 방지",
+        status=MessageStatus.COMPLETED,
+        client_message_id="same-request-id",
+    )
+
+    first = conversations.create_request(
+        conversation.id, user.id, "same-request-id"
+    )
+    second = conversations.create_request(
+        conversation.id, user.id, "same-request-id"
+    )
+
+    assert second.id == first.id
+    assert conversations.find_request_by_client_message(
+        conversation.id, "same-request-id"
+    ).id == first.id

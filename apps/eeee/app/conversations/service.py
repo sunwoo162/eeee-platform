@@ -77,13 +77,15 @@ class ConversationService:
                 client_message_id=client_message_id,
             )
             user_message_id = user_message.id
-        request = self.store.create_request(
+        request, request_created = self.store.create_request_with_status(
             conversation_id,
             user_message_id,
             client_message_id,
             parent_request_id=parent_request_id,
             attempt=attempt,
         )
+        if not request_created:
+            return request, False
         self._cancel_events[request.id] = threading.Event()
         self.store.append_event(request.id, "request.accepted", {"requestId": request.id})
         request = self.store.transition_request(

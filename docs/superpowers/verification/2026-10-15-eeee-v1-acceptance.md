@@ -3,11 +3,12 @@
 Date: 2026-10-15
 Branch: `codex/eeee-main-sync`
 Head at verification start: `08d99f0`
-Final verification head: `7f2182a`
+Final verification head: `pending — review hardening in progress`
 
 This record separates deterministic checks from environment-dependent checks.
-It does not claim that the local Ollama model, packaged Windows executable, or
-external plugin connector authentication were verified in this environment.
+It does not claim that external plugin connector authentication was verified in
+this environment. Local Ollama generation, the packaged Windows executable,
+and the live Web GPT bridge have separate evidence below.
 
 ## Acceptance matrix
 
@@ -34,6 +35,20 @@ external plugin connector authentication were verified in this environment.
 | Packaged Windows EXE | PASS | `scripts/build-desktop.ps1` produced `build/desktop/GleaveDesktop.exe`; packaged `--self-test` and `--gui-self-test` both exited `0`; a two-run restart cycle exited `0 → 0`; no secret-like files were bundled |
 | Live ChatGPT Web bridge | PASS | Dedicated browser bridge reported `ready`; direct `/chat` completed; EEEE API round trip emitted `request.accepted`, `message.started`, `message.delta`, and `message.completed`, then persisted user + assistant messages |
 | External plugin connector auth | NOT RUN | Plugin-specific OAuth/login sessions still require separate user-authorized verification |
+
+## Review hardening completed
+
+- Web GPT remains the selected provider while the bridge is unavailable; the
+  same live runtime object is retained so a user login can be followed by a
+  retry without restarting EEEE. `/v1/runtime` refreshes the bridge status.
+- An `auth-required` hidden bridge is no longer reused as a healthy startup
+  session, so the explicit login path can open the visible persisted profile.
+- Connector health transport failures fail closed as `provider_unavailable`;
+  capabilities stay hidden and OAuth callbacks report connection failure rather
+  than incorrectly showing success.
+- The desktop build script rebuilds the embedded ISEOL bridge and documents the
+  clean-checkout `npm ci` prerequisite. The Ollama README now uses the actual
+  `EEEE_OLLAMA_MODEL` setting.
 
 ## Commands run
 

@@ -36,7 +36,6 @@ _OLLAMA_CANDIDATES = (
 )
 _CHATGPT_BROWSER_HEALTHY_STATUSES = frozenset({
     "ready",
-    "auth-required",
     "temporarily-limited",
     "conversation-exhausted",
     "usage-limited",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -60,6 +60,7 @@ def build_conversation_router(
     provider_selection: ConversationProviderSelection | None = None,
     web_configured: bool = False,
     web_status: str | None = None,
+    web_status_provider: Callable[[], Any] | None = None,
     lifecycle: Any | None = None,
     capabilities: Any | None = None,
     core_version: str = "0.1.0",
@@ -70,6 +71,7 @@ def build_conversation_router(
     @router.get("/runtime")
     def runtime_status() -> dict[str, object]:
         provider_status = ollama.status()
+        current_web_status = _current_web_status(web_status, web_status_provider)
         lifecycle_status = lifecycle.state.value if lifecycle is not None else "ready"
         # Test clients created without a lifespan context retain the historical
         # ready response; production servers enter the lifespan and report the
@@ -87,6 +89,9 @@ def build_conversation_router(
             status="configured",
             reason="conversation_provider_injected",
         )
+        selected_status = selected.status
+        if selected.provider_name == "chatgpt_web":
+            selected_status = "configured" if current_web_status == "ready" else "unavailable"
         return {
             "core": core_status,
             "ollama": {
@@ -97,7 +102,7 @@ def build_conversation_router(
             },
             "conversationProvider": {
                 "name": selected.provider_name,
-                "status": selected.status,
+                "status": selected_status,
                 "model": selected.model,
                 "reason": selected.reason,
             },
@@ -107,7 +112,7 @@ def build_conversation_router(
                     "model": provider_status.model,
                 },
                 "chatgpt_web": {
-                    "status": web_status or ("configured" if web_configured else "not_configured"),
+                    "status": current_web_status or ("configured" if web_configured else "not_configured"),
                 },
             },
             "capabilities": capabilities.snapshot() if capabilities is not None else {},
@@ -235,3 +240,16 @@ def build_conversation_router(
         return TurnResponse(requestId=request.id, state=request.state.value)
 
     return router
+
+
+def _current_web_status(
+    configured_status: str | None,
+    status_provider: Callable[[], Any] | None,
+) -> str | None:
+    if status_provider is None:
+        return configured_status
+    try:
+        status = status_provider()
+    except Exception:
+        return "unavailable"
+    return getattr(status, "status", status) or "unavailable"

@@ -73,11 +73,18 @@ class HttpOpenApiConnector:
         return None
 
     def health(self, connection: ConnectorConnection) -> ConnectorHealth:
-        response = self.transport.request(
-            "GET", f"{self.base_url}{self.health_path}",
-            headers=self._headers(connection),
-        )
-        return _health_from_status(self.plugin_id, response.status_code)
+        try:
+            response = self.transport.request(
+                "GET", f"{self.base_url}{self.health_path}",
+                headers=self._headers(connection),
+            )
+            return _health_from_status(self.plugin_id, response.status_code)
+        except Exception:
+            return ConnectorHealth(
+                status="unavailable",
+                code="provider_unavailable",
+                reason="Plugin provider health check failed",
+            )
 
     def invoke(
         self, connection: ConnectorConnection, action: str, value: dict[str, object]
@@ -135,7 +142,14 @@ class MCPConnector:
         connection.client.close()
 
     def health(self, connection: ConnectorConnection) -> ConnectorHealth:
-        return ConnectorHealth.model_validate(connection.client.health())
+        try:
+            return ConnectorHealth.model_validate(connection.client.health())
+        except Exception:
+            return ConnectorHealth(
+                status="unavailable",
+                code="provider_unavailable",
+                reason="Plugin provider health check failed",
+            )
 
     def invoke(
         self, connection: ConnectorConnection, action: str, value: dict[str, object]

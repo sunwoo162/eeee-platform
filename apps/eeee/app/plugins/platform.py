@@ -272,8 +272,15 @@ class PluginPlatformService:
         if credential is None:
             health = ConnectorHealth(status="unavailable", code="reauthentication_required", reason="Plugin credential is unavailable")
         else:
-            transient = connector.connect(user_id, _credential_from_json(credential), set(connection.approved_permissions))
-            health = connector.health(transient)
+            try:
+                transient = connector.connect(user_id, _credential_from_json(credential), set(connection.approved_permissions))
+                health = connector.health(transient)
+            except Exception:
+                health = ConnectorHealth(
+                    status="unavailable",
+                    code="provider_unavailable",
+                    reason="Plugin provider health check failed",
+                )
         status = "connected" if health.status == "healthy" else "failed"
         self.connections.save(connection.model_copy(update={
             "status": status, "last_health": health.status, "last_error": None if status == "connected" else health.code,

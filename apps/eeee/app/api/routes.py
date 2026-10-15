@@ -383,8 +383,8 @@ def build_plugin_router(
         del request, error_description
         if platform is None or oauth_broker is None:
             raise HTTPException(status_code=503, detail="OAuth plugin connection is unavailable")
-        def mark_connection_failed(error_code: str) -> None:
-            owner = oauth_broker.owner(state, plugin_id=plugin_id)
+        def mark_connection_failed(error_code: str, user_id: str | None = None) -> None:
+            owner = user_id or oauth_broker.owner(state, plugin_id=plugin_id)
             if owner is not None:
                 platform.fail_oauth(owner, plugin_id, error_code)
         try:
@@ -398,6 +398,12 @@ def build_plugin_router(
                 completion.credential,
                 completion.account_label,
             )
+            if connected.status != "connected":
+                mark_connection_failed("oauth_connection_failed", completion.user_id)
+                oauth_broker.mark_failed(state, plugin_id, "oauth_connection_failed")
+                return _oauth_callback_page(
+                    "연결 실패", "플러그인 제공자와 연결하지 못했습니다. 다시 시도해 주세요.", status_code=409
+                )
             return _oauth_callback_page(
                 "연결 완료",
                 "플러그인 계정 연결이 완료됐습니다. 이 창을 닫아도 됩니다.",

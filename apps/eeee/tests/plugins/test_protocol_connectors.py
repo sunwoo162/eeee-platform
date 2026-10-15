@@ -49,6 +49,22 @@ def test_openapi_connector_health_and_invoke_use_declared_operations() -> None:
     assert transport.calls[-1][0] == "GET"
 
 
+def test_openapi_connector_health_fails_closed_when_transport_raises() -> None:
+    class BrokenTransport:
+        def request(self, *args, **kwargs):
+            raise OSError("network down")
+
+    connector = HttpOpenApiConnector(
+        "github", base_url="https://api.example", transport=BrokenTransport(), operations={}
+    )
+    connection = connector.connect("user-a", {"access_token": "secret"}, set())
+
+    health = connector.health(connection)
+
+    assert health.status == "unavailable"
+    assert health.code == "provider_unavailable"
+
+
 def test_openapi_connector_interpolates_path_parameters_from_value() -> None:
     transport = FakeHttpTransport(FakeResponse(200, {"ok": True}))
     connector = HttpOpenApiConnector(
@@ -126,6 +142,20 @@ def test_mcp_connector_delegates_to_registered_client_and_closes_it() -> None:
     assert connector.invoke(connection, "issues.search", {"query": "bug"})["action"] == "issues.search"
     connector.disconnect(connection)
     assert client.closed is True
+
+
+def test_mcp_connector_health_fails_closed_when_client_raises() -> None:
+    class BrokenClient:
+        def health(self):
+            raise RuntimeError("client down")
+
+    connector = MCPConnector("linear", client_factory=lambda credential: BrokenClient())
+    connection = connector.connect("user-a", {"access_token": "secret"}, set())
+
+    health = connector.health(connection)
+
+    assert health.status == "unavailable"
+    assert health.code == "provider_unavailable"
 
 
 def test_connector_registry_rejects_unknown_or_duplicate_ids() -> None:

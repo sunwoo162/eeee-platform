@@ -16,6 +16,7 @@ class FakeConnector:
 
     def __init__(self, healthy: bool = True):
         self.healthy = healthy
+        self.raise_health = False
         self.connections = []
 
     def connect(self, user_id, credential, approved_permissions):
@@ -29,6 +30,8 @@ class FakeConnector:
         return None
 
     def health(self, connection):
+        if self.raise_health:
+            raise ConnectionError("provider unavailable")
         return ConnectorHealth(
             status="healthy" if self.healthy else "unavailable",
             code="healthy" if self.healthy else "provider_unavailable",
@@ -121,6 +124,23 @@ def test_failed_reconnect_keeps_existing_healthy_credential(tmp_path) -> None:
     assert platform.connections.get("user-a", "notion").credential_ref == old_connection.credential_ref
     assert credentials.get(old_connection.credential_ref) == '{"token": "old-secret"}'
     assert all("new-secret" not in value for value in credentials._values.values())
+
+
+def test_health_failure_is_reported_without_raising_or_exposing_capability(tmp_path) -> None:
+    connector = FakeConnector()
+    platform = _platform(tmp_path, connector)
+    platform.install("notion")
+    platform.connect("user-a", "notion", {"pages.read"}, {"token": "secret"}, None)
+    connector.raise_health = True
+
+    health = platform.health("user-a", "notion")
+
+    assert health.status == "unavailable"
+    assert health.code == "provider_unavailable"
+    connection = platform.connections.get("user-a", "notion")
+    assert connection.status == "failed"
+    assert connection.last_error == "provider_unavailable"
+    assert platform.capabilities("user-a") == []
 
 
 def test_unconfigured_catalog_connector_can_install_but_cannot_connect(tmp_path) -> None:

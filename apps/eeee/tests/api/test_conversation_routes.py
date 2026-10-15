@@ -1,5 +1,6 @@
 import json
 import time
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -95,3 +96,44 @@ def test_v1_runtime_reports_ollama_model_readiness_separately_from_core_health(t
     assert runtime.json()["core"]["status"] == "ready"
     assert runtime.json()["ollama"]["status"] == "model_missing"
     assert runtime.json()["conversationProvider"]["name"] == "injected"
+
+
+def test_v1_runtime_refreshes_web_status_after_login(tmp_path) -> None:
+    class FakeWebRuntime:
+        def __init__(self) -> None:
+            self.ready = False
+
+        def status(self):
+            return SimpleNamespace(status="ready" if self.ready else "auth-required")
+
+    web = FakeWebRuntime()
+    from app.api.conversation_routes import build_conversation_router
+    from app.conversations.providers import build_conversation_provider
+    from app.conversations.service import ConversationService
+    from app.conversations.store import ConversationStore
+    from app.storage.sqlite import SQLiteStore
+    from fastapi import FastAPI
+    from app.agent.ollama_runtime import OllamaRuntime
+
+    store = SQLiteStore(tmp_path / "runtime.sqlite3")
+    store.init()
+    service = ConversationService(ConversationStore(store), provider=FakeProvider())
+    selection = build_conversation_provider("chatgpt_web", ollama=None, web=web)
+    application = FastAPI()
+    application.include_router(
+        build_conversation_router(
+            service,
+            ollama=OllamaRuntime(base_url="http://127.0.0.1:11434", model=None),
+            provider_selection=selection,
+            web_configured=True,
+            web_status="auth-required",
+            web_status_provider=web.status,
+        )
+    )
+    client = TestClient(application)
+
+    assert client.get("/v1/runtime").json()["providers"]["chatgpt_web"]["status"] == "auth-required"
+    web.ready = True
+    runtime = client.get("/v1/runtime").json()
+    assert runtime["providers"]["chatgpt_web"]["status"] == "ready"
+    assert runtime["conversationProvider"]["status"] == "configured"

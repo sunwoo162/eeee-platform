@@ -102,11 +102,12 @@ path can still be enabled explicitly for migration/debugging by setting
 back to it.
 
 For that explicit legacy path, install Ollama separately, pull a local model,
-and configure only `LOCAL_MODEL`:
+and configure `EEEE_OLLAMA_MODEL` (or the equivalent `OLLAMA_MODEL` setting):
 
 ```powershell
 ollama pull qwen2.5-coder:7b
-$env:LOCAL_MODEL = "qwen2.5-coder:7b"
+$env:EEEE_CONVERSATION_PROVIDER = "ollama"
+$env:EEEE_OLLAMA_MODEL = "qwen2.5-coder:7b"
 python -m app.desktop
 ```
 

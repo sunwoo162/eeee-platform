@@ -105,9 +105,7 @@ def test_auto_does_not_fall_back_to_ollama_when_web_bridge_is_not_ready() -> Non
     assert selection.provider_name == "chatgpt_web"
     assert selection.status == "unavailable"
     assert selection.reason == "auto_selected_web_provider_but_not_ready"
-    with pytest.raises(ConversationProviderError) as error:
-        list(selection.provider.stream([]))
-    assert error.value.code == "chatgpt_web_unavailable"
+    assert list(selection.provider.stream([])) == ["Web GPT 답변"]
 
 
 def test_explicit_web_reports_unready_bridge_without_fallback() -> None:
@@ -119,9 +117,19 @@ def test_explicit_web_reports_unready_bridge_without_fallback() -> None:
 
     assert selection.provider_name == "chatgpt_web"
     assert selection.status == "unavailable"
-    with pytest.raises(ConversationProviderError) as error:
-        list(selection.provider.stream([]))
-    assert error.value.code == "chatgpt_web_unavailable"
+    assert list(selection.provider.stream([])) == ["Web GPT 답변"]
+
+
+def test_unready_web_provider_can_retry_after_bridge_login() -> None:
+    web = UnreadyWebRuntime()
+    selection = build_conversation_provider(
+        "chatgpt_web",
+        ollama=FakeOllama(),
+        web=web,
+    )
+
+    assert selection.status == "unavailable"
+    assert list(selection.provider.stream([])) == ["Web GPT 답변"]
 
 
 def test_web_prompt_respects_provider_context_budget() -> None:

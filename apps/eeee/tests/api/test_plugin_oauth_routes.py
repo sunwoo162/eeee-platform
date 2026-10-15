@@ -28,12 +28,17 @@ class HealthyConnector:
         return {"status": "completed"}
 
 
+class UnavailableConnector(HealthyConnector):
+    def health(self, connection):
+        return ConnectorHealth(status="unavailable", code="provider_unavailable", reason="down")
+
+
 class FakeOAuthTransport:
     def exchange_code(self, config, *, code, code_verifier, redirect_uri):
         return {"access_token": "oauth-secret", "parentPageId": "page-id"}
 
 
-def _application(tmp_path):
+def _application(tmp_path, connector=None):
     application = create_app(
         Settings(
             data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces",
@@ -50,7 +55,7 @@ def _application(tmp_path):
         },
     )
     application.state.plugin_platform.credentials = MemoryCredentialStore()
-    application.state.plugin_platform.connectors["notion"] = HealthyConnector()
+    application.state.plugin_platform.connectors["notion"] = connector or HealthyConnector()
     return application
 
 
@@ -152,3 +157,25 @@ def test_oauth_cancel_returns_friendly_page_and_terminal_status(tmp_path) -> Non
     assert client.get(
         "/api/plugins/notion/connection", headers={"X-EEEE-User-Id": "user-a"}
     ).json()["status"] == "failed"
+
+
+def test_oauth_callback_reports_connector_health_failure(tmp_path) -> None:
+    client = TestClient(_application(tmp_path, UnavailableConnector()))
+    assert client.post("/api/plugins/notion/install").status_code == 200
+    started = client.post(
+        "/api/plugins/notion/oauth/start",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"approvedPermissions": ["pages.read"]},
+    )
+    state = parse_qs(urlparse(started.json()["authorizationUrl"]).query)["state"][0]
+
+    callback = client.get(
+        "/api/plugins/notion/oauth/callback",
+        params={"state": state, "code": "authorization-code"},
+    )
+
+    assert callback.status_code == 409
+    assert "연결 실패" in callback.text
+    assert client.get("/api/plugins/notion/oauth/status", params={"state": state}).json() == {
+        "pluginId": "notion", "state": "failed", "error": "oauth_connection_failed"
+    }

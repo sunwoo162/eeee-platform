@@ -431,6 +431,7 @@ def create_app(
             provider_selection=provider_selection,
             web_configured=web_runtime is not None,
             web_status=getattr(web_runtime_status, "status", None),
+            web_status_provider=web_runtime.status if web_runtime is not None else None,
             lifecycle=core_lifecycle,
             capabilities=capability_manager,
             schema_version=1,

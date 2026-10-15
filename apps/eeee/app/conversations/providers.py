@@ -121,36 +121,39 @@ def build_conversation_provider(
                 status="unavailable",
                 reason="explicit_web_provider_not_configured",
             )
-        if not _web_is_ready(web, status=web_status):
-            return ConversationProviderSelection(
-                provider=UnavailableConversationProvider(
-                    code="chatgpt_web_unavailable",
-                    message="Web GPT 연결이 아직 준비되지 않았어.",
-                ),
-                provider_name="chatgpt_web",
-                status="unavailable",
-                reason="explicit_web_provider_not_ready",
-            )
+        # Keep the live adapter even before login. The bridge can become ready
+        # later in the same process, so replacing it with a permanent
+        # UnavailableConversationProvider would make retry impossible.
+        web_ready = _web_is_ready(web, status=web_status)
         return ConversationProviderSelection(
             provider=ChatGptWebConversationProvider(
                 web, workspace=workspace, context_tokens=context_tokens
             ),
             provider_name="chatgpt_web",
-            status="configured",
-            reason="explicit_web_provider",
+            status="configured" if web_ready else "unavailable",
+            reason=(
+                "explicit_web_provider"
+                if web_ready
+                else "explicit_web_provider_not_ready"
+            ),
         )
 
     if normalized == "ollama":
         return _ollama_selection(ollama, reason="explicit_local_provider")
 
-    if web is not None and _web_is_ready(web, status=web_status):
+    if web is not None:
+        web_ready = _web_is_ready(web, status=web_status)
         return ConversationProviderSelection(
             provider=ChatGptWebConversationProvider(
                 web, workspace=workspace, context_tokens=context_tokens
             ),
             provider_name="chatgpt_web",
-            status="configured",
-            reason="auto_selected_web_provider",
+            status="configured" if web_ready else "unavailable",
+            reason=(
+                "auto_selected_web_provider"
+                if web_ready
+                else "auto_selected_web_provider_but_not_ready"
+            ),
         )
     return ConversationProviderSelection(
         provider=UnavailableConversationProvider(

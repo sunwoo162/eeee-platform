@@ -89,3 +89,4 @@ def test_v1_runtime_reports_ollama_model_readiness_separately_from_core_health(t
     assert runtime.status_code == 200
     assert runtime.json()["core"]["status"] == "ready"
     assert runtime.json()["ollama"]["status"] == "model_missing"
+    assert runtime.json()["conversationProvider"]["name"] == "injected"

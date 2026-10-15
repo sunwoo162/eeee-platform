@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.agent.ollama_runtime import OllamaRuntime
 from app.conversations.models import RequestState
+from app.conversations.providers import ConversationProviderSelection
 from app.conversations.service import ConversationService, CoreShuttingDownError
 
 
@@ -56,6 +57,8 @@ def build_conversation_router(
     service: ConversationService,
     *,
     ollama: OllamaRuntime,
+    provider_selection: ConversationProviderSelection | None = None,
+    web_configured: bool = False,
     lifecycle: Any | None = None,
     capabilities: Any | None = None,
     core_version: str = "0.1.0",
@@ -77,6 +80,12 @@ def build_conversation_router(
             "version": core_version,
             "schemaVersion": schema_version,
         }
+        selected = provider_selection or ConversationProviderSelection(
+            provider=service.provider,
+            provider_name="injected",
+            status="configured",
+            reason="conversation_provider_injected",
+        )
         return {
             "core": core_status,
             "ollama": {
@@ -84,6 +93,21 @@ def build_conversation_router(
                 "model": provider_status.model,
                 "errorCode": provider_status.error_code,
                 "message": provider_status.message,
+            },
+            "conversationProvider": {
+                "name": selected.provider_name,
+                "status": selected.status,
+                "model": selected.model,
+                "reason": selected.reason,
+            },
+            "providers": {
+                "ollama": {
+                    "status": provider_status.status,
+                    "model": provider_status.model,
+                },
+                "chatgpt_web": {
+                    "status": "configured" if web_configured else "not_configured",
+                },
             },
             "capabilities": capabilities.snapshot() if capabilities is not None else {},
         }

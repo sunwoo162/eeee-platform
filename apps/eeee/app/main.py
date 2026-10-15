@@ -32,6 +32,7 @@ from app.assistant.service import AssistantService
 from app.capabilities.registry import build_core_capability_manager
 from app.config import Settings
 from app.conversations.context import ConversationContextBuilder
+from app.conversations.providers import build_conversation_provider
 from app.conversations.service import ConversationProvider, ConversationService
 from app.conversations.store import ConversationStore
 from app.contracts import LocalEventBus
@@ -99,14 +100,33 @@ def create_app(
         generation_timeout_seconds=app_settings.ollama_generation_timeout_seconds,
         context_tokens=app_settings.ollama_context_tokens,
     )
+    web_runtime: AgentRuntime | None = None
+    if app_settings.chatgpt_web_enabled and app_settings.chatgpt_web_bridge_url:
+        web_runtime = ChatGptWebRuntime(
+            app_settings.chatgpt_web_bridge_url,
+            timeout_seconds=app_settings.chatgpt_web_timeout_seconds,
+            profile_path=app_settings.assistant_profile_path,
+            conversation_state_path=app_settings.data_dir / "chatgpt-assistant-conversation.json",
+        )
+    provider_selection = None
+    selected_conversation_provider = conversation_provider
+    if selected_conversation_provider is None:
+        provider_selection = build_conversation_provider(
+            app_settings.conversation_provider,
+            ollama=ollama_runtime,
+            web=web_runtime,
+            workspace=app_settings.workspace_root,
+        )
+        selected_conversation_provider = provider_selection.provider
     conversation_store = ConversationStore(store)
+    conversation_context = ConversationContextBuilder(
+        conversation_store,
+        max_context_tokens=app_settings.ollama_context_tokens,
+    )
     conversation_service = ConversationService(
         conversation_store,
-        provider=conversation_provider or ollama_runtime,
-        context_builder=ConversationContextBuilder(
-            conversation_store,
-            max_context_tokens=app_settings.ollama_context_tokens,
-        ),
+        provider=selected_conversation_provider,
+        context_builder=conversation_context,
     )
     core_lifecycle = CoreLifecycle(
         store,
@@ -144,6 +164,7 @@ def create_app(
             )
         )
     coordinator = Coordinator(store, researcher=configured_researcher, verifier=verifier)
+    conversation_context.memory_store = coordinator.memory
     activity_ledger = ActivityLedger(store)
     planning_service = PlanningService(store, activity_ledger)
     plugin_platform = PluginPlatformService(
@@ -243,6 +264,8 @@ def create_app(
     application.state.project_documents = project_documents
     application.state.project_evidence = project_evidence
     application.state.ollama_runtime = ollama_runtime
+    application.state.chatgpt_web_runtime = web_runtime
+    application.state.conversation_provider_selection = provider_selection
     application.state.conversation_store = conversation_store
     application.state.conversation_service = conversation_service
     application.state.core_lifecycle = core_lifecycle
@@ -284,14 +307,6 @@ def create_app(
         )
     if runtime is None:
         runtime = LazyAgentRuntime(lambda: _build_optional_runtime(app_settings))
-    web_runtime: AgentRuntime | None = None
-    if app_settings.chatgpt_web_enabled and app_settings.chatgpt_web_bridge_url:
-        web_runtime = ChatGptWebRuntime(
-            app_settings.chatgpt_web_bridge_url,
-            timeout_seconds=app_settings.chatgpt_web_timeout_seconds,
-            profile_path=app_settings.assistant_profile_path,
-            conversation_state_path=app_settings.data_dir / "chatgpt-assistant-conversation.json",
-        )
     # The general conversation lane must never inherit the project/ISEOL
     # runtime.  ``agent_runtime`` is the project execution provider and may
     # be ChatGPT Web; reusing it here silently turns a greeting into a slow
@@ -420,6 +435,8 @@ def create_app(
         build_conversation_router(
             conversation_service,
             ollama=ollama_runtime,
+            provider_selection=provider_selection,
+            web_configured=web_runtime is not None,
             lifecycle=core_lifecycle,
             capabilities=capability_manager,
             schema_version=1,

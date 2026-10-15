@@ -25,30 +25,50 @@ class ConversationContextBuilder:
         # A conservative character budget keeps the provider context bounded
         # without requiring a tokenizer in the Core package.
         max_characters = self.max_context_tokens * 4
-        selected: list[dict[str, str]] = []
-        if memory_ids and self.memory_store is not None:
-            for memory_id in memory_ids:
-                try:
-                    memory = self.memory_store.get(memory_id)
-                except KeyError:
-                    continue
+        memory_items: list[dict[str, str]] = []
+        if self.memory_store is not None:
+            if memory_ids:
+                memories = []
+                for memory_id in memory_ids:
+                    try:
+                        memories.append(self.memory_store.get(memory_id))
+                    except KeyError:
+                        continue
+            else:
+                memories = self.memory_store.search("", limit=12)
+            memory_budget = max_characters // 2
+            memory_used = 0
+            for memory in memories:
                 if memory.status is not MemoryStatus.ACTIVE:
                     continue
-                selected.append({
+                item = {
                     "role": "system",
-                    "content": f"Approved memory [{memory.id}]: {memory.content}",
-                })
-        used = 0
+                    "content": f"Approved memory: {memory.content}",
+                }
+                size = len(item["content"])
+                if size > max_characters:
+                    continue
+                # A single long approved memory may consume the reserved
+                # transcript budget; dropping it would make an explicit user
+                # correction silently ineffective. Keep it when it fits alone.
+                if memory_used == 0 and size > memory_budget:
+                    memory_items.append(item)
+                    memory_used = size
+                    break
+                if memory_used + size > memory_budget:
+                    continue
+                memory_items.append(item)
+                memory_used += size
+
+        transcript: list[dict[str, str]] = []
+        used = sum(len(item["content"]) for item in memory_items)
         for message in reversed(self.store.get_messages(conversation_id, limit=500)):
             item = {"role": message.role.value, "content": message.content}
             size = len(message.content)
-            if selected and used + size > max_characters:
+            if size > max_characters - used:
                 break
-            selected.append(item)
+            transcript.append(item)
             used += size
-        conversation_messages = list(reversed(selected))
-        # Explicit memories stay ahead of transcript messages; they are never
-        # discovered implicitly from raw conversation text.
-        explicit = [item for item in selected if item["role"] == "system"]
-        transcript = [item for item in conversation_messages if item["role"] != "system"]
-        return explicit + transcript
+        # Memories are only sourced from active records. Raw conversation turns
+        # remain transcript context and are never promoted implicitly.
+        return memory_items + list(reversed(transcript))

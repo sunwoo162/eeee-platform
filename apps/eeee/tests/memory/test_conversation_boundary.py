@@ -8,7 +8,7 @@ from app.memory.store import MemoryStore
 from app.storage.sqlite import SQLiteStore
 
 
-def test_conversation_is_not_memory_without_explicit_memory_ids(tmp_path: Path) -> None:
+def test_active_explicit_memory_is_available_without_replaying_raw_turns(tmp_path: Path) -> None:
     sqlite_store = SQLiteStore(tmp_path / "state.sqlite3")
     sqlite_store.init()
     conversations = ConversationStore(sqlite_store)
@@ -32,7 +32,8 @@ def test_conversation_is_not_memory_without_explicit_memory_ids(tmp_path: Path) 
     plain_context = builder.build(conversation.id)
     memory_context = builder.build(conversation.id, memory_ids=[saved.id])
 
-    assert all(saved.content not in item["content"] for item in plain_context)
+    assert any(saved.content in item["content"] for item in plain_context)
+    assert all("이 내용은 자동 기억이 아니야" not in item["content"] for item in plain_context if item["role"] == "system")
     assert any(saved.content in item["content"] for item in memory_context)
 
 

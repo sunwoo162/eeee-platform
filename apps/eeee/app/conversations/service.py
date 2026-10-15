@@ -38,6 +38,18 @@ class ConversationService:
         self.provider = provider
         self.context_builder = context_builder or ConversationContextBuilder(store)
         self._cancel_events: dict[str, threading.Event] = {}
+        self._accepting = True
+
+    def set_accepting(self, accepting: bool) -> None:
+        self._accepting = accepting
+
+    def shutdown(self) -> None:
+        self._accepting = False
+        for request_id in list(self._cancel_events):
+            try:
+                self.cancel_request(request_id)
+            except (KeyError, ValueError):
+                continue
 
     def prepare_turn(
         self,
@@ -54,6 +66,8 @@ class ConversationService:
         )
         if existing is not None:
             return existing, False
+        if not self._accepting:
+            raise CoreShuttingDownError()
         if user_message_id is None:
             user_message = self.store.add_message(
                 conversation_id,
@@ -224,6 +238,9 @@ class ConversationService:
         cancel_event = self._cancel_events.setdefault(request_id, threading.Event())
         cancel_event.set()
         if request.state in {
+            RequestState.RECEIVED,
+            RequestState.PERSISTED_USER_MESSAGE,
+            RequestState.CLASSIFIED,
             RequestState.GENERATING,
             RequestState.STREAMING,
             RequestState.EXECUTING,
@@ -256,3 +273,10 @@ class ConversationCancelled(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("Conversation request was cancelled")
+
+
+class CoreShuttingDownError(RuntimeError):
+    code = "core_shutting_down"
+
+    def __init__(self) -> None:
+        super().__init__("EEEE Core is shutting down")

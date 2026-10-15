@@ -320,6 +320,71 @@ class ConversationStore:
             for row in rows
         ]
 
+    def recover_interrupted(self) -> list[str]:
+        """Recover in-flight requests left by a terminated Core process."""
+
+        now = _now()
+        timestamp = _iso(now)
+        recovered: list[str] = []
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                "SELECT id FROM assistant_requests "
+                "WHERE state IN (?, ?, ?) ORDER BY created_at ASC",
+                (
+                    RequestState.GENERATING.value,
+                    RequestState.STREAMING.value,
+                    RequestState.EXECUTING.value,
+                ),
+            ).fetchall()
+            for row in rows:
+                request_id = row["id"]
+                connection.execute(
+                    "UPDATE assistant_requests SET state = ?, error_code = ?, "
+                    "updated_at = ?, completed_at = ?, interrupted_at = ? WHERE id = ?",
+                    (
+                        RequestState.INTERRUPTED.value,
+                        "core_restarted",
+                        timestamp,
+                        timestamp,
+                        timestamp,
+                        request_id,
+                    ),
+                )
+                connection.execute(
+                    "UPDATE messages SET status = ?, error_code = ?, completed_at = ? "
+                    "WHERE request_id = ? AND status IN (?, ?)",
+                    (
+                        MessageStatus.INTERRUPTED.value,
+                        "core_restarted",
+                        timestamp,
+                        request_id,
+                        MessageStatus.PENDING.value,
+                        MessageStatus.STREAMING.value,
+                    ),
+                )
+                sequence = connection.execute(
+                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM assistant_events "
+                    "WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()[0]
+                connection.execute(
+                    "INSERT INTO assistant_events "
+                    "(event_id, request_id, sequence, event_type, payload_json, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        f"event-{uuid4().hex}",
+                        request_id,
+                        sequence,
+                        "request.interrupted",
+                        json.dumps(
+                            {"reason": "core_restarted"}, ensure_ascii=False
+                        ),
+                        timestamp,
+                    ),
+                )
+                recovered.append(request_id)
+        return recovered
+
 
 def _message_from_row(row: sqlite3.Row) -> ConversationMessage:
     return ConversationMessage(

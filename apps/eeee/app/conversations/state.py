@@ -8,12 +8,13 @@ class InvalidRequestTransition(ValueError):
 
 
 _TRANSITIONS: dict[RequestState, frozenset[RequestState]] = {
-    RequestState.RECEIVED: frozenset({RequestState.PERSISTED_USER_MESSAGE, RequestState.FAILED}),
-    RequestState.PERSISTED_USER_MESSAGE: frozenset({RequestState.CLASSIFIED, RequestState.FAILED}),
+    RequestState.RECEIVED: frozenset({RequestState.PERSISTED_USER_MESSAGE, RequestState.FAILED, RequestState.CANCELLED}),
+    RequestState.PERSISTED_USER_MESSAGE: frozenset({RequestState.CLASSIFIED, RequestState.FAILED, RequestState.CANCELLED}),
     RequestState.CLASSIFIED: frozenset({
         RequestState.GENERATING,
         RequestState.AWAITING_APPROVAL,
         RequestState.FAILED,
+        RequestState.CANCELLED,
     }),
     RequestState.GENERATING: frozenset({
         RequestState.STREAMING,

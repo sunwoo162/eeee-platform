@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
 from collections.abc import Mapping
 
@@ -36,6 +38,10 @@ from app.conversations.context import ConversationContextBuilder
 from app.conversations.service import ConversationProvider, ConversationService
 from app.conversations.store import ConversationStore
 from app.contracts import LocalEventBus
+from app.core.lifecycle import CoreLifecycle
+from app.core.lock import ProcessLock
+from app.core.lifecycle import CoreLifecycle
+from app.core.lock import ProcessLock
 from app.coordinator.service import Coordinator
 from app.design.references import DesignService
 from app.domain.errors import ApprovalError
@@ -103,6 +109,26 @@ def create_app(
             max_context_tokens=app_settings.ollama_context_tokens,
         ),
     )
+    core_lifecycle = CoreLifecycle(
+        store,
+        conversation_service,
+        lock=ProcessLock(app_settings.data_dir / "core.lock"),
+    )
+    core_lifecycle = CoreLifecycle(
+        store,
+        conversation_service,
+        lock=ProcessLock(app_settings.data_dir / "core.lock"),
+    )
+
+    @asynccontextmanager
+    async def core_lifespan(_application: FastAPI):
+        core_lifecycle.start()
+        try:
+            yield
+        finally:
+            core_lifecycle.stop()
+
+    application.router.lifespan_context = core_lifespan
     mobile_bridge = MobileBridge(
         store.path,
         enabled=app_settings.mobile_bridge_enabled,
@@ -221,17 +247,23 @@ def create_app(
     application.state.mobile_bridge = mobile_bridge
     application.state.project_documents = project_documents
     application.state.project_evidence = project_evidence
-    if claim_latch_process is not None:
-        @application.on_event("shutdown")
-        async def stop_claim_latch_plugin() -> None:
-            claim_latch_process.stop()
-
-    @application.on_event("shutdown")
-    async def stop_assistant_supervisor() -> None:
-        assistant_supervisor.shutdown()
     application.state.ollama_runtime = ollama_runtime
     application.state.conversation_store = conversation_store
     application.state.conversation_service = conversation_service
+    application.state.core_lifecycle = core_lifecycle
+
+    @asynccontextmanager
+    async def application_lifespan(_application: FastAPI):
+        core_lifecycle.start()
+        try:
+            yield
+        finally:
+            core_lifecycle.stop()
+            if claim_latch_process is not None:
+                claim_latch_process.stop()
+            assistant_supervisor.shutdown()
+
+    application.router.lifespan_context = application_lifespan
     local_model_name = app_settings.local_model or discover_local_model(
         app_settings.local_model_base_url, timeout_seconds=0.2
     )
@@ -397,6 +429,7 @@ def create_app(
         build_conversation_router(
             conversation_service,
             ollama=ollama_runtime,
+            lifecycle=core_lifecycle,
             schema_version=1,
         )
     )

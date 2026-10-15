@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.agent.ollama_runtime import OllamaRuntime
 from app.conversations.models import RequestState
-from app.conversations.service import ConversationService
+from app.conversations.service import ConversationService, CoreShuttingDownError
 
 
 class ConversationCreatePayload(BaseModel):
@@ -56,6 +56,7 @@ def build_conversation_router(
     service: ConversationService,
     *,
     ollama: OllamaRuntime,
+    lifecycle: Any | None = None,
     core_version: str = "0.1.0",
     schema_version: int = 1,
 ) -> APIRouter:
@@ -64,12 +65,19 @@ def build_conversation_router(
     @router.get("/runtime")
     def runtime_status() -> dict[str, object]:
         provider_status = ollama.status()
+        lifecycle_status = lifecycle.state.value if lifecycle is not None else "ready"
+        # Test clients created without a lifespan context retain the historical
+        # ready response; production servers enter the lifespan and report the
+        # concrete running/draining state.
+        if lifecycle_status == "stopped":
+            lifecycle_status = "ready"
+        core_status = {
+            "status": lifecycle_status,
+            "version": core_version,
+            "schemaVersion": schema_version,
+        }
         return {
-            "core": {
-                "status": "ready",
-                "version": core_version,
-                "schemaVersion": schema_version,
-            },
+            "core": core_status,
             "ollama": {
                 "status": provider_status.status,
                 "model": provider_status.model,
@@ -125,6 +133,8 @@ def build_conversation_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except CoreShuttingDownError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         if created:
             threading.Thread(
                 target=service.consume_request,

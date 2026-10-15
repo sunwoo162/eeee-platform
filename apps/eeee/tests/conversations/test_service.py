@@ -77,3 +77,25 @@ def test_conversation_service_persists_provider_failure_without_fake_success(tmp
     assert messages[-1].role == "assistant"
     assert messages[-1].status == MessageStatus.FAILED
     assert not any(event.event_type == "message.completed" for event in events)
+
+
+def test_conversation_service_rejects_empty_provider_response(tmp_path) -> None:
+    store, service = make_service(tmp_path, FakeProvider())
+    conversation = store.create_conversation()
+
+    events = list(
+        service.stream_turn(
+            conversation.id,
+            content="빈 답변이면 안 돼",
+            client_message_id="client-empty",
+        )
+    )
+
+    request = store.get_request(events[-1].request_id)
+    messages = store.get_messages(conversation.id)
+
+    assert request.state == RequestState.FAILED
+    assert request.error_code == "provider_empty_response"
+    assert messages[-1].status == MessageStatus.FAILED
+    assert messages[-1].content == ""
+    assert not any(event.event_type == "message.completed" for event in events)

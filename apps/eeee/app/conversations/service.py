@@ -13,6 +13,7 @@ from app.conversations.models import (
     MessageStatus,
     RequestState,
 )
+from app.conversations.providers import ConversationProviderError
 from app.conversations.store import ConversationStore
 
 
@@ -166,6 +167,11 @@ class ConversationService:
                     request.id,
                     "message.delta",
                     {"messageId": assistant.id, "delta": delta},
+                )
+            if not collected.strip():
+                raise ConversationProviderError(
+                    "대화 provider가 빈 답변을 반환했어.",
+                    code="provider_empty_response",
                 )
             if assistant is None:
                 assistant = self.store.add_message(

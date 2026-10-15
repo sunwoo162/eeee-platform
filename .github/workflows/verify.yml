@@ -41,5 +41,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force ..\..\var | Out-Null
           python -m pytest -q --basetemp ..\..\var\pytest-ci tests\integrations tests\memory tests\trust tests\assistant tests\project_runtime tests\mobile tests\e2e tests\coordinator\test_memory_project_flow.py tests\api\test_memory_api.py
+      - name: Build and test ISEOL contracts, QA, and organization
+        working-directory: packages/iseol
+        shell: pwsh
+        run: |
+          npm run build --silent
+          node --import tsx --test tests/integrations/contracts.test.ts tests/qa/independent-runner.test.ts tests/qa/qa-orchestrator.test.ts tests/qa/release-gate.test.ts tests/agent-organization/team-composer.test.ts tests/agent-organization/qa-baseline.test.ts
       - name: Test ClaimLatch adapter
         run: npm test --silent --prefix integrations/claimlatch-adapter

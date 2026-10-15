@@ -1,7 +1,7 @@
 # EEEE v1 Acceptance Record
 
 Date: 2026-10-15
-Branch: `codex/eeee-main-sync`  
+Branch: `codex/eeee-main-sync`
 Head at verification start: `08d99f0`
 
 This record separates deterministic checks from environment-dependent checks.

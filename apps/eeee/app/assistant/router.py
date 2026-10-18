@@ -94,7 +94,16 @@ class CapabilityRouter:
         candidates: list[CapabilityCandidate] = []
         for descriptor in self.registry.list():
             matched = [phrase for phrase in descriptor.trigger_phrases if _contains(normalized, phrase)]
-            score = len(matched)
+            specific_matches = [
+                phrase for phrase in matched
+                if not any(
+                    phrase != other
+                    and _normalize(phrase) in _normalize(other)
+                    for other in matched
+                )
+            ]
+            score = sum(1 + len(_normalize(phrase)) // 3 for phrase in specific_matches)
+            score += _action_intent_bonus(descriptor.id, normalized)
             if score:
                 candidates.append(
                     CapabilityCandidate(
@@ -220,3 +229,26 @@ def _is_informational_capability_question(normalized: str) -> bool:
         "build", "create", "implement", "develop", "generate",
     )
     return not any(marker in normalized for marker in action_markers)
+
+
+def _action_intent_bonus(capability_id: str, normalized: str) -> int:
+    """Prefer the action verb over a broad provider noun match.
+
+    For example, "Gmail에 메일 보내" contains both the broad "메일" trigger
+    and the more specific send intent. The capability id is metadata owned by
+    the connector, so this stays provider-agnostic.
+    """
+    action = capability_id.rsplit(":", 1)[-1].casefold()
+    write_markers = (
+        "보내", "전송", "작성", "생성", "추가", "등록", "수정", "삭제",
+        "send", "create", "write", "update", "delete", "add",
+    )
+    read_markers = (
+        "목록", "조회", "찾", "읽", "보여", "확인", "list", "search",
+        "read", "show", "find", "get",
+    )
+    if any(marker in normalized for marker in write_markers):
+        return 4 if any(marker in action for marker in ("send", "create", "write", "update", "delete", "add")) else 0
+    if any(marker in normalized for marker in read_markers):
+        return 3 if any(marker in action for marker in ("list", "search", "read", "get", "events")) else 0
+    return 0

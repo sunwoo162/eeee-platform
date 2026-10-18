@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 from uuid import uuid4
 
@@ -65,8 +66,28 @@ class DesktopSession:
                 })
         return self.snapshot
 
-    def route(self, text: str, workspace: str | None = None) -> dict[str, object]:
-        result = self.client.route_assistant(text, workspace)
+    def route(
+        self,
+        text: str,
+        workspace: str | None = None,
+        *,
+        approved: bool = False,
+        approval_request_id: str | None = None,
+    ) -> dict[str, object]:
+        route_kwargs: dict[str, object] = {}
+        if approved:
+            route_kwargs["approved"] = True
+        if approval_request_id:
+            try:
+                parameters = inspect.signature(self.client.route_assistant).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "approval_request_id" in parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            ):
+                route_kwargs["approval_request_id"] = approval_request_id
+        result = self.client.route_assistant(text, workspace, **route_kwargs)
         job_id = result.get("jobId")
         if isinstance(job_id, str) and job_id:
             self.assistant_job_id = job_id
@@ -75,6 +96,19 @@ class DesktopSession:
             self.project_id = selected_project
         snapshot = self.refresh()
         snapshot["assistantRoute"] = result
+        for key in (
+            "pluginId",
+            "pluginExecutionId",
+            "pluginOutput",
+            "approvalRequired",
+            "approvalCapabilityId",
+            "approvalPluginId",
+            "approvalSideEffectLevel",
+            "approvalRequestId",
+            "selection",
+        ):
+            if key in result:
+                snapshot[key] = result[key]
         if not isinstance(job_id, str) or not job_id:
             # A direct EEEE/plugin response has no project snapshot to carry
             # its state. Even project-scoped synchronous responses must remain

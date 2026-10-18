@@ -3,10 +3,12 @@
 from collections.abc import Mapping
 from contextlib import closing, contextmanager
 import json
+from pathlib import Path
 
 from app.contracts import EventEnvelope, ExecutionEnvelope
 from app.activity.store import ActivityLedger
 from app.harness.state import AgentTask, ProjectState
+from app.iseol.review import FinalProjectReport
 from app.project_view.models import ProjectMapEdge, ProjectMapEvents, ProjectMapNode, ProjectMapSnapshot
 from app.runtime.store import StaleProjectRevision
 from app.storage.sqlite import SQLiteStore
@@ -232,6 +234,115 @@ class ProjectViewService:
         if current != project.revision:
             raise StaleProjectRevision(f"stale project revision for {project_id}: {current}")
         return self.activity.list(project_id, current, cursor)
+
+    def get_quality(self, project_id: str, revision: str | None = None) -> dict[str, object]:
+        """Return the durable final report, or an explicit awaiting state."""
+
+        with self._read(project_id, revision) as (_connection, project):
+            current_revision = str(project["revision"])
+            root = Path(str(project["workspace"])).resolve()
+            report_path = root / "FINAL-QUALITY-REPORT.json"
+            if not report_path.is_file():
+                return {
+                    "status": "awaiting",
+                    "projectId": project_id,
+                    "projectRevision": current_revision,
+                    "reason": "최종 품질 리포트가 아직 생성되지 않았어.",
+                }
+            try:
+                report = FinalProjectReport.model_validate_json(report_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                return {
+                    "status": "blocked",
+                    "projectId": project_id,
+                    "projectRevision": current_revision,
+                    "reason": f"최종 품질 리포트를 읽지 못했어: {type(exc).__name__}",
+                }
+            if report.project_id != project_id or report.project_revision != current_revision:
+                return {
+                    "status": "blocked",
+                    "projectId": project_id,
+                    "projectRevision": current_revision,
+                    "reason": "최종 품질 리포트의 프로젝트 revision이 현재 상태와 달라.",
+                }
+            return report.model_dump(mode="json", by_alias=True)
+
+    def get_execution_plan(self, project_id: str, revision: str | None = None) -> dict[str, object]:
+        """Expose safe plan progress without raw prompts or agent instructions."""
+
+        with self._read(project_id, revision) as (_connection, project):
+            current_revision = str(project["revision"])
+            path = Path(str(project["workspace"])).resolve() / "execution-plan.json"
+            if not path.is_file():
+                return {
+                    "status": "awaiting",
+                    "projectId": project_id,
+                    "projectRevision": current_revision,
+                    "phases": [],
+                    "selectedExtensions": [],
+                    "missingExtensions": [],
+                    "tasks": [],
+                }
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                return {
+                    "status": "blocked",
+                    "projectId": project_id,
+                    "projectRevision": current_revision,
+                    "reason": "execution-plan.json을 읽지 못했어.",
+                }
+            if not isinstance(value, Mapping) or value.get("projectId") != project_id or value.get("projectRevision") != current_revision:
+                return {
+                    "status": "blocked",
+                    "projectId": project_id,
+                    "projectRevision": current_revision,
+                    "reason": "실행 계획의 프로젝트 identity가 현재 상태와 달라.",
+                }
+            graph = value.get("agentGraph") if isinstance(value.get("agentGraph"), Mapping) else {}
+            context = graph.get("context") if isinstance(graph.get("context"), Mapping) else {}
+            agents = graph.get("agents") if isinstance(graph.get("agents"), list) else []
+            execution = value.get("agentExecutionReport") if isinstance(value.get("agentExecutionReport"), Mapping) else {}
+            records = {
+                item.get("agentId"): item
+                for item in execution.get("agents", [])
+                if isinstance(item, Mapping) and isinstance(item.get("agentId"), str)
+            }
+            tasks = []
+            for agent in agents:
+                if not isinstance(agent, Mapping) or not isinstance(agent.get("id"), str):
+                    continue
+                record = records.get(agent["id"], {})
+                tasks.append({
+                    "id": agent["id"],
+                    "taskId": agent.get("taskId", agent["id"]),
+                    "title": agent.get("title", agent["id"]),
+                    "role": agent.get("role", agent["id"]),
+                    "phase": agent.get("phase"),
+                    "dependencies": list(agent.get("dependencies", [])) if isinstance(agent.get("dependencies"), list) else [],
+                    "status": record.get("status", "planned"),
+                })
+            phases = context.get("phases") if isinstance(context.get("phases"), list) else [
+                task["phase"] for task in tasks if isinstance(task.get("phase"), str)
+            ]
+            intent = value.get("intent") if isinstance(value.get("intent"), Mapping) else {}
+            safe_intent = {
+                key: intent[key]
+                for key in ("schemaVersion", "goal", "projectType", "templateId", "targetAudience", "acceptanceCriteria", "riskLevel", "requiresExternalApproval")
+                if key in intent
+            }
+            return {
+                "status": value.get("status", "planned"),
+                "projectId": project_id,
+                "projectRevision": current_revision,
+                "requestId": value.get("requestId"),
+                "nativePlan": value.get("nativePlan", False),
+                "intent": safe_intent,
+                "phases": list(dict.fromkeys(str(item) for item in phases if isinstance(item, str))),
+                "selectedExtensions": [item for item in value.get("selectedExtensions", context.get("selectedExtensions", [])) if isinstance(item, str)],
+                "missingExtensions": [item for item in value.get("missingExtensions", context.get("missingExtensions", [])) if isinstance(item, str)],
+                "tasks": tasks,
+            }
 
     @staticmethod
     def _cursor(connection, project_id, revision) -> int:

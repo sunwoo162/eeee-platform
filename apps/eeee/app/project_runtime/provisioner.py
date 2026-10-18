@@ -12,6 +12,9 @@ from app.project_runtime.web_runner import WebProjectRunner
 from app.project_runtime.iseol_bridge import IseolPlanBridge
 from app.planning.models import PlanningHandoff
 from app.project_runtime.todo_runner import TodoProjectRunner
+from app.iseol.contracts import ProjectIntent
+from app.project_runtime.meal_planner_scaffold import MealPlannerTemplate
+from app.project_runtime.templates import WebTemplateCatalog
 import json
 from datetime import datetime, timezone
 from app.storage.sqlite import SQLiteStore
@@ -44,27 +47,25 @@ class ProjectProvisioner:
         memory_context: list[dict[str, object]] | None = None,
         request_id: str | None = None,
         planning_handoff: PlanningHandoff | None = None,
+        intent: ProjectIntent | None = None,
     ) -> ProjectProvisioningResult:
         existing = self._existing_current_profile(project)
         if existing is not None:
-            if _is_todo_request(existing.goal, existing.scope):
-                create_todo_scaffold(project.workspace)
-            if existing.runtime_profile == "web_app" or _is_web_request(request):
-                create_web_app_scaffold(project.workspace, project.name)
+            self._create_scaffold(project.workspace, project.name, request, intent, existing.template_id)
             execution_plan_path = self._write_execution_plan(
                 project, request, memory_ids, qa_baseline_ids, memory_context, request_id, planning_handoff,
+                intent=intent,
             )
             return _result(existing, execution_plan_path=execution_plan_path)
 
         Path(project.workspace).mkdir(parents=True, exist_ok=True)
-        if _is_todo_request(request.goal, [request.target_type, *request.acceptance_criteria]):
-            create_todo_scaffold(project.workspace)
-        if _is_web_request(request):
-            create_web_app_scaffold(project.workspace, project.name)
+        self._create_scaffold(project.workspace, project.name, request, intent)
         profile = ProjectProfile(
             project_id=project.id,
             project_revision=project.revision,
             goal=request.goal,
+            template_id=intent.template_id if intent is not None else None,
+            assumptions=list(intent.assumptions) if intent is not None else [],
             runtime_profile=("web_app" if request.target_type == "web_app" else request.runtime_profile),
             scope=[request.target_type, *request.acceptance_criteria],
             constraints=list(request.constraints),
@@ -89,8 +90,32 @@ class ProjectProvisioner:
         execution_plan_path = None
         execution_plan_path = self._write_execution_plan(
             project, request, memory_ids, qa_baseline_ids, memory_context, request_id, planning_handoff,
+            intent=intent,
         )
         return _result(profile, execution_plan_path=execution_plan_path)
+
+    @staticmethod
+    def _create_scaffold(
+        workspace: str,
+        project_name: str,
+        request: RequestBrief,
+        intent: ProjectIntent | None,
+        existing_template_id: str | None = None,
+    ) -> None:
+        template_id = intent.template_id if intent is not None else existing_template_id
+        if template_id == "meal_planner":
+            MealPlannerTemplate.create(Path(workspace), project_name)
+        elif template_id == "todo_app":
+            if request.runtime_profile == "web_app" and _contains_web_marker(request.raw_text):
+                create_web_app_scaffold(workspace, project_name)
+            else:
+                create_todo_scaffold(workspace)
+        elif _is_todo_request(request.goal, [request.target_type, *request.acceptance_criteria]):
+            create_todo_scaffold(workspace)
+        elif intent is not None and WebTemplateCatalog.resolve(intent).id == "generic_web":
+            create_web_app_scaffold(workspace, project_name)
+        elif _is_web_request(request):
+            create_web_app_scaffold(workspace, project_name)
 
     @staticmethod
     def _write_local_project_documents(
@@ -119,6 +144,8 @@ class ProjectProvisioner:
             "## Record policy",
             "This local record is the source of truth until an optional document connector is configured.",
             "QA_REPORT.json, RELEASE_MANIFEST.json, execution-plan.json, and Git history are linked evidence.",
+            "Rollback policy: restore the previous RELEASE_MANIFEST.json and Git revision, then record the result.",
+            f"Template: `{profile.template_id or 'legacy'}`",
         ]
         (root / "PROJECT_LOG.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -131,6 +158,8 @@ class ProjectProvisioner:
         memory_context: list[dict[str, object]] | None,
         request_id: str | None,
         planning_handoff: PlanningHandoff | None,
+        *,
+        intent: ProjectIntent | None = None,
     ) -> str | None:
         if self.iseol_bridge is None or request_id is None:
             return None
@@ -143,6 +172,7 @@ class ProjectProvisioner:
             qa_baseline_ids=qa_baseline_ids,
             memory_context=memory_context,
             planning_handoff=planning_handoff,
+            intent=intent,
         )
         plan_path = Path(project.workspace) / "execution-plan.json"
         plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -181,4 +211,9 @@ def is_todo_request(goal: str, scope: list[str]) -> bool:
 
 def _is_web_request(request: RequestBrief) -> bool:
     return request.target_type == "web_app" or request.runtime_profile == "web_app"
+
+
+def _contains_web_marker(text: str) -> bool:
+    folded = text.casefold()
+    return any(marker in folded for marker in ("웹", "website", "web app", "webapp", "홈페이지", "사이트"))
 

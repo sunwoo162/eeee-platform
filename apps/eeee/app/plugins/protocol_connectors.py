@@ -14,16 +14,37 @@ from app.plugins.connectors import ConnectorConnection, ConnectorHealth, PluginC
 
 
 class HttpTransport(Protocol):
-    def request(self, method: str, url: str, *, headers: Mapping[str, str], json=None): ...
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        params=None,
+        json=None,
+    ): ...
 
 
 class HttpxTransport:
     def __init__(self, *, timeout_seconds: float = 20.0) -> None:
         self.timeout_seconds = timeout_seconds
 
-    def request(self, method: str, url: str, *, headers: Mapping[str, str], json=None):
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        params=None,
+        json=None,
+    ):
         return httpx.request(
-            method, url, headers=dict(headers), json=json, timeout=self.timeout_seconds
+            method,
+            url,
+            headers=dict(headers),
+            params=params,
+            json=json,
+            timeout=self.timeout_seconds,
         )
 
 
@@ -49,12 +70,19 @@ class HttpOpenApiConnector:
         transport: HttpTransport,
         operations: Mapping[str, HttpOperation],
         health_path: str = "/health",
+        credential_refresher: Callable[[Mapping[str, str]], Mapping[str, str]] | None = None,
     ) -> None:
         self.plugin_id = plugin_id
         self.base_url = base_url.rstrip("/")
         self.transport = transport
         self.operations = dict(operations)
         self.health_path = health_path
+        self.credential_refresher = credential_refresher
+
+    def refresh_credential(self, credential: Mapping[str, str]) -> Mapping[str, str]:
+        if self.credential_refresher is None:
+            raise RuntimeError("provider credential refresh is unavailable")
+        return self.credential_refresher(credential)
 
     def connect(
         self, user_id: str, credential: Mapping[str, str], approved_permissions: set[str]
@@ -95,11 +123,13 @@ class HttpOpenApiConnector:
         if operation.permission not in connection.approved_permissions:
             raise PermissionError(f"permission is required: {operation.permission}")
         path, body = _render_operation_path(operation.path, value)
+        params = body if operation.method == "GET" else None
         response = self.transport.request(
             operation.method,
             f"{self.base_url}{path}",
             headers=self._headers(connection),
-            json=body,
+            params=params,
+            json=None if operation.method == "GET" else body,
         )
         health = _health_from_status(self.plugin_id, response.status_code)
         if health.status != "healthy":

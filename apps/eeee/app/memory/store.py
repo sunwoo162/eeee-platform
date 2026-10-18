@@ -164,6 +164,106 @@ class MemoryStore:
             for row in reversed(rows)
         ]
 
+    def list_conversations(
+        self, *, query: str = "", limit: int = 50
+    ) -> list[dict[str, object]]:
+        """Return bounded conversation summaries for the Chat History client."""
+
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        query = query.strip()
+        with self._connect() as connection:
+            if query:
+                pattern = f"%{_escape_like(query)}%"
+                rows = connection.execute(
+                    "SELECT conversation_id, COUNT(*) AS message_count, MAX(id) AS latest_id "
+                    "FROM conversation_turns "
+                    "WHERE conversation_id LIKE ? ESCAPE '\\' "
+                    "OR content LIKE ? ESCAPE '\\' "
+                    "GROUP BY conversation_id ORDER BY latest_id DESC LIMIT ?",
+                    (pattern, pattern, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT conversation_id, COUNT(*) AS message_count, MAX(id) AS latest_id "
+                    "FROM conversation_turns GROUP BY conversation_id "
+                    "ORDER BY latest_id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            summaries: list[dict[str, object]] = []
+            for row in rows:
+                latest = connection.execute(
+                    "SELECT content, created_at FROM conversation_turns WHERE id = ?",
+                    (row["latest_id"],),
+                ).fetchone()
+                if latest is None:
+                    continue
+                summaries.append({
+                    "conversationId": str(row["conversation_id"]),
+                    "messageCount": int(row["message_count"]),
+                    "preview": str(latest["content"]),
+                    "updatedAt": str(latest["created_at"]),
+                })
+            return summaries
+
+    def search_conversations(
+        self, query: str, *, limit: int = 50
+    ) -> list[dict[str, object]]:
+        """Search transcript text without loading an unbounded transcript."""
+
+        return self.list_conversations(query=query, limit=limit)
+
+    def get_conversation(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 100,
+        before_id: int | None = None,
+    ) -> dict[str, object]:
+        """Return the newest page, or an older page before an id cursor."""
+
+        conversation_id = conversation_id.strip()
+        if not conversation_id:
+            raise ValueError("conversation_id is required")
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        if before_id is not None and before_id < 1:
+            raise ValueError("before_id must be positive")
+        with self._connect() as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()[0]
+            if before_id is None:
+                rows = connection.execute(
+                    "SELECT id, role, content, created_at FROM conversation_turns "
+                    "WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+                    (conversation_id, limit + 1),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT id, role, content, created_at FROM conversation_turns "
+                    "WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+                    (conversation_id, before_id, limit + 1),
+                ).fetchall()
+        has_older = len(rows) > limit
+        page = list(reversed(rows[:limit]))
+        turns = [
+            {
+                "id": int(row["id"]),
+                "role": str(row["role"]),
+                "content": str(row["content"]),
+                "createdAt": str(row["created_at"]),
+            }
+            for row in page
+        ]
+        return {
+            "conversationId": conversation_id,
+            "messageCount": int(count),
+            "turns": turns,
+            "nextBeforeId": turns[0]["id"] if has_older and turns else None,
+        }
+
     def save_feedback(
         self,
         *,
@@ -893,3 +993,7 @@ def _redact_conversation_content(content: str) -> str:
     redacted = _JSON_SECRET_PATTERN.sub(r"\1[민감정보]\2", redacted)
     redacted = _JWT_PATTERN.sub("[민감정보]", redacted)
     return _CONVERSATION_SECRET_PATTERN.sub(r"\1[민감정보]", redacted)
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

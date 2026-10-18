@@ -35,3 +35,36 @@ def test_explicit_memory_api_is_separate_from_conversation_search(tmp_path):
     )
     assert revoked.status_code == 200
     assert client.get("/api/memory", params={"query": "짧은"}).json() == []
+
+
+def test_chat_history_api_lists_opens_searches_and_sends_in_the_same_conversation(tmp_path):
+    client = TestClient(
+        create_app(Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces"))
+    )
+
+    first = client.post(
+        "/api/assistant/route",
+        json={"conversationId": "desktop-default", "text": "첫 명령"},
+    )
+    assert first.status_code == 200
+
+    listed = client.get("/api/assistant/conversations")
+    assert listed.status_code == 200
+    assert listed.json()[0]["conversationId"] == "desktop-default"
+    assert listed.json()[0]["messageCount"] == 2
+
+    opened = client.get("/api/assistant/conversations/desktop-default", params={"limit": 10})
+    assert opened.status_code == 200
+    assert [item["role"] for item in opened.json()["turns"]] == ["user", "assistant"]
+
+    searched = client.get("/api/assistant/conversations", params={"query": "첫 명령"})
+    assert searched.status_code == 200
+    assert [item["conversationId"] for item in searched.json()] == ["desktop-default"]
+
+    second = client.post(
+        "/api/assistant/route",
+        json={"conversationId": "desktop-default", "text": "두 번째 명령"},
+    )
+    assert second.status_code == 200
+    opened_again = client.get("/api/assistant/conversations/desktop-default")
+    assert opened_again.json()["turns"][-2]["content"] == "두 번째 명령"

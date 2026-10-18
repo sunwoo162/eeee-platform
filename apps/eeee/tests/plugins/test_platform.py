@@ -46,6 +46,26 @@ class GenericFakeConnector(FakeConnector):
     plugin_id = "gmail"
 
 
+class RefreshingFakeConnector(GenericFakeConnector):
+    def connect(self, user_id, credential, approved_permissions):
+        return ConnectorConnection(
+            user_id=user_id, plugin_id=self.plugin_id,
+            approved_permissions=frozenset(approved_permissions),
+            client={"access_token": credential["access_token"]},
+        )
+
+    def health(self, connection):
+        if connection.client["access_token"] == "old":
+            return ConnectorHealth(
+                status="unhealthy", code="reauthentication_required", reason="expired"
+            )
+        return ConnectorHealth(status="healthy", code="healthy", reason="ok")
+
+    def refresh_credential(self, credential):
+        assert credential["refresh_token"] == "refresh"
+        return {"access_token": "new", "refresh_token": "refresh"}
+
+
 def _platform(tmp_path, connector):
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.init()
@@ -98,6 +118,35 @@ def test_platform_marks_provider_failure_and_does_not_expose_capability(tmp_path
     assert platform.connections.get("user-a", "notion").credential_ref is None
     assert credentials._values == {}
     assert platform.capabilities("user-a") == []
+
+
+def test_platform_refreshes_expired_provider_credential_and_persists_new_token(tmp_path) -> None:
+    connector = RefreshingFakeConnector()
+    credentials = MemoryCredentialStore()
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store, credentials=credentials, connectors={"gmail": connector},
+    )
+    platform.install("gmail")
+    platform.connect(
+        "user-a", "gmail", {"mail.read"},
+        {"access_token": "new", "refresh_token": "refresh"}, None,
+    )
+    connection = platform.connections.get("user-a", "gmail")
+    replacement = credentials.put(
+        "user-a", "gmail", '{"access_token": "old", "refresh_token": "refresh"}'
+    )
+    platform.connections.save(connection.model_copy(update={"credential_ref": replacement}))
+    credentials.delete(connection.credential_ref)
+
+    health = platform.health("user-a", "gmail")
+
+    assert health.status == "healthy"
+    refreshed = platform.connections.get("user-a", "gmail")
+    assert refreshed.status == "connected"
+    assert credentials.get(refreshed.credential_ref) == '{"access_token": "new", "refresh_token": "refresh"}'
+    assert platform.capabilities("user-a")[0].id == "plugin:gmail:mail.list"
 
 
 def test_failed_reconnect_keeps_existing_healthy_credential(tmp_path) -> None:
@@ -153,6 +202,28 @@ def test_unconfigured_catalog_connector_can_install_but_cannot_connect(tmp_path)
         platform.begin_oauth("user-a", "gmail", {"mail.read"}, None)
 
 
+def test_chat_history_install_copies_only_the_plugin_and_exposes_launch_info(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store,
+        plugin_install_root=tmp_path / "plugins",
+        connectors={},
+    )
+
+    installed = platform.install("eeee-chat-history")
+
+    assert installed.status == "connected"
+    assert platform.status("eeee-chat-history") == "connected"
+    launch = platform.launch_info("eeee-chat-history")
+    assert launch["pluginId"] == "eeee-chat-history"
+    assert str(launch["entrypoint"]).endswith("eeee_chat_history\\main.py")
+    assert (tmp_path / "plugins" / "eeee_chat_history" / "manifest.json").is_file()
+
+    platform.uninstall("eeee-chat-history")
+    assert not (tmp_path / "plugins" / "eeee_chat_history").exists()
+
+
 def test_connected_first_party_provider_projects_action_capabilities_and_invokes_action(tmp_path) -> None:
     connector = GenericFakeConnector()
     store = SQLiteStore(tmp_path / "state.sqlite3")
@@ -169,6 +240,63 @@ def test_connected_first_party_provider_projects_action_capabilities_and_invokes
     result = platform.invoke("user-a", "plugin:gmail:mail.list", {"query": "unread"})
     assert result.status == "completed"
     assert result.output["action"] == "mail.list"
+
+
+def test_platform_extracts_natural_language_input_and_requires_send_approval(tmp_path) -> None:
+    connector = GenericFakeConnector()
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store, credentials=MemoryCredentialStore(), connectors={"gmail": connector}
+    )
+    platform.install("gmail")
+    platform.connect(
+        "user-a", "gmail", {"mail.read", "mail.send"},
+        {"access_token": "secret"}, "Work",
+    )
+
+    waiting = platform.invoke(
+        "user-a", "plugin:gmail:mail.send",
+        {"text": "s25011@gsm.hs.kr 에 test라는 메일 보내"},
+    )
+
+    assert waiting.status.value == "awaiting_approval"
+    assert waiting.required_approval is True
+    assert waiting.side_effect_level.value == "external"
+    assert waiting.output["status"] == "awaiting_approval"
+    assert waiting.input["to"] == "s25011@gsm.hs.kr"
+    assert waiting.input["subject"] == "test"
+
+    completed = platform.invoke(
+        "user-a", "plugin:gmail:mail.send",
+        {"text": "s25011@gsm.hs.kr 에 test라는 메일 보내", "approved": True},
+    )
+
+    assert completed.status.value == "completed"
+    assert completed.approval_state.value == "approved"
+    assert completed.input["body"] == "test"
+
+
+def test_platform_returns_blocked_envelope_for_incomplete_natural_language_send(tmp_path) -> None:
+    connector = GenericFakeConnector()
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store, credentials=MemoryCredentialStore(), connectors={"gmail": connector}
+    )
+    platform.install("gmail")
+    platform.connect(
+        "user-a", "gmail", {"mail.send"}, {"access_token": "secret"}, "Work"
+    )
+
+    result = platform.invoke(
+        "user-a", "plugin:gmail:mail.send",
+        {"text": "제목만 있는 메일 보내", "approved": True},
+    )
+
+    assert result.status.value == "blocked"
+    assert result.error is not None
+    assert "받는 사람" in result.error.message
 
 
 def test_application_distinguishes_optional_installation_from_connection_requirement(tmp_path) -> None:

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from app.domain.models import PetState, Project, RequestBrief
 from app.project_runtime.provisioner import ProjectProvisioner
+from app.iseol.intake import NaturalLanguageIntake
 from app.storage.sqlite import SQLiteStore
 
 
@@ -113,4 +114,25 @@ def test_web_request_provisions_a_full_stack_project_boundary(tmp_path) -> None:
     assert (root / "apps" / "web" / "index.html").is_file()
     assert (root / "apps" / "api" / "server.py").is_file()
     assert (root / ".env.example").is_file()
+
+
+def test_meal_intent_provisions_selected_template_and_records_it(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    provisioner = ProjectProvisioner(store)
+    intent = NaturalLanguageIntake.parse("오늘 식단 정리해주는 웹 만들어줘").intent
+
+    result = provisioner.provision(
+        project(tmp_path / "meal-workspace"),
+        intent.to_request_brief(),
+        memory_ids=[],
+        qa_baseline_ids=[],
+        intent=intent,
+    )
+
+    root = tmp_path / "meal-workspace"
+    assert result.profile.template_id == "meal_planner"
+    assert (root / "apps/web/src/entities/meal/model.js").is_file()
+    assert "meal_planner" in (root / "DESIGN.md").read_text(encoding="utf-8")
+    assert '"templateId": "meal_planner"' in (root / "PROJECT_PROFILE.json").read_text(encoding="utf-8")
 

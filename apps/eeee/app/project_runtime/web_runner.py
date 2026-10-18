@@ -17,6 +17,7 @@ from typing import Any, Mapping
 from app.project_runtime.git_workspace import GitWorkspaceError, record_workspace
 from app.release.manifest import build_release_manifest
 from app.iseol.quality import ProductQualityProfile
+from app.project_runtime.templates import WebTemplateCatalog
 
 
 @dataclass
@@ -31,6 +32,7 @@ class PreparedWebRun:
     qa_report: dict[str, Any]
     qa_report_path: str
     artifacts: list[dict[str, Any]]
+    template_id: str = "todo_app"
 
 
 @dataclass
@@ -73,16 +75,27 @@ class WebProjectRunner:
         self.stop(LocalRuntimeResult(process=process, url=url, auth_mode="demo"))
         raise TimeoutError("Generated web API did not become ready")
 
-    def prepare(self, *, project_id: str, project_revision: str, workspace: str | Path) -> PreparedWebRun:
+    def prepare(
+        self,
+        *,
+        project_id: str,
+        project_revision: str,
+        workspace: str | Path,
+        template_id: str = "todo_app",
+    ) -> PreparedWebRun:
         root = Path(workspace).resolve()
+        template = WebTemplateCatalog.by_id(template_id)
         checks = []
-        for relative in (
-            "apps/web/index.html", "apps/web/src/app/main.js", "apps/web/src/entities/todo/model.js",
+        common_files = (
+            "apps/web/index.html", "apps/web/src/app/main.js",
             "apps/web/src/shared/lib/api.js", "apps/web/src/pages/home/ui.js",
             "apps/web/src/shared/ui/styles.css", "apps/api/server.py",
             "apps/api/store.py", "packages/auth/README.md", "packages/db/README.md",
             ".env.example", "DEPLOYMENT.md",
-        ):
+        )
+        for relative in (*common_files, *template.required_files):
+            if relative in common_files and relative in template.required_files:
+                continue
             path = root / relative
             checks.append(self._check("required-file:" + relative, path.is_file(), path))
             if path.is_file():
@@ -98,11 +111,27 @@ class WebProjectRunner:
         checks.append(self._check("deployment:truthful-handoff", "ClaimLatch" in self._read(root / "DEPLOYMENT.md"), root / "DEPLOYMENT.md"))
         store = root / "apps/api/store.py"
         page = root / "apps/web/src/pages/home/ui.js"
-        checks.append(self._check(
-            "product-baseline:todo-workflow",
-            all(token in self._read(path) for path, token in ((api, "/api/todos/stats"), (store, "def delete"), (store, "due_date"), (page, "진행률"), (page, "삭제"))),
-            page,
-        ))
+        if template_id == "todo_app":
+            checks.append(self._check(
+                "product-baseline:todo-workflow",
+                all(token in self._read(path) for path, token in ((api, "/api/todos/stats"), (store, "def delete"), (store, "due_date"), (page, "진행률"), (page, "삭제"))),
+                page,
+            ))
+        elif template_id == "meal_planner":
+            meal_files = [root / relative for relative in template.required_files]
+            meal_text = "\n".join(self._read(path) for path in meal_files)
+            checks.append(self._check(
+                "template:meal_planner",
+                all(token in meal_text for token in template.required_tokens),
+                root / "apps/web/src/pages/home/ui.js",
+            ))
+        else:
+            generic_text = "\n".join(self._read(root / relative) for relative in template.required_files)
+            checks.append(self._check(
+                "template:generic_web",
+                all(token.casefold() in generic_text.casefold() for token in template.required_tokens),
+                root / "apps/web/index.html",
+            ))
         index = root / "apps/web/index.html"
         styles = root / "apps/web/src/shared/ui/styles.css"
         checks.append(self._check(
@@ -112,12 +141,16 @@ class WebProjectRunner:
         ))
         checks.append(self._check("responsive:media-query", "@media" in self._read(styles), styles))
         node = shutil.which("node")
-        for relative in (
+        frontend_files = [
             "apps/web/src/app/main.js",
-            "apps/web/src/entities/todo/model.js",
             "apps/web/src/shared/lib/api.js",
             "apps/web/src/pages/home/ui.js",
-        ):
+        ]
+        if template_id == "todo_app":
+            frontend_files.append("apps/web/src/entities/todo/model.js")
+        elif template_id == "meal_planner":
+            frontend_files.append("apps/web/src/entities/meal/model.js")
+        for relative in frontend_files:
             path = root / relative
             if node is None:
                 checks.append(self._check("syntax:" + relative, False, path, "node is required for frontend syntax verification"))
@@ -136,7 +169,14 @@ class WebProjectRunner:
         except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
             checks.append(self._check("e2e:health", False, api, str(exc)))
             checks.append(self._check("e2e:demo-auth-and-crud", False, api, str(exc)))
-        failed = [item for item in checks if item["status"] != "passed"]
+        checks.append({
+            "name": "browser:ui-e2e",
+            "status": "not_run",
+            "evidenceId": "evidence-browser-not-run",
+            "path": str(root),
+            "detail": "Browser engine is not configured; static/API checks are not browser verification.",
+        })
+        failed = [item for item in checks if item["status"] == "failed"]
         if failed:
             raise ValueError("Web scaffold verification failed: " + "; ".join(item["name"] for item in failed))
         evidence_ids = [item["evidenceId"] for item in checks]
@@ -146,6 +186,8 @@ class WebProjectRunner:
             "status": "PASS", "independent": True, "runner": "EEEE.WebProjectRunner",
             "runtimeProfile": "web_app", "authMode": "demo",
             "deploymentReadiness": "awaiting_configuration",
+            "browserVerification": "NOT_RUN",
+            "verificationScope": "local-api-and-static",
             "createdAt": datetime.now(timezone.utc).isoformat(), "checks": checks,
             "evidenceIds": evidence_ids,
         }
@@ -158,6 +200,7 @@ class WebProjectRunner:
         qa_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return PreparedWebRun(
             qa_report=report, qa_report_path=str(qa_path),
+            template_id=template_id,
             artifacts=[
                 {
                     "id": "web-source",
@@ -176,8 +219,8 @@ class WebProjectRunner:
             ],
         )
 
-    def run(self, *, project_id: str, project_revision: str, workspace: str | Path, claim_latch: Mapping[str, Any]) -> WebRunResult:
-        prepared = self.prepare(project_id=project_id, project_revision=project_revision, workspace=workspace)
+    def run(self, *, project_id: str, project_revision: str, workspace: str | Path, claim_latch: Mapping[str, Any], template_id: str = "todo_app") -> WebRunResult:
+        prepared = self.prepare(project_id=project_id, project_revision=project_revision, workspace=workspace, template_id=template_id)
         return self.finalize(project_id=project_id, project_revision=project_revision, workspace=workspace, prepared=prepared, claim_latch=claim_latch)
 
     def finalize(self, *, project_id: str, project_revision: str, workspace: str | Path, prepared: PreparedWebRun, claim_latch: Mapping[str, Any]) -> WebRunResult:

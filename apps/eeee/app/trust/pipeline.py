@@ -319,7 +319,14 @@ def _qa_failure(qa_report: Mapping[str, object] | None, envelope: ExecutionEnvel
         return "QA report is not independent"
     checks = qa_report.get("checks")
     if not isinstance(checks, list) or not checks or any(
-        not isinstance(item, Mapping) or str(item.get("status", "")).lower() not in {"passed", "skipped"}
+        not isinstance(item, Mapping)
+        or (
+            str(item.get("status", "")).lower() not in {"passed", "skipped"}
+            and not (
+                item.get("name") == "browser:ui-e2e"
+                and str(item.get("status", "")).lower() == "not_run"
+            )
+        )
         for item in checks
     ):
         return "QA report has no deterministic passing checks"

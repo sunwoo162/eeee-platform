@@ -5,6 +5,42 @@ Gleave is a local-first FastAPI workbench and personal assistant platform. EEEE 
 This repository is released under the MIT License and is intended for
 self-hosted use. It is not a hosted multi-tenant service.
 
+## Native EEEE → ISEOL project flow
+
+EEEE accepts a one-sentence project request and keeps the local execution
+contract deterministic:
+
+```text
+POST /api/assistant/route
+  → background project identity
+  → native ISEOL intent and specialist graph
+  → template-specific local scaffold
+  → API/static QA and ClaimLatch release gate
+  → FINAL-QUALITY-REPORT.json
+```
+
+For example, `오늘 식단을 정리해주는 웹 만들어줘` selects the native
+`meal_planner` template. The project view exposes only safe progress metadata:
+`GET /api/projects/{project_id}/execution-plan` omits the raw request,
+credentials, and agent system prompts; `GET /api/projects/{project_id}/quality`
+returns `awaiting` until the evidence-backed final report exists.
+
+The current native lane is intentionally local-first and provider-neutral.
+Browser UI E2E is reported as `NOT_RUN` when a browser engine is not configured,
+so a local/API-verified project may be `client_ready_with_notes` rather than
+silently being called portfolio-complete. A failed specialist, missing QA, bad
+encoding, missing rollback evidence, or ClaimLatch failure produces a blocked
+final report.
+
+Plugin implementations are not included in this phase. The graph can record
+selected or missing extension manifests, but it does not pretend that Gmail,
+GitHub, Figma, Notion, or other external actions happened. Those actions stay
+pending until the corresponding connector is installed, explicitly approved,
+and independently verified.
+
+The full native flow and its evidence contract are documented in
+[docs/ISEOL_NATURAL_LANGUAGE_FLOW.md](docs/ISEOL_NATURAL_LANGUAGE_FLOW.md).
+
 ## Windows setup
 
 From PowerShell:

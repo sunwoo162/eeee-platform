@@ -20,12 +20,15 @@ from app.coordinator.service import Coordinator
 from app.integrations.contracts import ProjectOutcomeReportV1
 from app.memory.preferences import extract_preference
 from app.iseol.agents import AgentGraph
+from app.iseol.contracts import ProjectExecutionPlan, ProjectIntent
 from app.iseol.executor import AgentGraphExecutor
+from app.iseol.intake import NaturalLanguageIntake
+from app.iseol.orchestrator import IseolOrchestrator
+from app.iseol.review import ProjectQualityEvaluator
 from app.project_runtime.provisioner import ProjectProvisioner, is_todo_request
 from app.planning.service import PlanningService
 from app.runtime.store import StaleProjectRevision
 from app.storage.sqlite import SQLiteStore
-from app.workflow.planner import parse_request
 
 
 @dataclass(frozen=True)
@@ -223,8 +226,10 @@ class ProjectExecutionCapability:
         self.document_service = document_service
         self.planning_service = planning_service or PlanningService(store)
         self.agent_runtime = agent_runtime
+        self.orchestrator = IseolOrchestrator(runner=self._execute_project)
 
     def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
+        intake = NaturalLanguageIntake.parse(request.raw_text)
         requested_project_id = request.context.get("resumeProjectId")
         project_id = (
             requested_project_id
@@ -240,22 +245,63 @@ class ProjectExecutionCapability:
             raise ValueError("Workspace must be inside the configured workspace root") from exc
         return CapabilityPlan(
             capability_id=self.descriptor.id, summary=request.raw_text,
-            inputs={"text": request.raw_text, "projectId": project_id, "workspace": str(workspace)},
+            inputs={
+                "text": request.raw_text,
+                "projectId": project_id,
+                "workspace": str(workspace),
+                "projectIntent": intake.intent.model_dump(mode="json", by_alias=True),
+                "clarificationQuestions": [
+                    question.model_dump(mode="json", by_alias=True)
+                    for question in intake.questions
+                ],
+            },
             side_effect_level=self.descriptor.side_effect_level,
             requires_approval=self.descriptor.approval_level != "none",
         )
 
     def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
-        text = plan.inputs["text"]
-        brief = parse_request(text)
-        project_id = str(plan.inputs["projectId"])
+        request = AssistantRequest(
+            raw_text=str(plan.inputs["text"]),
+            context={
+                "projectId": str(plan.inputs["projectId"]),
+                "workspace": str(plan.inputs["workspace"]),
+                "projectIntent": plan.inputs.get("projectIntent"),
+                "clarificationQuestions": plan.inputs.get("clarificationQuestions", []),
+            },
+        )
+        return self.orchestrator.run(request, envelope_context.assistant_context, envelope_context)
+
+    def _execute_project(
+        self,
+        request: AssistantRequest,
+        assistant_context: AssistantContext,
+        envelope_context: EnvelopeContext,
+    ) -> CapabilityOutcome:
+        text = request.raw_text
+        intent = ProjectIntent.model_validate(request.context.get("projectIntent"))
+        questions = [
+            item for item in request.context.get("clarificationQuestions", [])
+            if isinstance(item, dict)
+        ]
+        brief = intent.to_request_brief(questions=[])
+        if questions:
+            return CapabilityOutcome(
+                {
+                    "status": "needs_clarification",
+                    "message": "프로젝트 종류와 원하는 결과물을 한 문장으로 더 알려줘.",
+                    "questions": questions,
+                    "intent": intent.model_dump(mode="json", by_alias=True),
+                },
+                ExecutionStatus.BLOCKED,
+            )
+        project_id = str(request.context["projectId"])
         try:
             project = self.store.get_project(project_id)
-            if Path(project.workspace).resolve() != Path(str(plan.inputs["workspace"])).resolve():
+            if Path(project.workspace).resolve() != Path(str(request.context["workspace"])).resolve():
                 raise ValueError("Resumed project workspace does not match the accepted request")
         except KeyError:
             project = self.coordinator.create_project(
-                project_id, brief.goal[:80], plan.inputs["workspace"],
+                project_id, brief.goal[:80], request.context["workspace"],
             )
         try:
             existing_context = self.store.get_latest_request_context_for_project(project.id)
@@ -305,6 +351,7 @@ class ProjectExecutionCapability:
                 ],
                 request_id=state.request_id,
                 planning_handoff=planning_handoff,
+                intent=intent,
             )
             agent_graph = _read_agent_graph(provisioned.execution_plan_path)
             agent_execution_report = None
@@ -322,53 +369,63 @@ class ProjectExecutionCapability:
                     agent_execution_report.model_dump(mode="json", by_alias=True),
                 )
                 if agent_execution_report.status != "completed":
+                    blocked_report = _write_final_quality_report(
+                        self.store,
+                        project.workspace,
+                        project.id,
+                        project.revision,
+                        state.request_id,
+                        intent,
+                        provisioned.execution_plan_path,
+                        agent_graph,
+                        {},
+                        {
+                            "decision": "BLOCKED",
+                            "receiptId": None,
+                            "claimLatchReportId": None,
+                        },
+                    )
+                    profile = self.store.get_project_profile(project.id)
                     return CapabilityOutcome(
                         {
                             "status": "blocked",
                             "message": "ISEOL specialist agent graph did not pass all handoff gates",
                             "projectId": project.id,
                             "projectRevision": project.revision,
-                            "projectProfile": provisioned.profile.model_dump(mode="json"),
+                            "templateId": intent.template_id,
+                            "assumptions": list(intent.assumptions),
+                            "projectProfile": profile.model_dump(mode="json"),
                             "executionPlanPath": provisioned.execution_plan_path,
                             "planningSessionId": planning_handoff.planning_session_id,
                             "planningHandoffId": planning_handoff.handoff_id,
                             "agentGraph": agent_graph,
+                            "missingExtensions": list(agent_graph.get("context", {}).get("missingExtensions", []))
+                            if isinstance(agent_graph.get("context"), dict) else [],
                             "agentExecutionReport": agent_execution_report.model_dump(mode="json", by_alias=True),
+                            "finalReportPath": profile.quality_report_path,
+                            "finalGrade": blocked_report.grade,
+                            "finalScore": blocked_report.score,
+                            "finalBlockers": list(blocked_report.blockers),
+                            "finalLimitations": list(blocked_report.limitations),
                         },
                         ExecutionStatus.BLOCKED,
                         ExecutionError(code="agent_graph_blocked", message="Agent graph handoff was blocked"),
                     )
             todo_run = None
             web_run = None
+            claim_latch = {"decision": "BLOCKED", "receiptId": None, "claimLatchReportId": None}
             memory_records = []
             # Keep the original user utterance in the product-type decision.
             # The parsed goal is intentionally normalized and can vary by
             # locale/parser implementation; a direct request such as
             # "Todo 앱 만들어줘" must never skip the verified Todo runner.
-            if brief.runtime_profile == "web_app":
-                prepared = self.provisioner.web_runner.prepare(
-                    project_id=project.id,
-                    project_revision=project.revision,
-                    workspace=project.workspace,
-                )
-                trust = (
-                    self.coordinator.trust_pipeline.release_gate(_child, prepared.qa_report)
-                    if self.coordinator.trust_pipeline is not None
-                    else None
-                )
-                claim_latch = {
-                    "decision": trust.decision if trust is not None else "BLOCKED",
-                    "receiptId": trust.claim_latch_receipt_id if trust is not None else None,
-                    "claimLatchReportId": trust.claim_latch_report_id if trust is not None else None,
-                }
-                web_run = self.provisioner.web_runner.finalize(
-                    project_id=project.id,
-                    project_revision=project.revision,
-                    workspace=project.workspace,
-                    prepared=prepared,
-                    claim_latch=claim_latch,
-                )
-            elif is_todo_request(text, [brief.goal, brief.target_type, *brief.acceptance_criteria]):
+            web_todo = intent.template_id == "todo_app" and any(
+                marker in text.casefold()
+                for marker in ("웹", "website", "web app", "webapp", "홈페이지", "사이트")
+            )
+            if intent.template_id == "todo_app" and not web_todo or (
+                intent.template_id is None and is_todo_request(text, [brief.goal, brief.target_type, *brief.acceptance_criteria])
+            ):
                 prepared = self.provisioner.todo_runner.prepare(
                     project_id=project.id,
                     project_revision=project.revision,
@@ -429,6 +486,57 @@ class ProjectExecutionCapability:
                         "createdAt": datetime.now(timezone.utc),
                     })
                     memory_records = self.coordinator.record_verified_project_outcome(outcome)
+            elif brief.runtime_profile == "web_app":
+                prepared = self.provisioner.web_runner.prepare(
+                    project_id=project.id,
+                    project_revision=project.revision,
+                    workspace=project.workspace,
+                    template_id=intent.template_id or "generic_web",
+                )
+                trust = (
+                    self.coordinator.trust_pipeline.release_gate(_child, prepared.qa_report)
+                    if self.coordinator.trust_pipeline is not None
+                    else None
+                )
+                claim_latch = {
+                    "decision": trust.decision if trust is not None else "BLOCKED",
+                    "receiptId": trust.claim_latch_receipt_id if trust is not None else None,
+                    "claimLatchReportId": trust.claim_latch_report_id if trust is not None else None,
+                }
+                web_run = self.provisioner.web_runner.finalize(
+                    project_id=project.id,
+                    project_revision=project.revision,
+                    workspace=project.workspace,
+                    prepared=prepared,
+                    claim_latch=claim_latch,
+                )
+            final_report = None
+            if todo_run is not None or web_run is not None:
+                qa_report_path = Path(
+                    todo_run.qa_report_path if todo_run is not None else web_run.qa_report_path
+                )
+                qa_report = _read_json_object(qa_report_path)
+                execution_plan = _quality_plan(
+                    Path(provisioned.execution_plan_path) if provisioned.execution_plan_path else None,
+                    project_id=project.id,
+                    project_revision=project.revision,
+                    request_id=state.request_id,
+                    intent=intent,
+                    agent_graph=agent_graph,
+                )
+                final_report = _write_final_quality_report(
+                    self.store,
+                    project.workspace,
+                    project.id,
+                    project.revision,
+                    state.request_id,
+                    intent,
+                    provisioned.execution_plan_path,
+                    agent_graph,
+                    qa_report,
+                    claim_latch,
+                    execution_plan=execution_plan,
+                )
             document_execution_id = None
             if self.document_service is not None:
                 def sync_document(_document: ExecutionEnvelope) -> CapabilityOutcome:
@@ -453,13 +561,23 @@ class ProjectExecutionCapability:
             profile = self.store.get_project_profile(project.id)
             missing = sorted(binding.connector_id for binding in profile.connectors
                              if binding.state in {"awaiting_configuration", "planned"})
+            quality_status = (
+                web_run.status if web_run is not None
+                else todo_run.status if todo_run is not None
+                else None
+            )
+            project_status = "completed" if quality_status == "PASS" else profile.provisioning_status
             return CapabilityOutcome({
-                "status": profile.provisioning_status,
+                "status": project_status,
                 "message": "Project Runtime이 생성되었고 외부 연결 상태를 확인해야 해.",
                 "projectId": project.id, "projectProfile": profile.model_dump(mode="json", by_alias=True),
+                "templateId": intent.template_id,
+                "assumptions": list(intent.assumptions),
                 "missingConnectors": missing, "documentExecutionId": document_execution_id,
                 "executionPlanPath": provisioned.execution_plan_path,
                 "agentGraph": agent_graph,
+                "missingExtensions": list(agent_graph.get("context", {}).get("missingExtensions", []))
+                if isinstance(agent_graph.get("context"), dict) else [],
                 "agentExecutionReport": agent_execution_report.model_dump(mode="json", by_alias=True)
                 if agent_execution_report is not None else None,
                 "planningSessionId": planning_handoff.planning_session_id,
@@ -468,8 +586,13 @@ class ProjectExecutionCapability:
                 "releaseManifestPath": (web_run.release_manifest_path if web_run is not None else todo_run.release_manifest_path if todo_run is not None else None),
                 "gitBranch": (web_run.git_branch if web_run is not None else todo_run.git_branch if todo_run is not None else None),
                 "gitCommit": (web_run.git_commit if web_run is not None else todo_run.git_commit if todo_run is not None else None),
-                "qualityStatus": (web_run.status if web_run is not None else todo_run.status if todo_run is not None else None),
+                "qualityStatus": quality_status,
                 "qualityReason": (web_run.reason if web_run is not None else todo_run.reason if todo_run is not None else None),
+                "finalReportPath": profile.quality_report_path,
+                "finalGrade": final_report.grade if final_report is not None else None,
+                "finalScore": final_report.score if final_report is not None else None,
+                "finalBlockers": list(final_report.blockers) if final_report is not None else [],
+                "finalLimitations": list(final_report.limitations) if final_report is not None else [],
                 "memoryCandidateIds": [record.id for record in memory_records],
             }, ExecutionStatus.COMPLETED)
 
@@ -511,6 +634,106 @@ def _read_agent_graph(path: str | None) -> dict[str, Any]:
     return graph if isinstance(graph, dict) and isinstance(graph.get("agents"), list) else {
         "schemaVersion": "iseol-agent-graph.v1", "agents": []
     }
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    """Read a generated JSON artifact without turning a missing artifact into evidence."""
+
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _quality_plan(
+    path: Path | None,
+    *,
+    project_id: str,
+    project_revision: str,
+    request_id: str,
+    intent: ProjectIntent,
+    agent_graph: dict[str, Any],
+) -> ProjectExecutionPlan:
+    """Normalize the persisted plan before the final evaluator consumes it.
+
+    The Node compatibility planner may omit native fields, so the evaluator
+    always derives phases and extension state from the native graph when the
+    persisted JSON is incomplete.  This keeps the final report deterministic
+    without treating an adapter's partial output as proof of completion.
+    """
+
+    value = _read_json_object(path) if path is not None else {}
+    graph_context = agent_graph.get("context") if isinstance(agent_graph.get("context"), dict) else {}
+    agents = agent_graph.get("agents") if isinstance(agent_graph.get("agents"), list) else []
+    phases = list(dict.fromkeys(
+        str(agent.get("phase"))
+        for agent in agents
+        if isinstance(agent, dict) and isinstance(agent.get("phase"), str) and agent.get("phase")
+    ))
+    tasks = value.get("tasks") if isinstance(value.get("tasks"), list) else [
+        {
+            "id": agent.get("taskId", agent.get("id")),
+            "agentId": agent.get("id"),
+            "phase": agent.get("phase"),
+            "status": "planned",
+        }
+        for agent in agents
+        if isinstance(agent, dict)
+    ]
+    selected = value.get("selectedExtensions")
+    missing = value.get("missingExtensions")
+    return ProjectExecutionPlan(
+        projectId=project_id,
+        projectRevision=project_revision,
+        requestId=request_id,
+        intent=intent,
+        phases=phases,
+        tasks=[item for item in tasks if isinstance(item, dict)],
+        selectedExtensions=(
+            [str(item) for item in selected if isinstance(item, str)]
+            if isinstance(selected, list)
+            else [str(item) for item in graph_context.get("selectedExtensions", []) if isinstance(item, str)]
+        ),
+        missingExtensions=(
+            [str(item) for item in missing if isinstance(item, str)]
+            if isinstance(missing, list)
+            else [str(item) for item in graph_context.get("missingExtensions", []) if isinstance(item, str)]
+        ),
+        externalActions=list(intent.external_actions),
+    )
+
+
+def _write_final_quality_report(
+    store: SQLiteStore,
+    workspace: str,
+    project_id: str,
+    project_revision: str,
+    request_id: str,
+    intent: ProjectIntent,
+    plan_path: str | None,
+    agent_graph: dict[str, Any],
+    qa_report: dict[str, Any],
+    claim_latch: dict[str, Any],
+    *,
+    execution_plan: ProjectExecutionPlan | None = None,
+):
+    plan = execution_plan or _quality_plan(
+        Path(plan_path) if plan_path else None,
+        project_id=project_id,
+        project_revision=project_revision,
+        request_id=request_id,
+        intent=intent,
+        agent_graph=agent_graph,
+    )
+    report = ProjectQualityEvaluator().evaluate(
+        Path(workspace), intent, plan, qa_report, claim_latch,
+    )
+    profile = store.get_project_profile(project_id)
+    store.save_project_profile(profile.model_copy(update={
+        "quality_report_path": str(Path(workspace) / "FINAL-QUALITY-REPORT.json"),
+    }))
+    return report
 
 
 def _persist_agent_execution_report(

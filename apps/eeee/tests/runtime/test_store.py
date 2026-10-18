@@ -90,6 +90,36 @@ def test_project_listing_filters_revision_and_retains_historical_envelopes(tmp_p
     ]
 
 
+def test_approval_claim_is_atomic_and_plugin_routes_are_listed_newest_first(tmp_path) -> None:
+    store = _store(tmp_path)
+    executions = ExecutionStore(store)
+    waiting = _envelope(
+        execution_id="approval-1",
+        capability_id="plugin:gmail:mail.send",
+        tool_id="eeee.route",
+        required_approval=True,
+        approval_state=ApprovalState.AWAITING_APPROVAL,
+    ).transition(
+        ExecutionStatus.AWAITING_APPROVAL,
+        output={
+            "status": "blocked",
+            "approvalRequired": True,
+            "approvalRequestId": "approval-1",
+        },
+    )
+    executions.save(waiting)
+
+    claimed, was_claimed = executions.claim_approval("approval-1")
+    repeated, repeated_claim = executions.claim_approval("approval-1")
+
+    assert was_claimed is True
+    assert claimed.status is ExecutionStatus.RUNNING
+    assert claimed.approval_state is ApprovalState.APPROVED
+    assert repeated == claimed
+    assert repeated_claim is False
+    assert executions.list_plugin_routes(limit=10) == [claimed]
+
+
 def test_stale_revision_cannot_write_envelope_or_event(tmp_path) -> None:
     store = _store(tmp_path)
     executions = ExecutionStore(store)

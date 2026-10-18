@@ -1,0 +1,77 @@
+import pytest
+
+from app.iseol.agents import AgentNode
+from app.iseol.contracts import ProjectIntent
+from app.iseol.extensions import ExtensionManifest, ExtensionRegistry
+from app.iseol.graph import AgentGraphCompiler
+
+
+def meal_intent() -> ProjectIntent:
+    return ProjectIntent(
+        rawText="오늘 식단 정리해주는 웹 만들어줘",
+        goal="오늘 식단 정리해주는 웹",
+        projectType="web_app",
+        templateId="meal_planner",
+        constraints=["local-first"],
+        assumptions=["local-first", "mobile-first"],
+        acceptanceCriteria=["식단을 확인할 수 있음"],
+    )
+
+
+def test_compiler_builds_native_pipeline_without_unrelated_connectors() -> None:
+    registry = ExtensionRegistry()
+    registry.register(ExtensionManifest(
+        id="meal-planner",
+        version="1.0.0",
+        kind="domain",
+        capabilities=["project.template.meal-planner"],
+    ))
+    registry.register(ExtensionManifest(
+        id="gmail",
+        version="1.0.0",
+        kind="connector",
+        capabilities=["connector.gmail.read"],
+    ))
+
+    graph = AgentGraphCompiler.compile(meal_intent(), registry)
+
+    assert {node.phase for node in graph.agents} >= {
+        "intake", "definition", "requirements", "content", "information_architecture",
+        "ux", "ui", "technical_design", "environment", "implementation", "testing",
+        "release", "operations",
+    }
+    assert "gmail" not in graph.context["selectedExtensions"]
+    assert graph.context["selectedExtensions"] == ["meal-planner"]
+    assert graph.by_id("frontend").dependencies
+    assert "requirements" in graph.by_id("frontend").dependencies
+    assert graph.by_id("frontend").validators
+    assert graph.by_id("backend").validators
+    assert graph.by_id("integration").role == "integration"
+
+
+def test_compiler_rejects_duplicate_or_cyclic_catalog() -> None:
+    catalog = [
+        AgentNode(
+            id="a", taskId="a", role="a", title="A", goal="A", phase="implementation",
+            validators=["b"], dependencies=["b"],
+        ),
+        AgentNode(
+            id="b", taskId="b", role="b", title="B", goal="B", phase="testing",
+            dependencies=["a"],
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="cycle"):
+        AgentGraphCompiler.compile(meal_intent(), ExtensionRegistry(), catalog=catalog)
+
+
+def test_compiled_graph_has_unique_ids_and_explicit_validator_references() -> None:
+    graph = AgentGraphCompiler.compile(meal_intent(), ExtensionRegistry())
+    ids = {node.id for node in graph.agents}
+
+    assert len(ids) == len(graph.agents)
+    for node in graph.agents:
+        assert set(node.dependencies) <= ids
+        assert set(node.validators) <= ids
+        if node.phase == "implementation":
+            assert node.validators

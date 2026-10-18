@@ -2,6 +2,8 @@ import json
 
 import app.project_runtime.iseol_bridge as bridge_module
 from app.domain.models import RequestBrief
+from app.iseol.contracts import ProjectIntent
+from app.iseol.extensions import ExtensionManifest, ExtensionRegistry
 from app.project_runtime.iseol_bridge import IseolPlanBridge
 
 
@@ -95,3 +97,60 @@ def test_frozen_desktop_uses_bundled_iseol_planner(monkeypatch, tmp_path) -> Non
         "node",
         str(tmp_path / "chatgpt-runtime" / "agent-organization" / "plan-cli.js"),
     ]
+
+
+def test_native_graph_is_used_when_optional_node_planner_is_unavailable() -> None:
+    def unavailable(*_args):
+        raise FileNotFoundError("node is not installed")
+
+    bridge = IseolPlanBridge(runner=unavailable, command=["node", "plan-cli.js"])
+
+    plan = bridge.create_plan(
+        project_id="project-1",
+        project_revision="rev-1",
+        request_id="request-1",
+        request=request(),
+        memory_ids=[],
+        qa_baseline_ids=[],
+    )
+
+    assert plan["nativePlan"] is True
+    assert plan["agentGraph"]["schemaVersion"] == "iseol-agent-graph.v1"
+    assert plan["intent"]["rawText"] == "Todo 앱 만들어줘"
+    assert plan["selectedExtensions"] == []
+    assert plan["missingExtensions"] == []
+
+
+def test_bridge_persists_intent_assumptions_and_extension_selection() -> None:
+    registry = ExtensionRegistry()
+    registry.register(ExtensionManifest(
+        id="meal-planner",
+        version="1.0.0",
+        kind="domain",
+        capabilities=["project.template.meal-planner"],
+    ))
+    intent = ProjectIntent(
+        rawText="오늘 식단 정리해주는 웹 만들어줘",
+        goal="오늘 식단 정리해주는 웹",
+        projectType="web_app",
+        templateId="meal_planner",
+        assumptions=["local-first"],
+    )
+
+    def unavailable(*_args):
+        raise OSError("optional planner unavailable")
+
+    plan = IseolPlanBridge(runner=unavailable).create_plan(
+        project_id="project-1",
+        project_revision="rev-1",
+        request_id="request-1",
+        request=request(),
+        intent=intent,
+        extensions=registry,
+        memory_ids=[],
+        qa_baseline_ids=[],
+    )
+
+    assert plan["intent"]["templateId"] == "meal_planner"
+    assert plan["assumptions"] == ["local-first"]
+    assert plan["selectedExtensions"] == ["meal-planner"]

@@ -137,6 +137,69 @@ class PetApiClient:
             raise ApiError("Plugin OAuth status response was not an object")
         return result
 
+    def get_plugin_launch_info(self, plugin_id: str) -> dict[str, object]:
+        result = self._request("GET", self._plugin_path(plugin_id, "/launch"))
+        if not isinstance(result, dict):
+            raise ApiError("Plugin launch response was not an object")
+        return result
+
+    @staticmethod
+    def _conversation_path(conversation_id: str) -> str:
+        conversation_id = conversation_id.strip()
+        if not conversation_id or "/" in conversation_id or "\\" in conversation_id:
+            raise ValueError("conversation_id must be a non-empty path segment")
+        return f"/api/assistant/conversations/{conversation_id}"
+
+    def get_conversations(self, *, query: str = "", limit: int = 50) -> list[dict[str, object]]:
+        result = self._request(
+            "GET",
+            "/api/assistant/conversations",
+            params={"query": query, "limit": limit},
+        )
+        if not isinstance(result, list):
+            raise ApiError("Conversation list response was not a list")
+        return [item for item in result if isinstance(item, dict)]
+
+    def get_conversation(
+        self,
+        conversation_id: str = "desktop-default",
+        *,
+        limit: int = 100,
+        before_id: int | None = None,
+    ) -> dict[str, object]:
+        params: dict[str, object] = {"limit": limit}
+        if before_id is not None:
+            params["beforeId"] = before_id
+        result = self._request(
+            "GET", self._conversation_path(conversation_id), params=params
+        )
+        if not isinstance(result, dict):
+            raise ApiError("Conversation response was not an object")
+        return result
+
+    def send_conversation_message(
+        self,
+        text: str,
+        *,
+        conversation_id: str = "desktop-default",
+        workspace: str | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "text": text,
+            "conversationId": conversation_id,
+        }
+        if workspace is not None:
+            payload["workspace"] = workspace
+        result = self._request(
+            "POST",
+            "/api/assistant/route",
+            json=payload,
+            timeout=self.assistant_timeout_seconds,
+        )
+        if not isinstance(result, dict):
+            raise ApiError("Assistant response was not an object")
+        return result
+
     def get_state(self) -> dict[str, object]:
         return self._request("GET", f"/projects/{self.project_id}/state")
 
@@ -224,12 +287,22 @@ class PetApiClient:
             "GET", "/api/desktop/events", params={"cursor": cursor}
         )
 
+    def get_plugin_executions(self, limit: int = 20) -> dict[str, object]:
+        return self._request(
+            "GET", "/api/desktop/plugin-executions", params={"limit": limit}
+        )
+
     def route_assistant(
-        self, text: str, workspace: str | None = None
+        self, text: str, workspace: str | None = None, *, approved: bool = False,
+        approval_request_id: str | None = None,
     ) -> dict[str, object]:
         payload: dict[str, object] = {"text": text}
         if workspace is not None:
             payload["workspace"] = workspace
+        if approved:
+            payload["approved"] = True
+        if approval_request_id is not None:
+            payload["approvalRequestId"] = approval_request_id
         return self._request(
             "POST", "/api/assistant/route", json=payload,
             timeout=self.assistant_timeout_seconds,

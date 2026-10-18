@@ -23,8 +23,8 @@ class FakeHttpTransport:
         self.response = response or FakeResponse(200, {"ok": True})
         self.calls = []
 
-    def request(self, method, url, *, headers, json=None):
-        self.calls.append((method, url, headers, json))
+    def request(self, method, url, *, headers, params=None, json=None):
+        self.calls.append((method, url, headers, json, params))
         return self.response
 
 
@@ -47,6 +47,8 @@ def test_openapi_connector_health_and_invoke_use_declared_operations() -> None:
     assert connector.invoke(connection, "repos.list", {"visibility": "all"}) == {"items": [1]}
     assert transport.calls[-1][2]["Authorization"] == "Bearer secret"
     assert transport.calls[-1][0] == "GET"
+    assert transport.calls[-1][3] is None
+    assert transport.calls[-1][4] == {"visibility": "all"}
 
 
 def test_openapi_connector_health_fails_closed_when_transport_raises() -> None:

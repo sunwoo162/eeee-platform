@@ -14,6 +14,8 @@ chatgpt_package_json = spec_dir.parent / ".." / "packages" / "iseol" / "package.
 hiddenimports = [
     "app.desktop.__main__",
     "app.main",
+    "plugins.eeee_chat_history.main",
+    "plugins.eeee_chat_history.window",
     "uvicorn.logging",
     "uvicorn.loops.auto",
     "uvicorn.protocols.http.auto",
@@ -34,6 +36,7 @@ a = Analysis(
     datas=[
         (str(static_dir), "app/static"),
         (str(pet_assets_dir), "app/desktop/assets"),
+        (str(eeee_root / "plugins" / "eeee_chat_history"), "plugins/eeee_chat_history"),
         (str(chatgpt_runtime_dir), "chatgpt-runtime"),
         (str(chatgpt_playwright_core_dir), "chatgpt-runtime/node_modules/playwright-core"),
         (str(chatgpt_package_json), "chatgpt-runtime"),

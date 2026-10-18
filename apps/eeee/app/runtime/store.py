@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.contracts import EventEnvelope, ExecutionEnvelope, ExecutionStatus
+from app.contracts import ApprovalState, EventEnvelope, ExecutionEnvelope, ExecutionStatus
 from app.plugins.connections import PluginConnection
 from app.storage.sqlite import SQLiteStore
 
@@ -165,6 +165,39 @@ class ExecutionStore:
         query += " ORDER BY started_at, created_at, rowid"
         with self.store._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
+        return [ExecutionEnvelope.model_validate_json(row["envelope_json"]) for row in rows]
+
+    def claim_approval(self, execution_id: str) -> tuple[ExecutionEnvelope, bool]:
+        """Atomically claim an approval execution exactly once."""
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT envelope_json FROM execution_envelopes WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Execution not found: {execution_id}")
+            current = ExecutionEnvelope.model_validate_json(row["envelope_json"])
+            if current.status is not ExecutionStatus.AWAITING_APPROVAL:
+                return current, False
+            claimed = current.transition(
+                ExecutionStatus.RUNNING,
+                approval_state=ApprovalState.APPROVED,
+            )
+            self._save(connection, claimed)
+            return claimed, True
+
+    def list_plugin_routes(self, *, limit: int = 20) -> list[ExecutionEnvelope]:
+        """Return recent EEEE-routed plugin executions without raw inputs."""
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                "SELECT envelope_json FROM execution_envelopes "
+                "WHERE tool_id = 'eeee.route' AND capability_id LIKE 'plugin:%' "
+                "ORDER BY started_at DESC, created_at DESC, rowid DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [ExecutionEnvelope.model_validate_json(row["envelope_json"]) for row in rows]
 
     def append_event(self, event: EventEnvelope) -> EventEnvelope:

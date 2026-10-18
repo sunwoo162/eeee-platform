@@ -121,6 +121,18 @@ class HttpOAuthTransport:
             response = httpx.post(config.token_endpoint, data=data, timeout=15.0)
             response.raise_for_status()
             payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            provider_error = None
+            try:
+                error_payload = exc.response.json()
+            except ValueError:
+                error_payload = {}
+            if isinstance(error_payload, dict):
+                raw_error = error_payload.get("error")
+                if isinstance(raw_error, str) and raw_error:
+                    provider_error = raw_error
+            suffix = f" ({provider_error})" if provider_error else f" (HTTP {exc.response.status_code})"
+            raise OAuthError(f"OAuth token exchange failed{suffix}") from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise OAuthError("OAuth token exchange failed") from exc
         access_token = payload.get("access_token")

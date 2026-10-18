@@ -4,6 +4,7 @@ from pathlib import Path
 import time
 
 from app.desktop.client import PetApiClient
+from app.desktop.plugin_presentation import format_plugin_output
 from app.desktop.presentation import PetPresentation
 from app.desktop.session import DesktopSession
 from app.desktop.worker import QtTaskRunner
@@ -492,6 +493,8 @@ class PetWindow:
                 self._busy = False
                 self._refreshing = False
                 self._conversation_active = False
+                self._pending_approval_text: str | None = None
+                self._pending_approval_request_id: str | None = None
                 self._auth_login_in_progress = False
                 self._closing = False
                 self._quit_requested = False
@@ -716,6 +719,11 @@ class PetWindow:
                 self.quick_reply.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.quick_reply.clicked.connect(self._on_reply_bubble_clicked)
                 command_layout.addWidget(self.quick_reply)
+                self.approval_button = QPushButton("승인하고 실행")
+                self.approval_button.setObjectName("approvalAction")
+                self.approval_button.clicked.connect(self._approve_pending_action)
+                self.approval_button.hide()
+                command_layout.addWidget(self.approval_button)
                 self.assistant_row = QHBoxLayout()
                 self.assistant_row.setContentsMargins(0, 0, 0, 0)
                 self.assistant_row.setSpacing(0)
@@ -819,6 +827,7 @@ class PetWindow:
                 self.hide_button.hide()
                 self.quick_status.hide()
                 self.quick_reply.hide()
+                self.approval_button.hide()
 
                 self.setStyleSheet(
                     "#desktopCompanion { background: transparent; border: none; "
@@ -841,6 +850,8 @@ class PetWindow:
                     "#desktopCompanion QPushButton#secondaryAction { background: #2a2d3d; "
                     "border: 1px solid #464b65; color: #d9d8e8; font-weight: 500; }"
                     "#desktopCompanion QPushButton#secondaryAction:hover { background: #35394d; }"
+                    "#desktopCompanion QPushButton#approvalAction { background: #efb06c; color: #2b1d13; padding: 7px 12px; }"
+                    "#desktopCompanion QPushButton#approvalAction:hover { background: #f5c58f; }"
                     "#desktopCompanion QPushButton:disabled { background: #3b414d; color: #8e96a5; }"
                     "#desktopCompanion QComboBox QAbstractItemView { background: #2b303b; "
                     "color: #f3f5f8; selection-background-color: #5147a5; }"
@@ -1003,7 +1014,30 @@ class PetWindow:
                 self.reply_surface.hide()
                 self._reply_hide_timer.stop()
                 self.quick_reply.clear()
-                self.show_command_surface(show_latest_reply=False)
+                self.show_command_surface(show_latest_reply=bool(self._pending_approval_text))
+
+            def _approve_pending_action(self):
+                """Re-submit only the action the user explicitly approved."""
+                if self._closing or self._busy or not self._pending_approval_text:
+                    return
+                text = self._pending_approval_text
+                approval_request_id = self._pending_approval_request_id
+                self._pending_approval_text = None
+                self._pending_approval_request_id = None
+
+                def on_success(payload):
+                    if self._payload_requires_chatgpt_login(payload):
+                        self._open_login_automatically()
+                        return
+                    self._render(payload)
+
+                self._submit(
+                    lambda: self.session.route(
+                        text, approved=True, approval_request_id=approval_request_id
+                    ),
+                    self._text("assistant_busy"),
+                    on_success=on_success,
+                )
 
             def _reposition_command_surface(self):
                 if self.command_surface.isVisible():
@@ -1035,6 +1069,7 @@ class PetWindow:
             def hide_command_surface(self):
                 self.command_surface.hide()
                 self.quick_reply.hide()
+                self.approval_button.hide()
                 self.assistant_input.hide()
                 self.quick_status.hide()
                 self.detail.hide()
@@ -1058,6 +1093,9 @@ class PetWindow:
                 )
                 show_reply = mode == "reply" and bool(self.quick_reply.text().strip())
                 self.quick_reply.setVisible(show_reply)
+                self.approval_button.setVisible(
+                    show_reply and bool(self._pending_approval_text)
+                )
                 self.assistant_input.setVisible(mode == "input")
                 self.command_surface.adjustSize()
 
@@ -1169,6 +1207,18 @@ class PetWindow:
                     or self.frameGeometry().contains(global_pos)
                 ):
                     if (
+                        self.approval_button.isVisible()
+                        and QRect(
+                            self.approval_button.mapToGlobal(QPoint(0, 0)),
+                            self.approval_button.size(),
+                        ).contains(global_pos)
+                    ):
+                        # Let the QPushButton receive its own click. The
+                        # global filter handles clicks on the decorative
+                        # bubble, but must never turn an approval click into a
+                        # fresh-input action.
+                        return False
+                    if (
                         self.command_surface.frameGeometry().contains(global_pos)
                         and self._quick_chat_mode == "reply"
                         and self.quick_reply.isVisible()
@@ -1187,9 +1237,12 @@ class PetWindow:
                     self.command_surface.hide()
                 self.quick_reply.clear()
                 self.quick_reply.hide()
+                self.approval_button.hide()
                 self.quick_status.hide()
                 self.assistant_input.clear()
                 self.assistant_input.hide()
+                self._pending_approval_text = None
+                self._pending_approval_request_id = None
                 self._quick_chat_mode = "input"
 
             def _press_source_frame(self, frame: str) -> str:
@@ -1727,6 +1780,7 @@ class PetWindow:
                 self.request_input.setEnabled(not self._busy)
                 self.request_button.setEnabled(not self._busy)
                 self.assistant_input.setEnabled(not self._busy)
+                self.approval_button.setEnabled(not self._busy)
                 self.candidate_select.setEnabled(not self._busy)
                 self.approve_button.setEnabled(
                     not self._busy and view.show_approval and self.candidate_select.count() > 0
@@ -1813,6 +1867,19 @@ class PetWindow:
                 headlines = _DESKTOP_TEXT[self.language]["headline"]
                 self.headline.setText(headlines.get(view.state, view.headline))
                 detail = view.detail
+                assistant_route = payload.get("assistantRoute")
+                assistant_route = assistant_route if isinstance(assistant_route, dict) else {}
+                plugin_output = payload.get("pluginOutput")
+                if not isinstance(plugin_output, dict):
+                    plugin_output = assistant_route.get("pluginOutput")
+                selection = payload.get("selection")
+                if not isinstance(selection, dict):
+                    selection = assistant_route.get("selection")
+                capability_id = selection.get("capability_id") if isinstance(selection, dict) else None
+                action = capability_id.rsplit(":", 1)[-1] if isinstance(capability_id, str) else None
+                plugin_summary = format_plugin_output(plugin_output, action=action)
+                if plugin_summary and plugin_summary not in detail:
+                    detail = f"{detail}\n\n{plugin_summary}" if detail else plugin_summary
                 if view.state == "idle" and not self._conversation_active:
                     detail = ""
                 self.quick_status.setText(headlines.get(view.state, view.headline))
@@ -1907,11 +1974,30 @@ class PetWindow:
                         for event in events[-4:]
                         if isinstance(event, dict)
                     ]
+                    plugin_executions = payload.get("pluginExecutions")
+                    if isinstance(plugin_executions, list) and plugin_executions:
+                        plugin_labels = [
+                            f"{item.get('pluginId', 'plugin')}:{item.get('status', 'unknown')}"
+                            for item in plugin_executions[-3:]
+                            if isinstance(item, dict)
+                        ]
+                        labels.extend(plugin_labels)
                     self.events_view.setText(
                         f"{self._text('recent_prefix')}: " + " • ".join(labels)
                     )
-                elif "claimLatch" in payload:
-                    self.events_view.setText(self._text("events_none"))
+                else:
+                    plugin_executions = payload.get("pluginExecutions")
+                    if isinstance(plugin_executions, list) and plugin_executions:
+                        labels = [
+                            f"{item.get('pluginId', 'plugin')}:{item.get('status', 'unknown')}"
+                            for item in plugin_executions[-3:]
+                            if isinstance(item, dict)
+                        ]
+                        self.events_view.setText(
+                            f"{self._text('recent_prefix')}: " + " • ".join(labels)
+                        )
+                    elif "claimLatch" in payload:
+                        self.events_view.setText(self._text("events_none"))
 
             def _route_assistant(self):
                 # ``returnPressed`` can still arrive from an already queued
@@ -1930,6 +2016,15 @@ class PetWindow:
                     if self._payload_requires_chatgpt_login(payload):
                         self._open_login_automatically()
                         return
+                    self._pending_approval_text = (
+                        text if payload.get("approvalRequired") is True else None
+                    )
+                    self._pending_approval_request_id = (
+                        payload.get("approvalRequestId")
+                        if payload.get("approvalRequired") is True
+                        and isinstance(payload.get("approvalRequestId"), str)
+                        else None
+                    )
                     self._render(payload)
 
                 self._submit(

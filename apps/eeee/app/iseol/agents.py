@@ -24,9 +24,15 @@ class AgentNode(BaseModel):
     role: str = Field(min_length=1)
     title: str = Field(min_length=1)
     goal: str = Field(min_length=1)
+    phase: str = "implementation"
     acceptance_criteria: list[str] = Field(default_factory=list, alias="acceptanceCriteria")
     system_prompt: str = Field(default="", alias="systemPrompt")
     dependencies: list[str] = Field(default_factory=list)
+    validators: list[str] = Field(default_factory=list)
+    extension_ids: list[str] = Field(default_factory=list, alias="extensionIds")
+    side_effect_level: Literal["none", "local_write", "external_write"] = Field(
+        default="none", alias="sideEffectLevel"
+    )
     allowed_tools: list[str] = Field(default_factory=list, alias="allowedTools")
     execution_policy: Literal["claimlatch_before_handoff"] = Field(
         default="claimlatch_before_handoff", alias="executionPolicy"

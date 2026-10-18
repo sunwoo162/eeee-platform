@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
+from pathlib import Path
+import shutil
 from typing import Mapping
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.assistant.models import CapabilityDescriptor
-from app.contracts import ExecutionEnvelope, ExecutionError, ExecutionStatus, SideEffectLevel
+from app.contracts import ApprovalState, ExecutionEnvelope, ExecutionError, ExecutionStatus, SideEffectLevel
 from app.plugins.catalog import PluginCatalog, PluginCatalogEntry
 from app.plugins.connections import PluginConnection
 from app.plugins.connectors import ConnectorConnection, ConnectorHealth, PluginConnector
 from app.plugins.credentials import KeyringCredentialStore
+from app.plugins.intents import build_plugin_action_input
 from app.runtime.store import PluginConnectionStore, PluginInstallation, PluginInstallationStore
 from app.storage.sqlite import SQLiteStore
+
+
+logger = logging.getLogger(__name__)
 
 
 # These are deliberately routing descriptors, not a second provider API. The
@@ -67,6 +74,8 @@ _GENERIC_PLUGIN_ACTIONS: dict[str, tuple[dict[str, object], ...]] = {
     ),
 }
 
+_FIRST_PARTY_UI_PLUGIN_IDS = {"eeee-chat-history"}
+
 
 class PluginInstallationView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
@@ -96,12 +105,15 @@ class PluginPlatformService:
         catalog: PluginCatalog | None = None,
         credentials=None,
         connectors: Mapping[str, PluginConnector] | None = None,
+        plugin_install_root: str | Path | None = None,
     ) -> None:
         self.catalog_source = catalog or PluginCatalog()
         self.installations = PluginInstallationStore(store)
         self.connections = PluginConnectionStore(store)
         self.credentials = credentials or KeyringCredentialStore()
         self.connectors = dict(connectors or {})
+        self.plugin_install_root = Path(plugin_install_root) if plugin_install_root else None
+        self._bundled_plugin_root = Path(__file__).resolve().parents[2] / "plugins"
 
     def catalog(self) -> list[PluginCatalogEntry]:
         return self.catalog_source.list()
@@ -110,9 +122,21 @@ class PluginPlatformService:
         entry = self.catalog_source.get(plugin_id)
         # Installation is a local catalog decision. Provider availability and
         # account connection are checked later at connect/OAuth time.
+        if entry.id in _FIRST_PARTY_UI_PLUGIN_IDS:
+            source = self._bundled_plugin_root / "eeee_chat_history"
+            if not source.is_dir():
+                raise RuntimeError(f"bundled plugin package is missing: {entry.id}")
+            if self.plugin_install_root is not None:
+                self.plugin_install_root.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(
+                    source,
+                    self.plugin_install_root / "eeee_chat_history",
+                    dirs_exist_ok=True,
+                )
         installation = self.installations.install(entry.id, entry.version)
         return PluginInstallationView(
-            pluginId=installation.plugin_id, version=installation.version, status="available"
+            pluginId=installation.plugin_id, version=installation.version,
+            status="connected" if entry.id in _FIRST_PARTY_UI_PLUGIN_IDS else "available",
         )
 
     def uninstall(self, plugin_id: str) -> None:
@@ -124,6 +148,35 @@ class PluginPlatformService:
                 self.credentials.delete(connection.credential_ref)
             self.connections.remove(connection.user_id, plugin_id)
         self.installations.remove(plugin_id)
+        if plugin_id in _FIRST_PARTY_UI_PLUGIN_IDS and self.plugin_install_root is not None:
+            root = self.plugin_install_root.resolve()
+            target = (root / "eeee_chat_history").resolve()
+            try:
+                target.relative_to(root)
+            except ValueError as exc:
+                raise RuntimeError("plugin install path escaped its root") from exc
+            if target.exists():
+                shutil.rmtree(target)
+
+    def launch_info(self, plugin_id: str) -> dict[str, object]:
+        """Return the installed entrypoint for a separately launched UI plugin."""
+
+        self.catalog_source.get(plugin_id)
+        if plugin_id not in _FIRST_PARTY_UI_PLUGIN_IDS:
+            raise RuntimeError("this plugin does not expose a desktop UI")
+        if not self.installations.is_installed(plugin_id):
+            raise RuntimeError("plugin must be installed before opening")
+        if self.plugin_install_root is None:
+            raise RuntimeError("plugin launch is unavailable")
+        root = self.plugin_install_root.resolve()
+        entrypoint = (root / "eeee_chat_history" / "main.py").resolve()
+        try:
+            entrypoint.relative_to(root)
+        except ValueError as exc:
+            raise RuntimeError("plugin entrypoint escaped its root") from exc
+        if not entrypoint.is_file():
+            raise RuntimeError("installed plugin entrypoint is missing")
+        return {"pluginId": plugin_id, "entrypoint": str(entrypoint)}
 
     def status(self, plugin_id: str, user_id: str = "local-user") -> str:
         """Return the actionable lifecycle state used by assistant routing.
@@ -136,6 +189,8 @@ class PluginPlatformService:
         entry = self.catalog_source.get(plugin_id)
         if not self.installations.is_installed(plugin_id):
             return "not_installed"
+        if entry.id in _FIRST_PARTY_UI_PLUGIN_IDS:
+            return "connected"
         if entry.connector not in self.connectors:
             return "installed"
         try:
@@ -207,7 +262,12 @@ class PluginPlatformService:
         try:
             transient = connector.connect(user_id, credential, approved_permissions)
             health = connector.health(transient)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Plugin connection failed for %s: %s",
+                plugin_id,
+                type(exc).__name__,
+            )
             self.credentials.delete(reference)
             if prior is not None and prior.status in {"connected", "paused"}:
                 return self._view(prior)
@@ -219,6 +279,12 @@ class PluginPlatformService:
             self.connections.save(failed)
             return self._view(failed)
         if health.status != "healthy":
+            logger.warning(
+                "Plugin health check failed for %s: status=%s code=%s",
+                plugin_id,
+                health.status,
+                health.code,
+            )
             self.credentials.delete(reference)
             if prior is not None and prior.status in {"connected", "paused"}:
                 return self._view(prior)
@@ -281,12 +347,71 @@ class PluginPlatformService:
                     code="provider_unavailable",
                     reason="Plugin provider health check failed",
                 )
+            if health.code == "reauthentication_required":
+                refreshed = self._refresh_credential(
+                    connection, connector, _credential_from_json(credential)
+                )
+                if refreshed is not None:
+                    _, health = refreshed
         status = "connected" if health.status == "healthy" else "failed"
-        self.connections.save(connection.model_copy(update={
+        current = self.connections.get(user_id, plugin_id)
+        self.connections.save(current.model_copy(update={
             "status": status, "last_health": health.status, "last_error": None if status == "connected" else health.code,
             "updated_at": _now(),
         }))
         return health
+
+    def _refresh_credential(
+        self,
+        connection: PluginConnection,
+        connector: PluginConnector,
+        credential: dict[str, str],
+    ) -> tuple[str, ConnectorHealth] | None:
+        refresher = getattr(connector, "refresh_credential", None)
+        if not callable(refresher) or not credential.get("refresh_token"):
+            return None
+        try:
+            refreshed = refresher(credential)
+            if not isinstance(refreshed, Mapping):
+                raise ValueError("provider credential refresh returned an invalid value")
+            refreshed_credential = {
+                key: value for key, value in refreshed.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+            if not refreshed_credential.get("access_token"):
+                raise ValueError("provider credential refresh returned no access token")
+            reference = self.credentials.put(
+                connection.user_id,
+                connection.plugin_id,
+                _credential_json(refreshed_credential),
+            )
+            transient = connector.connect(
+                connection.user_id,
+                refreshed_credential,
+                set(connection.approved_permissions),
+            )
+            health = connector.health(transient)
+            if health.status != "healthy":
+                self.credentials.delete(reference)
+                return None
+            current = self.connections.get(connection.user_id, connection.plugin_id)
+            self.connections.save(current.model_copy(update={
+                "credential_ref": reference,
+                "status": "connected",
+                "last_health": health.status,
+                "last_error": None,
+                "updated_at": _now(),
+            }))
+            if current.credential_ref and current.credential_ref != reference:
+                self.credentials.delete(current.credential_ref)
+            return _credential_json(refreshed_credential), health
+        except Exception as exc:
+            logger.warning(
+                "Plugin credential refresh failed for %s: %s",
+                connection.plugin_id,
+                type(exc).__name__,
+            )
+            return None
 
     def capabilities(self, user_id: str = "local-user") -> list[CapabilityDescriptor]:
         projected: list[CapabilityDescriptor] = []
@@ -297,7 +422,7 @@ class PluginPlatformService:
                 connection = self.connections.get(user_id, entry.id)
             except KeyError:
                 continue
-            if connection.status != "connected":
+            if connection.status not in {"connected", "failed"}:
                 continue
             health = self.health(user_id, entry.id)
             if health.status != "healthy":
@@ -325,9 +450,52 @@ class PluginPlatformService:
         return projected
 
     def invoke(self, user_id: str, capability_id: str, value: dict[str, object]) -> ExecutionEnvelope:
-        if capability_id not in {item.id for item in self.capabilities(user_id)}:
+        descriptors = {item.id: item for item in self.capabilities(user_id)}
+        descriptor = descriptors.get(capability_id)
+        if descriptor is None:
             return _blocked_envelope(capability_id, "plugin capability is not connected and healthy")
         plugin_id = capability_id.split(":", 2)[1]
+        action = str(value.get("action") or capability_id.rsplit(":", 1)[-1])
+        if plugin_id == "notion" and action == "pages":
+            action = "get_page"
+        context = value.get("context")
+        context = context if isinstance(context, dict) else {}
+        approved = value.get("approved") is True or context.get("approved") is True
+        requires_approval = descriptor.approval_level != "none"
+        audit_input = {
+            key: item
+            for key, item in value.items()
+            if key not in {"action", "context", "approved", "text"}
+        }
+        raw_text = value.get("text")
+        try:
+            if isinstance(raw_text, str) and raw_text.strip():
+                audit_input = {
+                    **build_plugin_action_input(plugin_id, action, raw_text),
+                    **audit_input,
+                }
+        except Exception as exc:
+            return _blocked_envelope(
+                capability_id,
+                str(exc).strip() or "plugin input could not be understood",
+            )
+        envelope = ExecutionEnvelope(
+            executionId=f"plugin-execution-{uuid4().hex}", requestId=f"plugin-request-{uuid4().hex}",
+            capabilityId=capability_id, toolId=plugin_id, actor="EEEE", input=audit_input,
+            sideEffectLevel=descriptor.side_effect_level,
+            requiredApproval=requires_approval,
+            approvalState=ApprovalState.APPROVED if approved else ApprovalState.AWAITING_APPROVAL
+            if requires_approval else ApprovalState.NOT_REQUIRED,
+        )
+        if requires_approval and not approved:
+            return envelope.transition(
+                ExecutionStatus.AWAITING_APPROVAL,
+                output={
+                    "status": "awaiting_approval",
+                    "message": "메일을 보내기 전에 사용자 승인이 필요해.",
+                    "action": action,
+                },
+            )
         connection = self.connections.get(user_id, plugin_id)
         credential = self.credentials.get(connection.credential_ref) if connection.credential_ref else None
         if credential is None:
@@ -335,15 +503,11 @@ class PluginPlatformService:
         try:
             connector = self._connector(plugin_id)
             transient = connector.connect(user_id, _credential_from_json(credential), set(connection.approved_permissions))
-            action = str(value.get("action") or capability_id.rsplit(":", 1)[-1])
-            if plugin_id == "notion" and action == "pages":
-                action = "get_page"
-            output = connector.invoke(transient, action, value)
-            envelope = ExecutionEnvelope(
-                executionId=f"plugin-execution-{uuid4().hex}", requestId=f"plugin-request-{uuid4().hex}",
-                capabilityId=capability_id, toolId=plugin_id, actor="EEEE", input=value,
+            output = connector.invoke(transient, action, audit_input)
+            running = envelope.transition(
+                ExecutionStatus.RUNNING,
+                approval_state=ApprovalState.APPROVED if requires_approval else ApprovalState.NOT_REQUIRED,
             )
-            running = envelope.transition(ExecutionStatus.RUNNING)
             return running.transition(ExecutionStatus.COMPLETED, output=output)
         except Exception as exc:
             return _blocked_envelope(capability_id, str(exc).strip() or "plugin invocation failed")

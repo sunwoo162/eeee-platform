@@ -9,7 +9,9 @@ from typing import Any
 
 from app.domain.models import RequestBrief
 from app.integrations.contracts import ProjectBriefV1
-from app.iseol.agents import AgentTeamFactory
+from app.iseol.contracts import ProjectIntent
+from app.iseol.extensions import ExtensionManifest, ExtensionRegistry
+from app.iseol.graph import AgentGraphCompiler
 from app.planning.models import PlanningHandoff
 
 
@@ -47,7 +49,26 @@ class IseolPlanBridge:
         qa_baseline_ids: list[str],
         memory_context: list[dict[str, Any]] | None = None,
         planning_handoff: PlanningHandoff | None = None,
+        intent: ProjectIntent | None = None,
+        extensions: ExtensionRegistry | None = None,
     ) -> dict[str, Any]:
+        intent = intent or _intent_from_request(request)
+        if extensions is None:
+            extensions = ExtensionRegistry()
+            if intent.template_id == "meal_planner":
+                extensions.register(ExtensionManifest(
+                    id="meal-planner",
+                    version="1.0.0",
+                    kind="domain",
+                    capabilities=["project.template.meal-planner"],
+                ))
+        graph = AgentGraphCompiler.compile(intent, extensions)
+        graph = graph.model_copy(update={
+            "context": {
+                **graph.context,
+                "verifiedMemories": list(memory_context or []),
+            }
+        })
         brief = ProjectBriefV1(
             schema_version=1,
             project_id=project_id,
@@ -76,24 +97,43 @@ class IseolPlanBridge:
             if planning_handoff.project_id != project_id or planning_handoff.project_revision != project_revision:
                 raise ValueError("planning handoff identity does not match ISEOL plan")
             payload["planningHandoff"] = planning_handoff.model_dump(mode="json", by_alias=True)
+        native_fallback = False
         try:
             raw = self.runner(self.command, json.dumps(payload, ensure_ascii=False), self.timeout)
             value = json.loads(raw)
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
-            raise RuntimeError("ISEOL planner is unavailable; project execution is blocked") from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            # The native Python compiler is authoritative.  The Node planner
+            # remains a compatibility input and must not block local execution.
+            native_fallback = True
+            value = {
+                "schemaVersion": 1,
+                "projectId": project_id,
+                "requestId": request_id,
+                "projectRevision": project_revision,
+                "status": "planned",
+                "tasks": [
+                    {
+                        "id": node.task_id,
+                        "agentId": node.id,
+                        "objective": node.goal,
+                        "phase": node.phase,
+                        "dependencies": list(node.dependencies),
+                        "status": "planned",
+                    }
+                    for node in graph.agents
+                ],
+            }
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("invalid ISEOL plan JSON") from exc
         if not isinstance(value, dict) or value.get("schemaVersion") != 1 or value.get("projectId") != project_id or not isinstance(value.get("tasks"), list):
             raise RuntimeError("invalid ISEOL plan")
         if planning_handoff is not None:
             value["planningHandoff"] = planning_handoff.model_dump(mode="json", by_alias=True)
-        # Keep the specialist organization explicit even when an external
-        # planner returns only a coarse task list. The executor and UI use this
-        # graph as the durable handoff contract.
-        graph = AgentTeamFactory.default_graph(request.goal).model_copy(update={
-            "context": {
-                "canonicalIntent": request.canonical_intent,
-                "verifiedMemories": list(memory_context or []),
-            },
-        })
+        value["nativePlan"] = native_fallback
+        value["intent"] = intent.model_dump(mode="json", by_alias=True)
+        value["assumptions"] = list(intent.assumptions)
+        value["selectedExtensions"] = list(graph.context.get("selectedExtensions", []))
+        value["missingExtensions"] = list(graph.context.get("missingExtensions", []))
         value["agentGraph"] = graph.model_dump(
             mode="json", by_alias=True
         )
@@ -118,3 +158,17 @@ class IseolPlanBridge:
         if result.returncode != 0:
             raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
         return result.stdout
+
+
+def _intent_from_request(request: RequestBrief) -> ProjectIntent:
+    template_id = "todo_app" if request.target_type == "todo_app" else (
+        "generic_web" if request.target_type == "web_app" else None
+    )
+    return ProjectIntent(
+        rawText=request.raw_text,
+        goal=request.goal,
+        projectType=request.target_type if request.target_type in {"web_app", "todo_app", "static_app"} else "unknown",
+        templateId=template_id,
+        constraints=list(request.constraints),
+        acceptanceCriteria=list(request.acceptance_criteria),
+    )

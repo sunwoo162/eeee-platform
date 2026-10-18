@@ -80,6 +80,24 @@ def test_assistant_route_uses_long_timeout_for_web_ai(monkeypatch):
     assert requests[0][2]["timeout"] == 180.0
 
 
+def test_assistant_route_can_send_explicit_action_approval(monkeypatch):
+    requests = []
+
+    def request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        return httpx.Response(200, json={"status": "completed", "message": "전송했어."})
+
+    monkeypatch.setattr(httpx, "request", request)
+
+    PetApiClient("http://127.0.0.1:8123").route_assistant(
+        "메일 보내", approved=True, approval_request_id="approval-1"
+    )
+
+    assert requests[0][2]["json"] == {
+        "text": "메일 보내", "approved": True, "approvalRequestId": "approval-1",
+    }
+
+
 def test_client_can_open_the_project_map(monkeypatch):
     requests = []
 
@@ -196,6 +214,51 @@ def test_client_can_read_oauth_terminal_status(monkeypatch):
             "http://127.0.0.1:8123/api/plugins/notion/oauth/status",
             {"timeout": 5.0, "params": {"state": "opaque-state"}},
         )
+    ]
+
+
+def test_client_can_launch_chat_history_and_use_core_conversation_boundary(monkeypatch):
+    requests = []
+
+    def request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        if url.endswith("/launch"):
+            return httpx.Response(200, json={"pluginId": "eeee-chat-history", "entrypoint": "C:/plugins/main.py"})
+        if url.endswith("/conversations"):
+            return httpx.Response(200, json=[])
+        if url.endswith("/desktop-default"):
+            return httpx.Response(200, json={"conversationId": "desktop-default", "turns": []})
+        return httpx.Response(200, json={"status": "completed", "message": "응답"})
+
+    monkeypatch.setattr(httpx, "request", request)
+    client = PetApiClient("http://127.0.0.1:8123")
+
+    assert client.get_plugin_launch_info("eeee-chat-history")["pluginId"] == "eeee-chat-history"
+    assert client.get_conversations() == []
+    assert client.get_conversation("desktop-default")["conversationId"] == "desktop-default"
+    assert client.send_conversation_message("다음", conversation_id="desktop-default")["status"] == "completed"
+
+    assert requests == [
+        (
+            "GET",
+            "http://127.0.0.1:8123/api/plugins/eeee-chat-history/launch",
+            {"timeout": 5.0},
+        ),
+        (
+            "GET",
+            "http://127.0.0.1:8123/api/assistant/conversations",
+            {"timeout": 5.0, "params": {"query": "", "limit": 50}},
+        ),
+        (
+            "GET",
+            "http://127.0.0.1:8123/api/assistant/conversations/desktop-default",
+            {"timeout": 5.0, "params": {"limit": 100}},
+        ),
+        (
+            "POST",
+            "http://127.0.0.1:8123/api/assistant/route",
+            {"timeout": 180.0, "json": {"text": "다음", "conversationId": "desktop-default"}},
+        ),
     ]
 
 

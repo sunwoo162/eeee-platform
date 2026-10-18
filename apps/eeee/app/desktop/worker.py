@@ -4,6 +4,25 @@ from collections.abc import Callable
 from threading import Event
 
 
+class ConversationWorker:
+    """Synchronous Core conversation operation for a background task runner."""
+
+    def __init__(self, client, session) -> None:
+        self.client = client
+        self.session = session
+
+    def run_turn(self, text: str) -> dict[str, object]:
+        request = self.session.submit(text)
+        events = list(self.client.stream_request_events(request["requestId"]))
+        self.session.apply_events(request, events)
+        return {
+            "request": request,
+            "events": events,
+            "state": self.session.state,
+            "messages": list(self.session.messages),
+        }
+
+
 class QtTaskRunner:
     """Run blocking callables off the Qt GUI thread and deliver callbacks safely."""
 

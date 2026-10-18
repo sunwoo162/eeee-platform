@@ -89,6 +89,34 @@ class CountingSlowRouteClient(SlowRouteClient):
         return super().route_assistant(text, workspace)
 
 
+class ApprovalRouteClient(RouteClient):
+    def __init__(self):
+        super().__init__()
+        self.approved_calls = []
+
+    def route_assistant(self, text, workspace=None, approved=False):
+        self.approved_calls.append((text, approved))
+        self.routed_text = text
+        if not approved:
+            return {
+                "status": "blocked",
+                "message": "메일을 보내기 전에 사용자 승인이 필요해.",
+                "approvalRequired": True,
+                "approvalCapabilityId": "plugin:gmail:mail.send",
+                "approvalPluginId": "gmail",
+                "approvalSideEffectLevel": "external",
+            }
+        return {
+            "status": "completed",
+            "message": "플러그인 작업이 완료됐어.",
+            "pluginId": "gmail",
+            "pluginOutput": {
+                "action": "mail.send",
+                "output": {"sent": True},
+            },
+        }
+
+
 def _wait_for(app: QApplication, predicate) -> None:
     deadline = time.monotonic() + 3
     while not predicate() and time.monotonic() < deadline:
@@ -609,6 +637,33 @@ def test_quick_chat_send_switches_from_composer_to_one_centered_reply():
     _wait_for(app, lambda: window.quick_reply.text() == "요청을 받았어요.")
     assert window.assistant_input.isHidden()
     assert window.quick_reply.alignment() == Qt.AlignmentFlag.AlignCenter
+    window.close()
+
+
+def test_external_plugin_action_shows_approval_and_renders_result_after_click():
+    app = QApplication.instance() or QApplication([])
+    client = ApprovalRouteClient()
+    window = PetWindow(client)
+    window.show_command_surface()
+
+    window.assistant_input.setText("s25011@gsm.hs.kr 에 test라는 메일 보내")
+    window.assistant_input.returnPressed.emit()
+    _wait_for(app, lambda: window.approval_button.isVisible())
+
+    assert client.approved_calls == [("s25011@gsm.hs.kr 에 test라는 메일 보내", False)]
+    assert window.approval_button.text() == "승인하고 실행"
+    _wait_for(app, lambda: "승인이 필요해" in window.quick_reply.text())
+    assert "승인" in window.quick_reply.text()
+
+    QTest.mouseClick(window.approval_button, Qt.MouseButton.LeftButton)
+    _wait_for(app, lambda: client.approved_calls == [
+        ("s25011@gsm.hs.kr 에 test라는 메일 보내", False),
+        ("s25011@gsm.hs.kr 에 test라는 메일 보내", True),
+    ])
+    _wait_for(app, lambda: "메일을 보냈어." in window.quick_reply.text())
+
+    assert window.approval_button.isHidden()
+    assert "메일을 보냈어." in window.quick_reply.text()
     window.close()
 
 

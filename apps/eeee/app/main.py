@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 from collections.abc import Mapping
 
@@ -8,12 +9,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app.agent.local_runtime import LocalAgentRuntime, LocalConversationRuntime, OllamaBackend
 from app.agent.local_model_discovery import discover_fast_local_model, discover_local_model
-from app.agent.openhands_runtime import OpenHandsRuntime
+from app.agent.ollama_runtime import OllamaRuntime
 from app.agent.protocol import AgentRuntime
-from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
-from app.agent.chatgpt_web_agent_runtime import ChatGptWebAgentRuntime
-from app.agent.hybrid_runtime import HybridAssistantRuntime
 from app.activity.store import ActivityLedger
+from app.agent.lazy_runtime import LazyAgentRuntime
 from app.api.service import ApiFlowService
 from app.api.routes import (
     build_api_router,
@@ -25,12 +24,20 @@ from app.api.routes import (
     build_project_view_router,
     build_router,
 )
+from app.api.conversation_routes import build_conversation_router
 from app.assistant.registry import build_default_registry
 from app.assistant.router import CapabilityRouter
 from app.assistant.background import BackgroundExecutionSupervisor
 from app.assistant.service import AssistantService
+from app.capabilities.registry import build_core_capability_manager
 from app.config import Settings
+from app.conversations.context import ConversationContextBuilder
+from app.conversations.providers import build_conversation_provider
+from app.conversations.service import ConversationProvider, ConversationService
+from app.conversations.store import ConversationStore
 from app.contracts import LocalEventBus
+from app.core.lifecycle import CoreLifecycle
+from app.core.lock import ProcessLock
 from app.coordinator.service import Coordinator
 from app.design.references import DesignService
 from app.domain.errors import ApprovalError
@@ -65,12 +72,21 @@ def create_app(
     *,
     researcher: GitHubResearcher | None = None,
     agent_runtime: AgentRuntime | None = None,
+    conversation_provider: ConversationProvider | None = None,
     notion_client: NotionClient | None = None,
     oauth_broker: OAuthBroker | None = None,
     oauth_configs: Mapping[str, OAuthProviderConfig] | None = None,
 ) -> FastAPI:
+    from app.agent.chatgpt_web_agent_runtime import ChatGptWebAgentRuntime
+    from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
+    from app.agent.hybrid_runtime import HybridAssistantRuntime
+
     app_settings = settings or Settings()
-    configured_provider_configs = load_provider_configs(app_settings.plugin_provider_config_json)
+    configured_provider_configs = load_provider_configs(
+        app_settings.plugin_provider_config_json,
+        gmail_client_id=app_settings.gmail_oauth_client_id,
+        gmail_client_secret=app_settings.gmail_oauth_client_secret,
+    )
     provider_connectors = build_provider_connectors(configured_provider_configs)
     configured_oauth_configs: dict[str, OAuthProviderConfig] = {
         plugin_id: config.oauth
@@ -81,6 +97,59 @@ def create_app(
     store = SQLiteStore(app_settings.data_dir / "state.sqlite3")
     store.init()
     assistant_supervisor = BackgroundExecutionSupervisor(store, max_workers=1)
+    ollama_runtime = OllamaRuntime(
+        base_url=app_settings.ollama_base_url,
+        model=app_settings.ollama_model,
+        connect_timeout_seconds=app_settings.ollama_connect_timeout_seconds,
+        generation_timeout_seconds=app_settings.ollama_generation_timeout_seconds,
+        context_tokens=app_settings.ollama_context_tokens,
+    )
+    web_runtime: AgentRuntime | None = None
+    if app_settings.chatgpt_web_enabled and app_settings.chatgpt_web_bridge_url:
+        web_runtime = ChatGptWebRuntime(
+            app_settings.chatgpt_web_bridge_url,
+            timeout_seconds=app_settings.chatgpt_web_timeout_seconds,
+            profile_path=app_settings.assistant_profile_path,
+            conversation_state_path=app_settings.data_dir / "chatgpt-assistant-conversation.json",
+        )
+    web_runtime_status = web_runtime.status() if web_runtime is not None else None
+    provider_selection = None
+    selected_conversation_provider = conversation_provider
+    if selected_conversation_provider is None:
+        provider_selection = build_conversation_provider(
+            app_settings.conversation_provider,
+            ollama=ollama_runtime,
+            web=web_runtime,
+            workspace=app_settings.workspace_root,
+            context_tokens=app_settings.ollama_context_tokens,
+            web_status=web_runtime_status,
+        )
+        selected_conversation_provider = provider_selection.provider
+    conversation_store = ConversationStore(store)
+    conversation_context = ConversationContextBuilder(
+        conversation_store,
+        max_context_tokens=app_settings.ollama_context_tokens,
+    )
+    conversation_service = ConversationService(
+        conversation_store,
+        provider=selected_conversation_provider,
+        context_builder=conversation_context,
+    )
+    core_lifecycle = CoreLifecycle(
+        store,
+        conversation_service,
+        lock=ProcessLock(app_settings.data_dir / "core.lock"),
+    )
+
+    @asynccontextmanager
+    async def core_lifespan(_application: FastAPI):
+        core_lifecycle.start()
+        try:
+            yield
+        finally:
+            core_lifecycle.stop()
+
+    application.router.lifespan_context = core_lifespan
     mobile_bridge = MobileBridge(
         store.path,
         enabled=app_settings.mobile_bridge_enabled,
@@ -102,10 +171,12 @@ def create_app(
             )
         )
     coordinator = Coordinator(store, researcher=configured_researcher, verifier=verifier)
+    conversation_context.memory_store = coordinator.memory
     activity_ledger = ActivityLedger(store)
     planning_service = PlanningService(store, activity_ledger)
     plugin_platform = PluginPlatformService(
         store,
+        plugin_install_root=app_settings.data_dir / "plugins",
         connectors={
             "notion": NotionConnector(
                 client_factory=lambda credential: NotionClient(
@@ -122,6 +193,7 @@ def create_app(
         build_default_registry(),
         plugin_status_provider=plugin_platform.status,
     )
+    capability_manager = build_core_capability_manager()
     configured_connectors = {
         connector_id
         for connector_id, configured in {
@@ -199,26 +271,40 @@ def create_app(
     application.state.mobile_bridge = mobile_bridge
     application.state.project_documents = project_documents
     application.state.project_evidence = project_evidence
-    if claim_latch_process is not None:
-        @application.on_event("shutdown")
-        async def stop_claim_latch_plugin() -> None:
-            claim_latch_process.stop()
+    application.state.ollama_runtime = ollama_runtime
+    application.state.chatgpt_web_runtime = web_runtime
+    application.state.conversation_provider_selection = provider_selection
+    application.state.conversation_store = conversation_store
+    application.state.conversation_service = conversation_service
+    application.state.core_lifecycle = core_lifecycle
+    application.state.capabilities = capability_manager
+    @asynccontextmanager
+    async def application_lifespan(_application: FastAPI):
+        core_lifecycle.start()
+        try:
+            yield
+        finally:
+            core_lifecycle.stop()
+            if claim_latch_process is not None:
+                claim_latch_process.stop()
+            assistant_supervisor.shutdown()
 
-    @application.on_event("shutdown")
-    async def stop_assistant_supervisor() -> None:
-        assistant_supervisor.shutdown()
-    local_model_name = app_settings.local_model or discover_local_model(
-        app_settings.local_model_base_url, timeout_seconds=0.2
-    )
-    # Ordinary conversation must remain responsive. A stronger model can be
-    # selected explicitly with local_conversation_model, while auto-discovery
-    # uses the installed fast model so a greeting never waits on a long
-    # reasoning trace or silently falls into the Web/GPT lane.
-    local_conversation_model_name = (
-        app_settings.local_conversation_model
-        or discover_fast_local_model(app_settings.local_model_base_url, timeout_seconds=0.2)
-        or local_model_name
-    )
+    application.router.lifespan_context = application_lifespan
+    # Ollama is an explicit migration/debug lane only. EEEE's active
+    # assistant brain is Web GPT; it must not silently discover or start a
+    # local model and then route ordinary conversation through it.
+    ollama_legacy_enabled = app_settings.conversation_provider == "ollama"
+    local_model_name = None
+    local_conversation_model_name = None
+    if ollama_legacy_enabled:
+        local_model_name = app_settings.local_model or discover_local_model(
+            app_settings.local_model_base_url, timeout_seconds=0.2
+        )
+        local_conversation_model_name = (
+            app_settings.local_conversation_model
+            or discover_fast_local_model(app_settings.local_model_base_url, timeout_seconds=0.2)
+            or local_model_name
+        )
     runtime = agent_runtime
     if runtime is None and local_model_name:
         runtime = LocalAgentRuntime(
@@ -230,27 +316,20 @@ def create_app(
             workspace_root=app_settings.workspace_root,
             command_timeout_seconds=app_settings.command_timeout_seconds,
         )
+    web_agent_runtime = None
+    if runtime is None and web_runtime is not None:
+        web_agent_runtime = ChatGptWebAgentRuntime(
+            web_runtime=web_runtime,
+            workspace_root=app_settings.workspace_root,
+            timeout_seconds=app_settings.chatgpt_web_agent_timeout_seconds,
+        )
+        runtime = web_agent_runtime
     if runtime is None:
-        runtime = OpenHandsRuntime(
-            api_key=app_settings.llm_api_key,
-            model=app_settings.llm_model,
-            base_url=app_settings.llm_base_url,
-        )
-    web_runtime: AgentRuntime | None = None
-    if app_settings.chatgpt_web_enabled and app_settings.chatgpt_web_bridge_url:
-        web_runtime = ChatGptWebRuntime(
-            app_settings.chatgpt_web_bridge_url,
-            timeout_seconds=app_settings.chatgpt_web_timeout_seconds,
-            profile_path=app_settings.assistant_profile_path,
-            conversation_state_path=app_settings.data_dir / "chatgpt-assistant-conversation.json",
-        )
-    # The general conversation lane must never inherit the project/ISEOL
-    # runtime.  ``agent_runtime`` is the project execution provider and may
-    # be ChatGPT Web; reusing it here silently turns a greeting into a slow
-    # browser request.  Keep ordinary conversation on the local fast model
-    # whenever one is installed, and let HybridAssistantRuntime use Web only
-    # for complex/tool requests or as a truthful fallback.
-    if local_conversation_model_name:
+        runtime = HybridAssistantRuntime(web=None)
+    # Ordinary EEEE conversation is Web GPT-backed. The local lane can only
+    # be opted into explicitly for migration/debugging and is never selected
+    # by default or by a missing Web bridge fallback.
+    if ollama_legacy_enabled and local_conversation_model_name:
         local_general_runtime = LocalConversationRuntime(
             backend=OllamaBackend(
                 model=local_conversation_model_name,
@@ -259,32 +338,14 @@ def create_app(
             )
         )
     else:
-        # Do not present the canned emergency lane as a real AI provider. If
-        # the local model is absent, the hybrid runtime must either use the
-        # explicitly connected Web lane or report the provider as unavailable.
-        # This prevents every casual message from becoming the same fake reply.
         local_general_runtime = None
-    # Keep the general assistant lane separate from the ISEOL project runtime.
-    # Even with no configured provider, use the hybrid facade so the user gets
-    # a truthful unavailable response instead of an OpenHands/API-key error.
+    active_web_runtime = None if ollama_legacy_enabled else web_runtime
     general_runtime: AgentRuntime = HybridAssistantRuntime(
-        local=local_general_runtime, web=web_runtime
+        local=local_general_runtime, web=active_web_runtime
     )
-    if agent_runtime is not None:
-        project_agent_runtime = agent_runtime
-    elif web_runtime is not None:
-        project_agent_runtime = ChatGptWebAgentRuntime(
-            web_runtime=web_runtime,
-            workspace_root=app_settings.workspace_root,
-            timeout_seconds=app_settings.chatgpt_web_agent_timeout_seconds,
-        )
-    else:
-        # Do not route an unconfigured installation through OpenHands. That
-        # leaks an implementation-specific LLM_API_KEY error after a project
-        # job has already been accepted. The local model is intentionally
-        # reserved for ordinary conversation; projects belong to the
-        # GPT-Web/ISEOL lane and must fail closed when that lane is absent.
-        project_agent_runtime = HybridAssistantRuntime(web=web_runtime)
+    # The same Web GPT brain handles project execution when connected. The
+    # injected runtime remains available for tests and controlled embedding.
+    project_agent_runtime = runtime
     api_flow = ApiFlowService(
         coordinator,
         store,
@@ -368,6 +429,19 @@ def create_app(
         return {"status": "ok", "claimLatch": trust_gate.health_payload()}
 
     application.include_router(build_router(coordinator))
+    application.include_router(
+        build_conversation_router(
+            conversation_service,
+            ollama=ollama_runtime,
+            provider_selection=provider_selection,
+            web_configured=web_runtime is not None,
+            web_status=getattr(web_runtime_status, "status", None),
+            web_status_provider=web_runtime.status if web_runtime is not None else None,
+            lifecycle=core_lifecycle,
+            capabilities=capability_manager,
+            schema_version=1,
+        )
+    )
     application.include_router(build_project_view_router(project_view))
     application.include_router(build_assistant_router(assistant_service, project_documents))
     application.include_router(build_mobile_router(mobile_bridge, assistant_service, mobile_snapshot))
@@ -387,6 +461,7 @@ def create_app(
             api_flow,
             project_evidence,
             iseol_bridge_token=app_settings.iseol_bridge_token,
+            conversation_store=conversation_store,
         )
     )
     application.include_router(build_design_router(design_service))
@@ -416,6 +491,54 @@ def _current_project_revision(store: SQLiteStore):
             return None
 
     return resolve
+
+
+def _build_optional_runtime(settings: Settings):
+    if settings.agent_runtime == "openhands":
+        return _build_openhands_runtime(settings)
+    if settings.iseol_control_plane_url:
+        return _build_iseol_runtime(settings)
+    return _build_chatgpt_web_runtime(settings)
+
+
+def _build_openhands_runtime(settings: Settings):
+    from app.agent.openhands_runtime import OpenHandsRuntime
+
+    return OpenHandsRuntime(
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+        base_url=settings.llm_base_url,
+    )
+
+
+def _build_iseol_runtime(settings: Settings):
+    from app.agent.iseol_runtime import IseolProjectRuntime, IseolProjectRuntimeConfig
+
+    return IseolProjectRuntime(IseolProjectRuntimeConfig(
+        base_url=settings.iseol_control_plane_url or "",
+        token=settings.iseol_control_plane_token,
+        timeout_seconds=settings.chatgpt_web_timeout_seconds,
+    ))
+
+
+def _build_chatgpt_web_runtime(settings: Settings):
+    from app.agent.chatgpt_web_runtime import (
+        ChatGptWebRuntime,
+        default_chatgpt_web_runtime_config,
+    )
+
+    repository_root = Path(__file__).resolve().parents[3]
+    bridge_script = settings.iseol_bridge_script
+    if not bridge_script.is_absolute():
+        bridge_script = repository_root / bridge_script
+    return ChatGptWebRuntime(
+        config=default_chatgpt_web_runtime_config(
+            bridge_script=bridge_script,
+            node_executable=settings.iseol_node_executable,
+            working_directory=bridge_script.parent.parent,
+            timeout_seconds=settings.chatgpt_web_timeout_seconds,
+        )
+    )
 
 
 def run(host: str = "127.0.0.1", port: int = 8000) -> None:

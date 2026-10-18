@@ -41,6 +41,12 @@ class SynchronousProjectResponseClient(FakeDesktopClient):
         }
 
 
+class ApprovalDesktopClient(FakeDesktopClient):
+    def route_assistant(self, text, workspace=None, *, approved=False, approval_request_id=None):
+        self.routed.append((text, workspace, approved, approval_request_id))
+        return {"status": "completed", "message": "전송했어."}
+
+
 def test_session_refreshes_selected_project_and_keeps_last_snapshot():
     client = FakeDesktopClient()
     session = DesktopSession(client)
@@ -62,6 +68,15 @@ def test_session_routes_through_eeee_then_refreshes_the_created_project():
     assert client.project_ids == ["project-1"]
     assert snapshot["assistantRoute"]["status"] == "ready"
     assert session.project_id == "project-1"
+
+
+def test_session_reuses_the_approval_request_id_for_approved_retry():
+    client = ApprovalDesktopClient()
+    session = DesktopSession(client)
+
+    session.route("메일 보내", approved=True, approval_request_id="approval-1")
+
+    assert client.routed == [("메일 보내", None, True, "approval-1")]
 
 
 def test_session_pairing_code_does_not_store_or_return_an_access_token():

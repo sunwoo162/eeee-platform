@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -83,19 +85,79 @@ class KernelService:
         registered = self.router.registry.resolve(selection.capability_id) if selection.capability_id else None
         required_approval = registered is not None and registered.descriptor.approval_level != "none"
         approved = request.context.get("approved") is True
-        parent = ExecutionEnvelope(
-            execution_id=f"execution-{uuid4().hex}", request_id=f"assistant-request-{uuid4().hex}",
-            capability_id=capability_id, tool_id="eeee.route", actor="EEEE",
-            input={"request": request.model_dump(mode="json"), "context": context.model_dump(mode="json")},
-            side_effect_level=registered.descriptor.side_effect_level if registered else SideEffectLevel.NONE,
-            required_approval=required_approval,
-            approval_state=(ApprovalState.APPROVED if approved else ApprovalState.AWAITING_APPROVAL)
-            if required_approval else ApprovalState.NOT_REQUIRED,
-        )
-        self._record(parent)
-        self._event(parent, "assistant.route.started", {
-            "capabilityId": selection.capability_id, "selectionStatus": selection.status,
-        })
+        approval_request_id = request.context.get("approvalRequestId")
+        approval_fingerprint = _approval_fingerprint(request)
+        parent: ExecutionEnvelope | None = None
+        valid_approval = False
+        if isinstance(approval_request_id, str) and approval_request_id.strip():
+            try:
+                candidate = self.executions.get(approval_request_id)
+            except KeyError:
+                candidate = None
+            if (
+                candidate is not None
+                and candidate.tool_id == "eeee.route"
+                and candidate.required_approval
+                and candidate.capability_id == capability_id
+                and candidate.input.get("approvalFingerprint") == approval_fingerprint
+            ):
+                parent = candidate
+                valid_approval = True
+                original_request = candidate.input.get("request")
+                original_text = (
+                    original_request.get("raw_text")
+                    if isinstance(original_request, dict)
+                    else None
+                )
+                if isinstance(original_text, str) and original_text != request.raw_text:
+                    if candidate.status is ExecutionStatus.AWAITING_APPROVAL:
+                        return self._finish_route(
+                            candidate,
+                            CapabilityOutcome(
+                                {
+                                    "status": "blocked",
+                                    "message": "승인 대상 요청이 바뀌어서 다시 승인이 필요해.",
+                                },
+                                ExecutionStatus.BLOCKED,
+                            ),
+                            selection,
+                        )
+                    return candidate
+
+        if parent is None:
+            parent = ExecutionEnvelope(
+                execution_id=f"execution-{uuid4().hex}", request_id=f"assistant-request-{uuid4().hex}",
+                capability_id=capability_id, tool_id="eeee.route", actor="EEEE",
+                input={"request": request.model_dump(mode="json"), "context": context.model_dump(mode="json")},
+                side_effect_level=registered.descriptor.side_effect_level if registered else SideEffectLevel.NONE,
+                required_approval=required_approval,
+                approval_state=ApprovalState.AWAITING_APPROVAL
+                if required_approval else ApprovalState.NOT_REQUIRED,
+            )
+            if required_approval:
+                parent = parent.model_copy(update={
+                    "input": {
+                        **dict(parent.input),
+                        "approvalFingerprint": approval_fingerprint,
+                    },
+                })
+            self._record(parent)
+            self._event(parent, "assistant.route.started", {
+                "capabilityId": selection.capability_id, "selectionStatus": selection.status,
+            })
+        elif not valid_approval or not approved:
+            # A stale/duplicated approval prompt is read-only. It must never
+            # create another execution or alter the existing approval state.
+            return parent
+        elif parent.status is not ExecutionStatus.AWAITING_APPROVAL:
+            # A completed/failed approval request is replayed as-is. This is
+            # the durable idempotency boundary for provider side effects.
+            return parent
+        else:
+            parent, claimed = self.executions.claim_approval(parent.execution_id)
+            if not claimed:
+                return parent
+            self._record(parent)
         if registered is None:
             if selection.status == "plugin_required":
                 return self._finish_route(parent, CapabilityOutcome(
@@ -120,12 +182,30 @@ class KernelService:
             return self._finish_route(parent, CapabilityOutcome(
                 {"status": "blocked", "message": stale_reason}, ExecutionStatus.BLOCKED,
             ), selection)
-        if required_approval and not approved:
+        if required_approval and not valid_approval:
+            approval_plugin_id = None
+            if isinstance(selection.capability_id, str) and selection.capability_id.startswith("plugin:"):
+                parts = selection.capability_id.split(":", 2)
+                if len(parts) >= 2:
+                    approval_plugin_id = parts[1]
             return self._finish_route(parent, CapabilityOutcome(
-                {"status": "blocked", "message": "사용자 승인이 필요해."}, ExecutionStatus.AWAITING_APPROVAL,
+                {
+                    "status": "blocked",
+                    "message": "사용자 승인이 필요해.",
+                    "approvalRequired": True,
+                    "approvalCapabilityId": selection.capability_id,
+                    "approvalPluginId": approval_plugin_id,
+                    "approvalSideEffectLevel": parent.side_effect_level.value,
+                    "approvalRequestId": parent.execution_id,
+                },
+                ExecutionStatus.AWAITING_APPROVAL,
             ), selection)
-        parent = parent.transition(ExecutionStatus.RUNNING)
-        self._record(parent)
+        if parent.status is not ExecutionStatus.RUNNING:
+            parent = parent.transition(
+                ExecutionStatus.RUNNING,
+                approval_state=ApprovalState.APPROVED if required_approval else ApprovalState.NOT_REQUIRED,
+            )
+            self._record(parent)
         try:
             retrieved = self._retrieve_context(request, context)
             handler = registered.handler
@@ -139,7 +219,13 @@ class KernelService:
                 ):
                     platform_execution = self.plugin_platform.invoke(
                         "local-user", selection.capability_id,
-                        {"text": request.raw_text, "context": request.context},
+                        {
+                            "text": request.raw_text,
+                            "context": request.context,
+                            "approved": approved,
+                            "approvalRequestId": parent.execution_id,
+                        },
+                        approval_envelope=parent,
                     )
                     platform_status = platform_execution.status
                     platform_output = {
@@ -148,6 +234,7 @@ class KernelService:
                         else platform_execution.error.message if platform_execution.error else "플러그인 작업이 완료되지 않았어.",
                         "pluginId": selection.capability_id.split(":", 2)[1],
                         "pluginExecutionId": platform_execution.execution_id,
+                        "pluginOutput": dict(platform_execution.output or {}),
                         "claimLatchPolicy": registered.descriptor.claim_latch_policy,
                     }
                     return self._finish_route(
@@ -170,6 +257,7 @@ class KernelService:
                     else plugin_execution.error.message if plugin_execution.error else "플러그인 작업이 완료되지 않았어.",
                     "pluginId": plugin_id,
                     "pluginExecutionId": plugin_execution.execution_id,
+                    "pluginOutput": dict(plugin_execution.output or {}),
                     "claimLatchPolicy": registered.descriptor.claim_latch_policy,
                 }
                 return self._finish_route(
@@ -266,6 +354,8 @@ class KernelService:
         self, parent: ExecutionEnvelope, outcome: CapabilityOutcome, selection: CapabilitySelection,
     ) -> ExecutionEnvelope:
         output = {**outcome.output, "selection": selection.model_dump(mode="json")}
+        if parent.required_approval:
+            output.setdefault("approvalRequestId", parent.execution_id)
         output["responseVerification"] = self._verify_response(parent, output)
         parent = parent.transition(outcome.status, output=output, error=outcome.error)
         self._record(parent)
@@ -388,3 +478,18 @@ class KernelService:
             code="invalid_request" if isinstance(exc, ValueError) else "capability_failed",
             message=str(exc).strip() or type(exc).__name__,
         )
+
+
+def _approval_fingerprint(request: AssistantRequest) -> str:
+    context = {
+        key: value for key, value in request.context.items()
+        if key not in {"approved", "approvalRequestId"}
+    }
+    payload = {
+        "rawText": request.raw_text,
+        "requestedCapability": request.requested_capability,
+        "context": context,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()

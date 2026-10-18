@@ -102,6 +102,7 @@ Feature-Sliced Design 경계를 사용합니다: `app`, `pages`, `widgets`, `fea
 - 요청: Todo 앱 만들어줘
 - 결정: 로컬 우선, 한국어 기본, FSD, 반응형 대시보드
 - 검증: 독립 QA, UTF-8, JavaScript syntax, Todo E2E 시나리오, ClaimLatch release gate
+- 복구: 장애 시 직전 `RELEASE_MANIFEST.json`과 Git revision으로 rollback하고 결과를 기록
 
 ## 트러블슈팅
 

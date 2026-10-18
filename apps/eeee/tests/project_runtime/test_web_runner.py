@@ -5,6 +5,7 @@ import urllib.request
 from urllib.parse import quote
 
 from app.project_runtime.web_scaffold import create_web_app_scaffold
+from app.project_runtime.meal_planner_scaffold import MealPlannerTemplate
 from app.project_runtime.web_runner import WebProjectRunner
 
 
@@ -137,3 +138,36 @@ def test_web_runner_supports_product_baseline_todo_workflow(tmp_path):
         assert _request(runtime.url + "/api/todos")[1] == []
     finally:
         runner.stop(runtime)
+
+
+def test_web_runner_validates_meal_template_without_claiming_browser_pass(tmp_path):
+    root = tmp_path / "meal-project"
+    MealPlannerTemplate.create(root, "오늘 식단")
+
+    prepared = WebProjectRunner().prepare(
+        project_id="project-meal",
+        project_revision="rev-1",
+        workspace=root,
+        template_id="meal_planner",
+    )
+
+    checks = {item["name"]: item for item in prepared.qa_report["checks"]}
+    assert checks["template:meal_planner"]["status"] == "passed"
+    assert checks["browser:ui-e2e"]["status"] == "not_run"
+    assert prepared.qa_report["browserVerification"] == "NOT_RUN"
+
+
+def test_web_runner_generic_template_does_not_require_todo_contract(tmp_path):
+    root = tmp_path / "generic-project"
+    create_web_app_scaffold(root, "카페 홈페이지")
+
+    prepared = WebProjectRunner().prepare(
+        project_id="project-generic",
+        project_revision="rev-1",
+        workspace=root,
+        template_id="generic_web",
+    )
+
+    names = {item["name"] for item in prepared.qa_report["checks"]}
+    assert "template:generic_web" in names
+    assert "product-baseline:todo-workflow" not in names

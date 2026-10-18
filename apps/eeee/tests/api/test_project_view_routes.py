@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -73,3 +75,25 @@ def test_project_creation_without_plugins_has_readable_map(client):
     assert activity.json()["events"]
     # Provisioning completion is not project-work completion.
     assert result.json()["currentNodeIds"]
+
+
+def test_quality_and_execution_plan_routes_expose_evidence_without_raw_prompt(client):
+    accepted = client.post("/api/assistant/route", json={"text": "Todo 앱 만들어줘"})
+    result = wait_for_project_job(client, accepted)
+    project_id = result["project_id"]
+
+    quality = client.get(f"/api/projects/{project_id}/quality")
+    assert quality.status_code == 200
+    assert quality.json()["projectId"] == project_id
+    assert quality.json()["grade"] in {"replan_required", "revision_required", "client_ready_with_notes", "portfolio_ready"}
+    assert quality.json()["score"] <= 100
+
+    plan = client.get(f"/api/projects/{project_id}/execution-plan")
+    assert plan.status_code == 200
+    payload = plan.json()
+    assert payload["projectId"] == project_id
+    assert payload["phases"]
+    assert payload["tasks"]
+    assert "rawText" not in payload["intent"]
+    assert "Todo 앱 만들어줘" not in json.dumps(payload, ensure_ascii=False)
+    assert "systemPrompt" not in json.dumps(payload, ensure_ascii=False)

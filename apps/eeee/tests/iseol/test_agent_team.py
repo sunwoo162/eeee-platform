@@ -22,3 +22,11 @@ def test_agent_team_serializes_to_project_organization_nodes():
     assert payload["schemaVersion"] == "iseol-agent-graph.v1"
     assert payload["agents"][0]["executionPolicy"] == "claimlatch_before_handoff"
     assert payload["agents"][-1]["role"] == "integration"
+
+
+def test_agent_node_metadata_is_backward_compatible():
+    graph = AgentTeamFactory.default_graph("Todo 앱")
+
+    assert graph.by_id("frontend").phase == "implementation"
+    assert graph.by_id("frontend").validators == []
+    assert graph.by_id("frontend").side_effect_level == "none"

@@ -119,6 +119,20 @@ def run_gui_self_test() -> int:
         return 1
 
 
+def run_chat_history_plugin(api_url: str, conversation_id: str) -> int:
+    """Run the frozen first-party chat history plugin without opening EEEE itself."""
+
+    prepare_qt_runtime()
+    from PySide6.QtWidgets import QApplication
+    from plugins.eeee_chat_history.window import ChatHistoryWindow
+
+    application = QApplication([])
+    client = PetApiClient(api_url)
+    window = ChatHistoryWindow(client, conversation_id=conversation_id)
+    window.show()
+    return application.exec()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Gleave Desktop")
     parser.add_argument(
@@ -131,11 +145,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="import the Qt desktop surface and exit",
     )
+    parser.add_argument(
+        "--chat-history-plugin",
+        action="store_true",
+        help="run the bundled EEEE chat history plugin entrypoint",
+    )
+    parser.add_argument("--api-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--conversation-id", default="desktop-default")
     arguments = parser.parse_args(argv)
     if arguments.self_test:
         return run_self_test()
     if arguments.gui_self_test:
         return run_gui_self_test()
+    if arguments.chat_history_plugin:
+        return run_chat_history_plugin(arguments.api_url, arguments.conversation_id)
 
     instance_lock = DesktopInstanceLock(Settings().data_dir / "desktop-instance.lock")
     if not instance_lock.acquire():

@@ -5,6 +5,42 @@ Gleave is a local-first FastAPI workbench and personal assistant platform. EEEE 
 This repository is released under the MIT License and is intended for
 self-hosted use. It is not a hosted multi-tenant service.
 
+## Native EEEE → ISEOL project flow
+
+EEEE accepts a one-sentence project request and keeps the local execution
+contract deterministic:
+
+```text
+POST /api/assistant/route
+  → background project identity
+  → native ISEOL intent and specialist graph
+  → template-specific local scaffold
+  → API/static QA and ClaimLatch release gate
+  → FINAL-QUALITY-REPORT.json
+```
+
+For example, `오늘 식단을 정리해주는 웹 만들어줘` selects the native
+`meal_planner` template. The project view exposes only safe progress metadata:
+`GET /api/projects/{project_id}/execution-plan` omits the raw request,
+credentials, and agent system prompts; `GET /api/projects/{project_id}/quality`
+returns `awaiting` until the evidence-backed final report exists.
+
+The current native lane is intentionally local-first and provider-neutral.
+Browser UI E2E is reported as `NOT_RUN` when a browser engine is not configured,
+so a local/API-verified project may be `client_ready_with_notes` rather than
+silently being called portfolio-complete. A failed specialist, missing QA, bad
+encoding, missing rollback evidence, or ClaimLatch failure produces a blocked
+final report.
+
+Plugin implementations are not included in this phase. The graph can record
+selected or missing extension manifests, but it does not pretend that Gmail,
+GitHub, Figma, Notion, or other external actions happened. Those actions stay
+pending until the corresponding connector is installed, explicitly approved,
+and independently verified.
+
+The full native flow and its evidence contract are documented in
+[docs/ISEOL_NATURAL_LANGUAGE_FLOW.md](docs/ISEOL_NATURAL_LANGUAGE_FLOW.md).
+
 ## Windows setup
 
 From PowerShell:
@@ -69,6 +105,11 @@ Copy `.env.example` to `.env` when environment configuration is needed.
 | `EXECUTION_MODE` | `demo` or deterministic `workspace_verify` | `demo` |
 | `COMMAND_TIMEOUT_SECONDS` | Maximum duration of a verification command | `120` |
 | `MAX_COMMAND_OUTPUT_CHARS` | Output limit recorded per command | `8000` |
+| `EEEE_CONVERSATION_PROVIDER` | General conversation provider: `chatgpt_web` by default; `ollama` is an explicit migration/debug override | `chatgpt_web` |
+| `EEEE_OLLAMA_BASE_URL` | Ollama endpoint for local conversation generation | `http://127.0.0.1:11434` |
+| `EEEE_OLLAMA_MODEL` | Ollama model used by the local provider | empty |
+| `CHATGPT_WEB_ENABLED` | Enables the optional ChatGPT Web bridge | `false` |
+| `CHATGPT_WEB_BRIDGE_URL` | Local bridge URL used by the Web GPT adapter | `http://127.0.0.1:47831` |
 
 OpenHands is optional. Research, comparison, approval, and the UI remain available without `LLM_API_KEY` or `LLM_MODEL`; an execution run is recorded as `unavailable` with a configuration error until those values and a compatible OpenHands SDK are installed.
 
@@ -91,17 +132,40 @@ runtime is not configured. The pinned `openhands-sdk` and `openhands-tools`
 versions are installed together because the distributions are released as a
 matched pair.
 
-For the keyless local-first path, install Ollama separately, pull a local model,
-and configure only `LOCAL_MODEL`:
+Ollama is not part of the active EEEE assistant path. The legacy local-agent
+path can still be enabled explicitly for migration/debugging by setting
+`EEEE_CONVERSATION_PROVIDER=ollama`, but a missing Web GPT bridge never falls
+back to it.
+
+For that explicit legacy path, install Ollama separately, pull a local model,
+and configure `EEEE_OLLAMA_MODEL` (or the equivalent `OLLAMA_MODEL` setting):
 
 ```powershell
 ollama pull qwen2.5-coder:7b
-$env:LOCAL_MODEL = "qwen2.5-coder:7b"
+$env:EEEE_CONVERSATION_PROVIDER = "ollama"
+$env:EEEE_OLLAMA_MODEL = "qwen2.5-coder:7b"
 python -m app.desktop
 ```
 
 The local model proposes structured actions; EEEE remains responsible for
 workspace boundaries, command execution, evidence, QA, and ClaimLatch gates.
+
+### Conversation provider and growth memory
+
+The general conversation path uses one provider contract. EEEE uses the
+ChatGPT Web adapter as its active assistant brain. `chatgpt_web` is the default
+and `auto` is retained only as a migration alias that also refuses to fall back
+to Ollama. Set `ollama` only for an explicit local migration/debug run; normal
+Web GPT failures remain visible instead of silently switching models.
+`GET /v1/runtime` exposes the selected provider and readiness of both providers.
+
+User feedback is stored separately from assistant memory. Submit a rating to
+`POST /api/memory/feedback`; it is retained as a redacted feedback ledger entry
+and does not change assistant behavior by itself. Include `remember: true` and
+a non-empty `correction` only when the user explicitly wants the correction to
+become an active, editable routing memory. Only active, non-expired memories
+are bounded into later conversation context; raw conversation text and ordinary
+positive/negative ratings are never promoted automatically.
 
 ## Approval model
 
@@ -129,6 +193,7 @@ GET  /api/runs?request_id={request_id}&status={status}&search={text}&created_aft
 POST /api/design/references
 GET  /api/design/references/{id}
 POST /api/design/verify
+POST /api/memory/feedback
 ```
 
 The older `/projects/{project_id}/...` endpoints remain available for the desktop coordinator flow. The default application uses demo candidates when no GitHub token is configured; tests inject a fake researcher and runtime so they never need live credentials.
@@ -177,6 +242,27 @@ Run the full suite from PowerShell:
 $env:QT_QPA_PLATFORM = "offscreen"
 python -m pytest -q
 ```
+
+The redesign keeps deterministic tests separate from local-runtime checks:
+
+```powershell
+$env:PYTHONPATH = "."
+python -m pytest tests -q
+python scripts/benchmark_core.py
+python scripts/smoke_restart_recovery.py
+python scripts/smoke_ollama.py
+```
+
+`benchmark_core.py` measures a warm Core process. `smoke_restart_recovery.py`
+must report an `interrupted` request after recovery. `smoke_ollama.py` returns
+exit code `0` only when the configured Ollama endpoint and model are ready; a
+missing server or model is reported as `blocked`/`unavailable`, never as a
+completed assistant response. A local Ollama installation is not required for
+the deterministic test suite.
+
+Core dependencies do not include PySide6, Node, Playwright, ISEOL, or
+OpenHands. PySide6 is only in the `desktop` extra, and optional project
+runtimes are lazy-loaded when a project execution is actually selected.
 
 The suite uses deterministic fakes for GitHub and agent execution. A warning from the installed Starlette/httpx compatibility layer may appear; it does not affect the test result.
 

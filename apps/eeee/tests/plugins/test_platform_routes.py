@@ -25,13 +25,20 @@ class HealthyConnector:
         return {"status": "completed"}
 
 
+class HealthyGmailConnector(HealthyConnector):
+    plugin_id = "gmail"
+
+    def invoke(self, connection, action, value):
+        return {"status": "completed", "action": action, "input": value}
+
+
 def _application(tmp_path):
     application = create_app(Settings(
         data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces",
         claim_latch_auto_start=False,
     ))
     application.state.plugin_platform.credentials = MemoryCredentialStore()
-    application.state.plugin_platform.connectors["notion"] = HealthyConnector()
+    application.state.plugin_platform.connectors = {"notion": HealthyConnector()}
     return application
 
 
@@ -102,9 +109,85 @@ def test_install_is_local_and_does_not_require_provider_connector(tmp_path) -> N
     assert gmail["nextAction"] == "configure"
 
 
+def test_chat_history_is_installed_from_the_catalog_and_can_be_launched(tmp_path) -> None:
+    client = TestClient(_application(tmp_path))
+
+    catalog = client.get("/api/plugins/catalog").json()
+    history = next(item for item in catalog if item["id"] == "eeee-chat-history")
+    assert history["status"] == "not_installed"
+    assert history["nextAction"] == "install"
+
+    installed = client.post("/api/plugins/eeee-chat-history/install")
+    assert installed.status_code == 200
+    assert installed.json()["status"] == "connected"
+
+    refreshed = client.get("/api/plugins/catalog").json()
+    history = next(item for item in refreshed if item["id"] == "eeee-chat-history")
+    assert history["status"] == "connected"
+    assert history["nextAction"] == "open"
+
+    launch = client.get("/api/plugins/eeee-chat-history/launch")
+    assert launch.status_code == 200
+    assert launch.json()["pluginId"] == "eeee-chat-history"
+    assert launch.json()["entrypoint"].endswith("eeee_chat_history/main.py") or launch.json()["entrypoint"].endswith("eeee_chat_history\\main.py")
+
+
 def test_malformed_user_scope_is_rejected(tmp_path) -> None:
     client = TestClient(_application(tmp_path))
     response = client.get(
         "/api/plugins/notion/connection", headers={"X-EEEE-User-Id": "../other-user"}
     )
     assert response.status_code == 400
+
+
+def test_first_party_invoke_uses_platform_and_preserves_action_approval(tmp_path) -> None:
+    application = _application(tmp_path)
+    application.state.plugin_platform.credentials = MemoryCredentialStore()
+    application.state.plugin_platform.connectors["gmail"] = HealthyGmailConnector()
+    client = TestClient(application)
+
+    assert client.post("/api/plugins/gmail/install").status_code == 200
+    connected = client.post(
+        "/api/plugins/gmail/connect",
+        json={
+            "approvedPermissions": ["mail.read", "mail.send"],
+            "credential": {"access_token": "secret"},
+            "accountLabel": "Work",
+        },
+    )
+    assert connected.status_code == 200
+
+    waiting = client.post(
+        "/api/plugins/gmail/invoke",
+        json={
+            "action": "mail.send",
+            "input": {"to": "s25011@gsm.hs.kr", "subject": "test", "body": "test"},
+        },
+    )
+    assert waiting.status_code == 200
+    assert waiting.json()["status"] == "awaiting_approval"
+
+    completed = client.post(
+        "/api/plugins/gmail/invoke",
+        json={
+            "action": "mail.send",
+            "input": {"to": "s25011@gsm.hs.kr", "subject": "test", "body": "test"},
+            "approved": True,
+        },
+    )
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "awaiting_approval"
+    approval_id = waiting.json()["executionId"]
+
+    approved = client.post(
+        "/api/plugins/gmail/invoke",
+        json={
+            "action": "mail.send",
+            "input": {"to": "s25011@gsm.hs.kr", "subject": "test", "body": "test"},
+            "approved": True,
+            "approvalRequestId": approval_id,
+        },
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "completed"
+    assert approved.json()["output"]["input"]["to"] == "s25011@gsm.hs.kr"

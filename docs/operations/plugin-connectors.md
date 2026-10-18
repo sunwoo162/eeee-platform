@@ -5,6 +5,10 @@ are intentionally not preinstalled or shared. A distribution enables a provider
 only when its public API base URL and OAuth client configuration are supplied by
 the operator.
 
+Gmail has a built-in provider profile. Set `EEEE_GMAIL_OAUTH_CLIENT_ID` and,
+when required by the OAuth client type, `EEEE_GMAIL_OAUTH_CLIENT_SECRET`; the
+user still sees only the Install button and the provider's browser login.
+
 ## Configuration
 
 Set `PLUGIN_PROVIDER_CONFIG_JSON` (or the equivalent `plugin_provider_config_json`
@@ -21,7 +25,14 @@ configuration:
       "authorizationEndpoint": "https://provider.example/oauth/authorize",
       "tokenEndpoint": "https://provider.example/oauth/token",
       "clientId": "public-client-id",
-      "scopes": ["mail.read", "mail.send"]
+      "scopes": ["mail.read", "mail.send"],
+      "scopeByPermission": {
+        "mail.read": ["provider.read"],
+        "mail.send": ["provider.send"]
+      },
+      "authorizationParams": {
+        "access_type": "offline"
+      }
     }
   }
 }
@@ -33,11 +44,18 @@ pretending that an external integration is usable. Client secrets are not
 stored in the catalog; use an operator secret mechanism for providers that
 require one and keep it out of source control.
 
+For Gmail, the built-in profile uses Google's OAuth authorization and token
+endpoints, Gmail's `users/me/profile` health endpoint, and the Gmail API
+`users/me/messages` operations. The client ID and secret remain operator-only
+settings; they are never shown in the plugin UI.
+
 ## User flow
 
 1. The user selects **Install** in EEEE's plugin control center.
-2. EEEE opens the provider's OAuth page in the user's browser after explicit
-   permission selection.
+2. EEEE opens the provider's OAuth page in the user's browser. The desktop
+   client selects the default read-only EEEE permissions automatically, and
+   `scopeByPermission` limits the provider scopes to those approved actions.
+   Write permissions remain opt-in.
 3. The local callback verifies state and PKCE, exchanges the code, health-checks
    the provider, and stores the resulting credential in the OS credential
    store.

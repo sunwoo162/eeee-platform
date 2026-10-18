@@ -52,10 +52,20 @@ def test_catalog_includes_first_party_connector_candidates() -> None:
     ids = {entry.id for entry in PluginCatalog().list()}
 
     assert {
+        "eeee-chat-history",
         "gmail", "google-calendar", "google-drive", "google-contacts",
         "github", "figma", "slack", "linear", "todoist",
         "outlook-email", "outlook-calendar", "notion",
     }.issubset(ids)
+
+
+def test_chat_history_catalog_entry_is_local_and_installable_without_account() -> None:
+    entry = PluginCatalog().get("eeee-chat-history")
+
+    assert entry.auth_mode == "none"
+    assert entry.connector == "eeee-core"
+    assert entry.permissions == ["conversation.read", "conversation.write"]
+    assert entry.default_installed is False
 
 
 def test_catalog_exposes_credential_fields_and_safe_permission_defaults() -> None:

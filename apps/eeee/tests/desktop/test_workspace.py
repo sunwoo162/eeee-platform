@@ -115,6 +115,12 @@ class PluginWorkspaceClient(WorkspaceClient):
         return {"pluginId": plugin_id, "status": "not_installed"}
 
 
+class StaleCatalogPluginWorkspaceClient(PluginWorkspaceClient):
+    def install_plugin(self, plugin_id):
+        self.calls.append(("install", plugin_id))
+        return {"pluginId": plugin_id, "status": "available"}
+
+
 def test_workspace_is_a_desktop_control_center_and_renders_project_map():
     app = QApplication.instance() or QApplication([])
     window = WorkspaceWindow(WorkspaceClient())
@@ -163,7 +169,7 @@ def test_workspace_sidebar_selection_renders_the_selected_section():
     window.close()
 
 
-def test_workspace_plugin_screen_exposes_install_and_disconnect_actions():
+def test_workspace_plugin_screen_exposes_install_and_disconnect_actions(monkeypatch):
     app = QApplication.instance() or QApplication([])
     client = PluginWorkspaceClient()
     window = WorkspaceWindow(client)
@@ -171,6 +177,7 @@ def test_workspace_plugin_screen_exposes_install_and_disconnect_actions():
 
     window.nav.setCurrentRow(3)
     _settle()
+    monkeypatch.setattr("PySide6.QtGui.QDesktopServices.openUrl", lambda _url: True)
     assert window.map_tree.topLevelItemCount() == 1
     assert window.map_tree.topLevelItem(0).text(0) == "Notion"
     assert window.plugin_install_button.isEnabled()
@@ -178,14 +185,65 @@ def test_workspace_plugin_screen_exposes_install_and_disconnect_actions():
 
     window._install_selected_plugin()
     _settle()
-    assert client.calls == [("install", "notion")]
+    assert client.calls[:2] == [
+        ("install", "notion"),
+        ("oauth", "notion", ["pages.read"], None),
+    ]
     assert window.plugin_connect_button.isEnabled()
     assert not window.plugin_install_button.isEnabled()
 
+    # The automatic OAuth status poll is intentionally independent from the
+    # lifecycle button assertions below.
+    window._oauth_poll_timer.stop()
+    window._oauth_poll_plugin_id = None
+    window._oauth_poll_state = None
+    window._oauth_poll_request_pending = False
     window._disconnect_selected_plugin()
     _settle()
     assert client.calls[-1] == ("disconnect", "notion")
     assert window.plugin_connect_button.isEnabled()
+    window.close()
+
+
+def test_workspace_install_starts_browser_oauth_for_oauth_plugin(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    client = PluginWorkspaceClient()
+    window = WorkspaceWindow(client)
+    _settle()
+    window.nav.setCurrentRow(3)
+    _settle()
+
+    opened = []
+    monkeypatch.setattr(
+        "PySide6.QtGui.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toString()) or True,
+    )
+
+    window._install_selected_plugin()
+    _settle()
+
+    assert client.calls[:2] == [
+        ("install", "notion"),
+        ("oauth", "notion", ["pages.read"], None),
+    ]
+    assert opened == ["https://provider.test/authorize"]
+    window.close()
+
+
+def test_workspace_install_marks_oauth_plugin_as_connecting_before_catalog_refresh(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    client = StaleCatalogPluginWorkspaceClient()
+    window = WorkspaceWindow(client)
+    _settle()
+    window.nav.setCurrentRow(3)
+    _settle()
+    monkeypatch.setattr("PySide6.QtGui.QDesktopServices.openUrl", lambda _url: True)
+
+    window._install_selected_plugin()
+    _settle()
+
+    assert window.plugin_install_button.isEnabled() is False
+    assert window.plugin_connect_button.isEnabled() is True
     window.close()
 
 

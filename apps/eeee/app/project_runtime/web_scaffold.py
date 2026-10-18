@@ -115,6 +115,7 @@ volumes:
 3. production `DATABASE_URL`을 설정합니다.
 4. `python -m pytest`와 브라우저 E2E를 실행합니다.
 5. ClaimLatch release gate가 같은 project/revision에 대해 PASS인지 확인합니다.
+6. 장애 시 직전 `RELEASE_MANIFEST.json`과 Git revision을 기준으로 rollback하고 결과를 `PROJECT_LOG.md`에 기록합니다.
 
 EEEE는 외부 credential이 설정되지 않은 상태를 배포 완료로 보고하지 않습니다.
 """,

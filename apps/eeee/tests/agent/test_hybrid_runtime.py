@@ -22,15 +22,15 @@ def result(status: str, summary: str, error=None) -> AgentResult:
     return AgentResult(status, summary, [], [], [], error)
 
 
-def test_hybrid_runtime_uses_local_for_simple_conversation():
+def test_hybrid_runtime_uses_web_as_the_primary_conversation_brain():
     local = ScriptedRuntime(result("completed", "로컬 응답"))
     web = ScriptedRuntime(result("completed", "웹 응답"))
 
     response = HybridAssistantRuntime(local=local, web=web).run(request("사용자 요청: 안녕"))
 
-    assert response.summary == "로컬 응답"
-    assert local.calls == 1
-    assert web.calls == 0
+    assert response.summary == "웹 응답"
+    assert local.calls == 0
+    assert web.calls == 1
 
 
 def test_hybrid_runtime_uses_web_for_project_request():
@@ -44,29 +44,29 @@ def test_hybrid_runtime_uses_web_for_project_request():
     assert web.calls == 1
 
 
-def test_hybrid_runtime_does_not_fall_back_when_local_is_unavailable():
+def test_hybrid_runtime_uses_web_when_local_is_unavailable():
     local = ScriptedRuntime(result("unavailable", "", "local model is offline"))
     web = ScriptedRuntime(result("completed", "웹 응답"))
 
     response = HybridAssistantRuntime(local=local, web=web).run(request("사용자 요청: 안녕"))
 
-    assert response.status == "unavailable"
-    assert response.error == "local model is offline"
-    assert web.calls == 0
+    assert response.summary == "웹 응답"
+    assert response.status == "completed"
+    assert web.calls == 1
 
 
-def test_hybrid_runtime_does_not_send_simple_chat_to_web_after_local_failure():
+def test_hybrid_runtime_keeps_web_as_the_only_active_lane_for_simple_chat():
     local = ScriptedRuntime(result("unavailable", "", "local model is offline"))
     web = ScriptedRuntime(result("completed", "웹 응답"))
 
     response = HybridAssistantRuntime(local=local, web=web).run(request("사용자 요청: 오늘 점심 뭐 먹을까?"))
 
-    assert response.status == "unavailable"
-    assert response.error == "local model is offline"
-    assert web.calls == 0
+    assert response.summary == "웹 응답"
+    assert response.status == "completed"
+    assert web.calls == 1
 
 
-def test_builtin_local_conversation_does_not_fall_back_to_web_for_unknown_chat():
+def test_web_remains_primary_even_when_a_legacy_local_lane_is_injected():
     from app.agent.hybrid_runtime import FastLocalConversationRuntime
 
     web = ScriptedRuntime(result("completed", "웹 응답"))
@@ -75,6 +75,5 @@ def test_builtin_local_conversation_does_not_fall_back_to_web_for_unknown_chat()
     ).run(request("사용자 요청: 오늘 뭐 하지?"))
 
     assert response.status == "completed"
-    assert "듣고 있어" in response.summary
-    assert "편하게 말해줘" not in response.summary
-    assert web.calls == 0
+    assert response.summary == "웹 응답"
+    assert web.calls == 1

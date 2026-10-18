@@ -17,6 +17,7 @@ MemoryKind = Literal[
     "user_preference",
 ]
 PromotionState = Literal["candidate", "active", "superseded", "revoked"]
+FeedbackRating = Literal["positive", "negative"]
 
 
 class MemoryStatus(str, Enum):
@@ -50,9 +51,12 @@ class MemoryRecord(BaseModel):
     content: str = Field(min_length=1)
     scope: dict[str, Any]
     source_project_id: str = Field(min_length=1)
-    source_artifact_ids: list[str] = Field(min_length=1)
-    evidence_ids: list[str] = Field(min_length=1)
-    verification_ids: list[str] = Field(min_length=1)
+    source_type: Literal["conversation", "project_outcome"] = "project_outcome"
+    source_message_id: str | None = None
+    source_request_id: str | None = None
+    source_artifact_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    verification_ids: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
     status: MemoryStatus
     created_at: datetime
@@ -61,3 +65,18 @@ class MemoryRecord(BaseModel):
     superseded_by_id: str | None = None
     approved_by: str | None = None
     user_editable: bool = True
+
+
+class GrowthFeedback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    conversation_id: str = Field(min_length=1)
+    request_id: str | None = None
+    message_id: str = Field(min_length=1)
+    rating: FeedbackRating
+    correction: str | None = None
+    remember: bool = False
+    memory_id: str | None = None
+    actor: str = Field(min_length=1)
+    created_at: datetime

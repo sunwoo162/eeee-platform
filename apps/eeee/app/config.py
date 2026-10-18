@@ -2,8 +2,10 @@ from pathlib import Path
 import os
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.paths import default_data_dir
 
 
 def _user_data_root() -> Path:
@@ -13,14 +15,28 @@ def _user_data_root() -> Path:
 
 class Settings(BaseSettings):
     app_name: str = "Gleave"
-    data_dir: Path = Field(default_factory=lambda: _user_data_root() / "data")
-    workspace_root: Path = Field(default_factory=lambda: _user_data_root() / "workspaces")
+    data_dir: Path = Field(
+        default_factory=default_data_dir,
+        validation_alias=AliasChoices("EEEE_DATA_DIR", "DATA_DIR"),
+    )
+    workspace_root: Path = Field(
+        default_factory=lambda: default_data_dir() / "workspaces",
+        validation_alias=AliasChoices("EEEE_WORKSPACE_ROOT", "WORKSPACE_ROOT"),
+    )
     github_token: str | None = None
     notion_token: str | None = None
     notion_parent_page_id: str | None = None
     notion_api_base: str = "https://api.notion.com"
     notion_api_version: str = "2026-03-11"
     plugin_provider_config_json: str | None = None
+    gmail_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("EEEE_GMAIL_OAUTH_CLIENT_ID", "GMAIL_OAUTH_CLIENT_ID"),
+    )
+    gmail_oauth_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("EEEE_GMAIL_OAUTH_CLIENT_SECRET", "GMAIL_OAUTH_CLIENT_SECRET"),
+    )
     iseol_bridge_token: str | None = None
     claim_latch_adapter_url: str | None = None
     claim_latch_auto_start: bool = True
@@ -57,6 +73,40 @@ class Settings(BaseSettings):
     local_model: str | None = None
     local_conversation_model: str | None = None
     local_model_timeout_seconds: float = 120.0
+    conversation_provider: Literal["auto", "chatgpt_web", "ollama"] = Field(
+        default="chatgpt_web",
+        validation_alias=AliasChoices("EEEE_CONVERSATION_PROVIDER", "CONVERSATION_PROVIDER"),
+    )
+    ollama_base_url: str = Field(
+        default="http://127.0.0.1:11434",
+        validation_alias=AliasChoices("EEEE_OLLAMA_BASE_URL", "OLLAMA_BASE_URL"),
+    )
+    ollama_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("EEEE_OLLAMA_MODEL", "OLLAMA_MODEL"),
+    )
+    ollama_connect_timeout_seconds: float = Field(
+        default=3.0,
+        validation_alias=AliasChoices(
+            "EEEE_OLLAMA_CONNECT_TIMEOUT_SECONDS", "OLLAMA_CONNECT_TIMEOUT_SECONDS"
+        ),
+    )
+    ollama_generation_timeout_seconds: float = Field(
+        default=120.0,
+        validation_alias=AliasChoices(
+            "EEEE_OLLAMA_GENERATION_TIMEOUT_SECONDS", "OLLAMA_GENERATION_TIMEOUT_SECONDS"
+        ),
+    )
+    ollama_context_tokens: int = Field(
+        default=8192,
+        validation_alias=AliasChoices("EEEE_OLLAMA_CONTEXT_TOKENS", "OLLAMA_CONTEXT_TOKENS"),
+    )
+    agent_runtime: Literal["chatgpt_web", "openhands"] = "chatgpt_web"
+    iseol_bridge_script: Path = Path("packages/iseol/scripts/eeee-chatgpt-web-bridge.ts")
+    iseol_node_executable: str = "node"
+    iseol_control_plane_url: str | None = None
+    iseol_control_plane_token: str | None = None
+    project_auto_execute: bool = False
     execution_mode: Literal["demo", "workspace_verify"] = "demo"
     mobile_bridge_enabled: bool = True
     mobile_pairing_ttl_seconds: int = 600
@@ -112,4 +162,23 @@ class Settings(BaseSettings):
             raise ValueError("chatgpt_web_bridge_port must be between 1024 and 65535")
         return value
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    @field_validator("ollama_connect_timeout_seconds", "ollama_generation_timeout_seconds")
+    @classmethod
+    def validate_ollama_timeouts(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Ollama timeouts must be positive")
+        return value
+
+    @field_validator("ollama_context_tokens")
+    @classmethod
+    def validate_ollama_context_tokens(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("ollama_context_tokens must be positive")
+        return value
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )

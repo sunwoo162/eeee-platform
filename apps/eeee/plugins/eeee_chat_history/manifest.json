@@ -1,0 +1,7 @@
+{
+  "id": "eeee-chat-history",
+  "name": "EEEE 채팅 기록",
+  "version": "1.0.0",
+  "entrypoint": "main.py",
+  "permissions": ["conversation.read", "conversation.write"]
+}

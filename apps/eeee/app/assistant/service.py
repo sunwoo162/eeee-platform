@@ -31,12 +31,19 @@ class AssistantRouteResult(BaseModel):
     message: str = Field(min_length=1)
     project_id: str | None = None
     project_profile: ProjectProfile | None = None
+    template_id: str | None = Field(default=None, alias="templateId")
     missing_connectors: list[str] = Field(default_factory=list)
+    missing_extensions: list[str] = Field(default_factory=list, alias="missingExtensions")
     execution_plan_path: str | None = Field(default=None, alias="executionPlanPath")
     planning_session_id: str | None = Field(default=None, alias="planningSessionId")
     planning_handoff_id: str | None = Field(default=None, alias="planningHandoffId")
     quality_status: str | None = Field(default=None, alias="qualityStatus")
     quality_reason: str | None = Field(default=None, alias="qualityReason")
+    final_report_path: str | None = Field(default=None, alias="finalReportPath")
+    quality_score: int | None = Field(default=None, alias="qualityScore", ge=0, le=100)
+    quality_grade: str | None = Field(default=None, alias="qualityGrade")
+    final_blockers: list[str] = Field(default_factory=list, alias="finalBlockers")
+    final_limitations: list[str] = Field(default_factory=list, alias="finalLimitations")
     qa_report_path: str | None = Field(default=None, alias="qaReportPath")
     release_manifest_path: str | None = Field(default=None, alias="releaseManifestPath")
     git_branch: str | None = Field(default=None, alias="gitBranch")
@@ -48,6 +55,12 @@ class AssistantRouteResult(BaseModel):
     suggested_action: str | None = None
     plugin_id: str | None = None
     plugin_execution_id: str | None = None
+    plugin_output: dict[str, object] | None = Field(default=None, alias="pluginOutput")
+    approval_required: bool = Field(default=False, alias="approvalRequired")
+    approval_capability_id: str | None = Field(default=None, alias="approvalCapabilityId")
+    approval_plugin_id: str | None = Field(default=None, alias="approvalPluginId")
+    approval_side_effect_level: str | None = Field(default=None, alias="approvalSideEffectLevel")
+    approval_request_id: str | None = Field(default=None, alias="approvalRequestId")
     job_id: str | None = Field(default=None, alias="jobId")
     # Expose the selected lane so the Desktop can show/debug the real route
     # instead of making the user guess whether a turn reached Web/GPT.
@@ -88,11 +101,12 @@ class AssistantService:
 
     def route(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
-        conversation_id: str = "desktop-default",
+        conversation_id: str = "desktop-default", approved: bool = False,
+        approval_request_id: str | None = None,
     ) -> AssistantRouteResult:
         request = AssistantRequest(
             raw_text=text,
-            context={"workspace": workspace, "conversationId": conversation_id},
+            context={"workspace": workspace, "conversationId": conversation_id, "approved": approved},
             requested_capability=requested_capability,
         )
         if self.background_supervisor is not None:
@@ -108,13 +122,16 @@ class AssistantService:
                     request_id,
                     lambda: self._route_sync(
                         text, workspace, requested_capability=requested_capability,
-                        conversation_id=conversation_id, resume_project_id=project_id,
+                        conversation_id=conversation_id, approved=approved, resume_project_id=project_id,
+                        approval_request_id=approval_request_id,
                     ).model_dump(mode="json"),
                     input_data={
                         "text": text,
                         "workspace": workspace,
                         "requestedCapability": requested_capability,
                         "conversationId": conversation_id,
+                        "approved": approved,
+                        "approvalRequestId": approval_request_id,
                         "projectId": project_id,
                     },
                 )
@@ -135,14 +152,17 @@ class AssistantService:
                 return result
         result = self._route_sync(
             text, workspace, requested_capability=requested_capability,
-            conversation_id=conversation_id,
+            conversation_id=conversation_id, approved=approved,
+            approval_request_id=approval_request_id,
         )
         self._remember_turn(conversation_id, text, result.message)
         return result
 
     def _route_sync(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
-        conversation_id: str = "desktop-default", resume_project_id: str | None = None,
+        conversation_id: str = "desktop-default", approved: bool = False,
+        approval_request_id: str | None = None,
+        resume_project_id: str | None = None,
     ) -> AssistantRouteResult:
         implicit_preference = extract_implicit_preference(text)
         if implicit_preference is not None:
@@ -163,6 +183,8 @@ class AssistantService:
                 context={
                     "workspace": workspace,
                     "conversationId": conversation_id,
+                    "approved": approved,
+                    **({"approvalRequestId": approval_request_id} if approval_request_id else {}),
                     **({"resumeProjectId": resume_project_id} if resume_project_id else {}),
                 },
                              requested_capability=requested_capability),
@@ -178,6 +200,7 @@ class AssistantService:
         requires_external_configuration = (
             isinstance(project_profile, dict)
             and project_profile.get("runtimeProfile") == "web_app"
+            and project_profile.get("templateId") != "todo_app"
         )
         status = (
             "awaiting_configuration"
@@ -206,12 +229,24 @@ class AssistantService:
             message=message,
             project_id=output.get("projectId"),
             project_profile=output.get("projectProfile"),
+            template_id=(
+                output.get("templateId")
+                or project_profile.get("templateId")
+                if isinstance(project_profile, dict)
+                else output.get("templateId")
+            ),
             missing_connectors=missing_connectors,
+            missing_extensions=output.get("missingExtensions", []) if isinstance(output.get("missingExtensions", []), list) else [],
             execution_plan_path=output.get("executionPlanPath"),
             planning_session_id=output.get("planningSessionId"),
             planning_handoff_id=output.get("planningHandoffId"),
             quality_status=quality_status,
             quality_reason=output.get("qualityReason"),
+            final_report_path=output.get("finalReportPath"),
+            quality_score=output.get("finalScore") if isinstance(output.get("finalScore"), int) else None,
+            quality_grade=output.get("finalGrade") if isinstance(output.get("finalGrade"), str) else None,
+            final_blockers=output.get("finalBlockers", []) if isinstance(output.get("finalBlockers", []), list) else [],
+            final_limitations=output.get("finalLimitations", []) if isinstance(output.get("finalLimitations", []), list) else [],
             qa_report_path=output.get("qaReportPath"),
             release_manifest_path=output.get("releaseManifestPath"),
             git_branch=output.get("gitBranch"),
@@ -222,6 +257,12 @@ class AssistantService:
             suggested_action=output.get("pluginRequired", {}).get("suggestedAction") if isinstance(output.get("pluginRequired"), dict) else None,
             plugin_id=output.get("pluginId"),
             plugin_execution_id=output.get("pluginExecutionId"),
+            plugin_output=output.get("pluginOutput") if isinstance(output.get("pluginOutput"), dict) else None,
+            approval_required=output.get("approvalRequired") is True,
+            approval_capability_id=output.get("approvalCapabilityId"),
+            approval_plugin_id=output.get("approvalPluginId"),
+            approval_side_effect_level=output.get("approvalSideEffectLevel"),
+            approval_request_id=output.get("approvalRequestId"),
             provider=provider,
             response_verification=ResponseVerification.model_validate(
                 output.get("responseVerification", {
@@ -286,6 +327,8 @@ class AssistantService:
         workspace = input_data.get("workspace")
         requested_capability = input_data.get("requestedCapability")
         conversation_id = input_data.get("conversationId")
+        approved = input_data.get("approved")
+        approval_request_id = input_data.get("approvalRequestId")
         project_id = input_data.get("projectId")
         if not isinstance(text, str) or not text.strip():
             return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
@@ -294,6 +337,8 @@ class AssistantService:
             workspace if isinstance(workspace, str) else None,
             requested_capability=requested_capability if isinstance(requested_capability, str) else None,
             conversation_id=conversation_id if isinstance(conversation_id, str) else "desktop-default",
+            approved=approved is True,
+            approval_request_id=approval_request_id if isinstance(approval_request_id, str) else None,
             resume_project_id=project_id if isinstance(project_id, str) else None,
         ).model_dump(mode="json")
 

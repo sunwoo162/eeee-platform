@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 
@@ -314,12 +317,15 @@ class WorkspaceWindow:
                         button.setEnabled(False)
                     return
                 self.plugin_install_button.setEnabled(status == "not_installed")
-                self.plugin_connect_button.setEnabled(status in {
+                is_first_party_history = str(plugin.get("id") or plugin.get("pluginId")) == "eeee-chat-history"
+                self.plugin_connect_button.setEnabled(not is_first_party_history and status in {
                     "available", "awaiting_authentication", "failed"
                 })
                 self.plugin_resume_button.setEnabled(status == "paused")
                 self.plugin_open_button.setEnabled(status == "connected")
-                self.plugin_disconnect_button.setEnabled(status in {"connected", "paused"})
+                self.plugin_disconnect_button.setEnabled(
+                    not is_first_party_history and status in {"connected", "paused"}
+                )
                 self.plugin_uninstall_button.setEnabled(status not in {"not_installed", "disabled", "unknown"})
                 self.plugin_connect_button.setText(
                     ("재연결" if self.language == "ko" else "Reconnect")
@@ -360,12 +366,65 @@ class WorkspaceWindow:
                 plugin = self._selected_plugin
                 if plugin is None:
                     return
+                plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
+                if plugin_id == "eeee-chat-history":
+                    self._submit_background(
+                        lambda: self.client.get_plugin_launch_info(plugin_id),
+                        self._launch_chat_history_plugin,
+                        lambda exc: self._set_plugin_hint(self._friendly_error(exc)),
+                    )
+                    return
                 permissions = plugin.get("approvedPermissions", [])
                 account = plugin.get("accountLabel")
                 self._set_plugin_hint(
                     f"연결된 계정: {account or '기본 계정'}\n승인된 권한: {', '.join(str(item) for item in permissions) if isinstance(permissions, list) else '없음'}"
                     if self.language == "ko"
                     else f"Connected account: {account or 'default'}\nApproved permissions: {', '.join(str(item) for item in permissions) if isinstance(permissions, list) else 'none'}"
+                )
+
+            def _launch_chat_history_plugin(self, result: object):
+                if not isinstance(result, dict):
+                    self._set_plugin_hint("채팅 기록 플러그인 실행 정보가 올바르지 않아.")
+                    return
+                entrypoint_value = result.get("entrypoint")
+                if not isinstance(entrypoint_value, str) or not entrypoint_value:
+                    self._set_plugin_hint("채팅 기록 플러그인 경로가 없어.")
+                    return
+                entrypoint = Path(entrypoint_value).resolve()
+                if not entrypoint.is_file():
+                    self._set_plugin_hint(f"플러그인 파일을 찾지 못했어: {entrypoint}")
+                    return
+                base_url = str(getattr(self.client, "base_url", "http://127.0.0.1:8000"))
+                conversation_id = "desktop-default"
+                if getattr(sys, "frozen", False):
+                    command = [
+                        sys.executable,
+                        "--chat-history-plugin",
+                        "--api-url",
+                        base_url,
+                        "--conversation-id",
+                        conversation_id,
+                    ]
+                    cwd = None
+                else:
+                    executable = Path(sys.executable)
+                    pythonw = executable.with_name("pythonw.exe")
+                    if executable.name.lower() == "python.exe" and pythonw.is_file():
+                        executable = pythonw
+                    command = [
+                        str(executable),
+                        str(entrypoint),
+                        "--api-url",
+                        base_url,
+                        "--conversation-id",
+                        conversation_id,
+                    ]
+                    cwd = str(entrypoint.parent)
+                creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                subprocess.Popen(command, cwd=cwd, creationflags=creation_flags)
+                self._set_plugin_hint(
+                    "채팅 기록 창을 열었어. 대화는 EEEE Core에 저장돼." if self.language == "ko"
+                    else "Chat history opened. Conversations are stored by EEEE Core."
                 )
 
             def _set_plugin_hint(self, text: str):
@@ -406,12 +465,60 @@ class WorkspaceWindow:
                 plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
                 self._submit_background(
                     lambda: self.client.install_plugin(plugin_id),
-                    lambda _result: (
-                        self._set_plugin_hint("설치했어. 연결할 계정을 선택해줘." if self.language == "ko" else "Installed. Choose an account to connect."),
-                        self.refresh(),
-                    ),
+                    lambda result: self._finish_install(plugin, result),
                     lambda exc: self._set_plugin_hint(self._friendly_error(exc)),
                 )
+
+            def _finish_install(self, plugin: dict[str, object], result: object):
+                auth_mode = str(plugin.get("authMode", ""))
+                if auth_mode in {"oauth", "token-or-oauth"}:
+                    # Keep the UI in the connecting state even if the next catalog
+                    # refresh still contains the pre-install snapshot.
+                    plugin["status"] = "awaiting_authentication"
+                    self._select_plugin()
+                    permissions = self._default_oauth_permissions(plugin)
+                    if permissions:
+                        self._set_plugin_hint(
+                            "설치했어. 브라우저에서 로그인하고 권한을 승인해줘."
+                            if self.language == "ko"
+                            else "Installed. Sign in in the browser and approve access."
+                        )
+                        self._start_oauth_connection(plugin, permissions)
+                        return
+                    self._set_plugin_hint(
+                        "설치했어. 연결 권한을 확인해줘."
+                        if self.language == "ko"
+                        else "Installed. Review the connection permissions."
+                    )
+                    return
+                plugin["status"] = (
+                    str(result.get("status") or "available")
+                    if isinstance(result, dict)
+                    else "available"
+                )
+                self._select_plugin()
+                self.refresh()
+                self._set_plugin_hint(
+                    "설치했어. 연결할 계정을 선택해줘."
+                    if self.language == "ko"
+                    else "Installed. Choose an account to connect."
+                )
+
+            @staticmethod
+            def _default_oauth_permissions(plugin: dict[str, object]) -> list[str]:
+                details = plugin.get("permissionDetails", [])
+                if isinstance(details, list):
+                    defaults = [
+                        str(item.get("id"))
+                        for item in details
+                        if isinstance(item, dict) and item.get("id") and item.get("defaultApproved") is True
+                    ]
+                    if defaults:
+                        return defaults
+                permissions = plugin.get("permissions", [])
+                if not isinstance(permissions, list):
+                    return []
+                return [str(permission) for permission in permissions if str(permission).endswith(".read")]
 
             def _disconnect_selected_plugin(self):
                 plugin = self._selected_plugin

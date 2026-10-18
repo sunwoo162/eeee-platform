@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
+from uuid import uuid4
 
 
 class DesktopSession:
@@ -64,8 +66,28 @@ class DesktopSession:
                 })
         return self.snapshot
 
-    def route(self, text: str, workspace: str | None = None) -> dict[str, object]:
-        result = self.client.route_assistant(text, workspace)
+    def route(
+        self,
+        text: str,
+        workspace: str | None = None,
+        *,
+        approved: bool = False,
+        approval_request_id: str | None = None,
+    ) -> dict[str, object]:
+        route_kwargs: dict[str, object] = {}
+        if approved:
+            route_kwargs["approved"] = True
+        if approval_request_id:
+            try:
+                parameters = inspect.signature(self.client.route_assistant).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "approval_request_id" in parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            ):
+                route_kwargs["approval_request_id"] = approval_request_id
+        result = self.client.route_assistant(text, workspace, **route_kwargs)
         job_id = result.get("jobId")
         if isinstance(job_id, str) and job_id:
             self.assistant_job_id = job_id
@@ -74,6 +96,19 @@ class DesktopSession:
             self.project_id = selected_project
         snapshot = self.refresh()
         snapshot["assistantRoute"] = result
+        for key in (
+            "pluginId",
+            "pluginExecutionId",
+            "pluginOutput",
+            "approvalRequired",
+            "approvalCapabilityId",
+            "approvalPluginId",
+            "approvalSideEffectLevel",
+            "approvalRequestId",
+            "selection",
+        ):
+            if key in result:
+                snapshot[key] = result[key]
         if not isinstance(job_id, str) or not job_id:
             # A direct EEEE/plugin response has no project snapshot to carry
             # its state. Even project-scoped synchronous responses must remain
@@ -106,3 +141,94 @@ def _without_secrets(value: dict[str, object]) -> dict[str, object]:
         for key, item in value.items()
         if key.replace("_", "").lower() not in {"accesstoken", "token", "password"}
     }
+
+
+class ConversationSession:
+    """Desktop-only conversation state backed exclusively by the Core API."""
+
+    def __init__(self, client: Any) -> None:
+        self.client = client
+        self.conversation_id: str | None = None
+        self.request_id: str | None = None
+        self.messages: list[dict[str, object]] = []
+        self.state = "idle"
+        self.draft = ""
+
+    def begin_input(self) -> None:
+        self.state = "input"
+        self.draft = ""
+
+    def open(self, conversation_id: str) -> list[dict[str, object]]:
+        payload = self.client.get_conversation_messages(conversation_id)
+        items = payload.get("items", [])
+        self.conversation_id = conversation_id
+        self.messages = [
+            item for item in items if isinstance(item, dict)
+        ] if isinstance(items, list) else []
+        self.state = "idle"
+        return self.messages
+
+    def reconnect(self) -> list[dict[str, object]]:
+        if self.conversation_id is None:
+            return self.messages
+        return self.open(self.conversation_id)
+
+    def submit(self, text: str) -> dict[str, object]:
+        value = text.strip()
+        if not value:
+            raise ValueError("conversation text must not be empty")
+        self.draft = value
+        self.state = "submitting"
+        try:
+            if self.conversation_id is None:
+                conversation = self.client.create_conversation()
+                self.conversation_id = str(conversation["id"])
+            request = self.client.submit_turn(
+                self.conversation_id,
+                value,
+                f"desktop-{uuid4().hex}",
+            )
+        except Exception:
+            self.state = "error"
+            raise
+        self.messages.append({"role": "user", "content": value, "status": "completed"})
+        self.request_id = str(request["requestId"])
+        self.state = "streaming"
+        return request
+
+    def apply_events(
+        self, request: dict[str, object], events: list[dict[str, object]]
+    ) -> None:
+        request_id = request.get("requestId")
+        if isinstance(request_id, str):
+            self.request_id = request_id
+        assistant: dict[str, object] | None = None
+        for message in reversed(self.messages):
+            if message.get("role") == "assistant" and message.get("status") == "streaming":
+                assistant = message
+                break
+        for event in events:
+            event_type = event.get("eventType")
+            payload = event.get("payload")
+            payload = payload if isinstance(payload, dict) else {}
+            if event_type == "message.started":
+                assistant = {"role": "assistant", "content": "", "status": "streaming"}
+                self.messages.append(assistant)
+            elif event_type == "message.delta":
+                if assistant is None:
+                    assistant = {"role": "assistant", "content": "", "status": "streaming"}
+                    self.messages.append(assistant)
+                assistant["content"] = str(assistant.get("content", "")) + str(
+                    payload.get("delta", "")
+                )
+            elif event_type == "message.completed":
+                if assistant is None:
+                    assistant = {"role": "assistant", "content": "", "status": "streaming"}
+                    self.messages.append(assistant)
+                assistant["content"] = str(payload.get("content", assistant.get("content", "")))
+                assistant["status"] = "completed"
+                self.state = "answer"
+            elif event_type in {"request.failed", "request.cancelled", "request.interrupted"}:
+                self.state = "error"
+        if self.state == "streaming" and assistant is not None and assistant.get("status") == "completed":
+            self.state = "answer"

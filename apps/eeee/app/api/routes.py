@@ -1,25 +1,29 @@
 import asyncio
 import json
+import logging
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.service import ApiFlowService
 from app.assistant.models import CapabilitySelection
+from app.assistant.growth import GrowthFeedbackError, GrowthService
+from app.capabilities.status import canonical_plugin_status
 from app.assistant.service import AssistantRouteResult, AssistantService
 from app.assistant.background import JobTransitionError
+from app.conversations.store import ConversationStore
 from app.coordinator.service import Coordinator
 from app.domain.errors import ApprovalError
 from app.design.references import DesignService, ReferencePack
 from app.design.visual_verify import VisualReport
 from app.integrations.contracts import ProjectBriefV1, ProjectOutcomeReportV1
 from app.integrations.contracts import GithubReviewResultV1
-from app.memory.models import MemoryRecord, MemoryStatus
+from app.memory.models import GrowthFeedback, MemoryRecord, MemoryStatus
 from app.mobile.bridge import MobileBridge, MobileBridgeError
 from app.plugins.host import PluginHost
 from app.plugins.models import PluginHealth, PluginManifest
@@ -50,6 +54,9 @@ from app.domain.models import (
 from app.workflow.planner import WorkPlan, build_work_plan
 
 
+logger = logging.getLogger(__name__)
+
+
 def build_project_view_router(service: ProjectViewService) -> APIRouter:
     router = APIRouter(prefix="/api/projects")
 
@@ -73,6 +80,24 @@ def build_project_view_router(service: ProjectViewService) -> APIRouter:
                           revision: str | None = Query(default=None, min_length=1)):
         try:
             return service.get_activity(project_id, cursor=cursor, revision=revision)
+        except StaleProjectRevision as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.get("/{project_id}/quality")
+    def project_quality(project_id: str, revision: str | None = Query(default=None, min_length=1)):
+        try:
+            return service.get_quality(project_id, revision)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except StaleProjectRevision as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.get("/{project_id}/execution-plan")
+    def project_execution_plan(project_id: str, revision: str | None = Query(default=None, min_length=1)):
+        try:
+            return service.get_execution_plan(project_id, revision)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except StaleProjectRevision as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -145,6 +170,35 @@ class MemoryDeleteResponse(BaseModel):
     deleted: bool
     memory_id: str = Field(alias="memoryId")
 
+
+class MemoryCreatePayload(BaseModel):
+    content: str = Field(min_length=1)
+    source_message_id: str = Field(alias="sourceMessageId", min_length=1)
+    actor: str = Field(min_length=1)
+    kind: str = "agent_routing_hint"
+    scope: dict[str, object] = Field(default_factory=dict)
+
+    model_config = {"populate_by_name": True}
+
+
+class MemoryFeedbackPayload(BaseModel):
+    client_feedback_id: str = Field(alias="clientFeedbackId", min_length=1, max_length=200)
+    conversation_id: str = Field(alias="conversationId", min_length=1, max_length=160)
+    message_id: str = Field(alias="messageId", min_length=1, max_length=200)
+    request_id: str | None = Field(default=None, alias="requestId", max_length=200)
+    rating: Literal["positive", "negative"]
+    correction: str | None = Field(default=None, max_length=2_000)
+    remember: bool = False
+    actor: str = Field(default="user", min_length=1, max_length=120)
+
+    model_config = {"populate_by_name": True}
+
+
+class MemoryFeedbackResponse(BaseModel):
+    feedback_id: str = Field(alias="feedbackId")
+    feedback: GrowthFeedback
+    memory: MemoryRecord | None = None
+
     model_config = {"populate_by_name": True}
 
 
@@ -152,6 +206,11 @@ class UserPreferencePayload(BaseModel):
     key: str = Field(min_length=1, max_length=120)
     value: str = Field(min_length=1, max_length=2_000)
     scope: dict[str, object] = Field(default_factory=dict)
+
+
+class MemoryEditPayload(BaseModel):
+    content: str = Field(min_length=1)
+    actor: str = Field(min_length=1)
 
 
 class DesignReferencePayload(BaseModel):
@@ -180,6 +239,8 @@ class AssistantRequestPayload(BaseModel):
     text: str = Field(min_length=1)
     workspace: str | None = None
     conversation_id: str = Field(default="desktop-default", alias="conversationId", min_length=1, max_length=160)
+    approved: bool = False
+    approval_request_id: str | None = Field(default=None, alias="approvalRequestId", min_length=1, max_length=160)
 
     model_config = {"populate_by_name": True}
 
@@ -206,6 +267,10 @@ class LocalPluginConnectPayload(BaseModel):
 class PluginInvokePayload(BaseModel):
     action: str = Field(min_length=1)
     input: dict[str, object] = Field(default_factory=dict)
+    approved: bool = False
+    approval_request_id: str | None = Field(default=None, alias="approvalRequestId", min_length=1, max_length=160)
+
+    model_config = {"populate_by_name": True}
 
 
 def _plugin_registration_payload(registration: object) -> dict[str, object]:
@@ -214,6 +279,7 @@ def _plugin_registration_payload(registration: object) -> dict[str, object]:
         "manifestVersion": registration.manifest_version,
         "manifest": registration.manifest,
         "status": registration.status,
+        "capabilityStatus": canonical_plugin_status(registration.status),
         "createdAt": registration.created_at,
         "updatedAt": registration.updated_at,
     }
@@ -296,6 +362,22 @@ def build_plugin_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(status_code=204)
 
+    @router.get("/{plugin_id}/launch")
+    def launch_plugin(
+        plugin_id: str,
+        request: Request,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ) -> dict[str, object]:
+        if platform is None:
+            raise HTTPException(status_code=503, detail="Plugin platform is unavailable")
+        _plugin_user_id(request, user_id)
+        try:
+            return platform.launch_info(plugin_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @router.post("/{plugin_id}/oauth/start")
     def start_plugin_oauth(
         plugin_id: str,
@@ -326,6 +408,10 @@ def build_plugin_router(
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
             "pluginId": plugin_id,
             "authorizationUrl": authorization.authorization_url,
@@ -345,8 +431,8 @@ def build_plugin_router(
         del request, error_description
         if platform is None or oauth_broker is None:
             raise HTTPException(status_code=503, detail="OAuth plugin connection is unavailable")
-        def mark_connection_failed(error_code: str) -> None:
-            owner = oauth_broker.owner(state, plugin_id=plugin_id)
+        def mark_connection_failed(error_code: str, user_id: str | None = None) -> None:
+            owner = user_id or oauth_broker.owner(state, plugin_id=plugin_id)
             if owner is not None:
                 platform.fail_oauth(owner, plugin_id, error_code)
         try:
@@ -360,6 +446,12 @@ def build_plugin_router(
                 completion.credential,
                 completion.account_label,
             )
+            if connected.status != "connected":
+                mark_connection_failed("oauth_connection_failed", completion.user_id)
+                oauth_broker.mark_failed(state, plugin_id, "oauth_connection_failed")
+                return _oauth_callback_page(
+                    "연결 실패", "플러그인 제공자와 연결하지 못했습니다. 다시 시도해 주세요.", status_code=409
+                )
             return _oauth_callback_page(
                 "연결 완료",
                 "플러그인 계정 연결이 완료됐습니다. 이 창을 닫아도 됩니다.",
@@ -376,6 +468,7 @@ def build_plugin_router(
                 "연결 확인 실패", "OAuth 요청이 만료됐거나 유효하지 않습니다.", status_code=400
             )
         except OAuthError as exc:
+            logger.warning("OAuth completion failed for %s: %s", plugin_id, exc)
             mark_connection_failed("oauth_provider_error")
             oauth_broker.mark_failed(state, plugin_id)
             return _oauth_callback_page(
@@ -499,7 +592,24 @@ def build_plugin_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.post("/{plugin_id}/invoke")
-    def invoke_plugin(plugin_id: str, payload: PluginInvokePayload):
+    def invoke_plugin(
+        plugin_id: str,
+        payload: PluginInvokePayload,
+        request: Request,
+        user_id: str | None = Header(default=None, alias="X-EEEE-User-Id"),
+    ):
+        if platform is not None and plugin_id in {item.id for item in platform.catalog()}:
+            principal = _plugin_user_id(request, user_id)
+            result = platform.invoke(
+                principal,
+                f"plugin:{plugin_id}:{payload.action}",
+                {
+                    **payload.input,
+                    "approved": payload.approved,
+                    **({"approvalRequestId": payload.approval_request_id} if payload.approval_request_id else {}),
+                },
+            )
+            return result.model_dump(mode="json", by_alias=True)
         try:
             return host.invoke(plugin_id, payload.action, payload.input)
         except KeyError as exc:
@@ -645,6 +755,8 @@ def build_assistant_router(
                     payload.text,
                     payload.workspace,
                     conversation_id=payload.conversation_id,
+                    approved=payload.approved,
+                    approval_request_id=payload.approval_request_id,
                 ).model_dump()
             )
         except ValueError as exc:
@@ -748,7 +860,13 @@ def build_mobile_router(
     ) -> AssistantRouteResponse:
         device = _authorize_mobile(bridge, bridge_token)
         try:
-            result = assistant.route(payload.text, payload.workspace)
+            result = assistant.route(
+                payload.text,
+                payload.workspace,
+                conversation_id=payload.conversation_id,
+                approved=payload.approved,
+                approval_request_id=payload.approval_request_id,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         bridge.publish(
@@ -816,6 +934,46 @@ def build_desktop_router(
 
     router = APIRouter(prefix="/api/desktop")
 
+    def _plugin_execution_payload(limit: int = 20) -> list[dict[str, object]]:
+        if assistant_service is None:
+            return []
+        executions = assistant_service.kernel.executions.list_plugin_routes(limit=limit)
+        items: list[dict[str, object]] = []
+        for execution in executions:
+            output = dict(execution.output or {})
+            capability_parts = execution.capability_id.split(":", 2)
+            plugin_id = output.get("pluginId")
+            if not isinstance(plugin_id, str) and len(capability_parts) >= 2:
+                plugin_id = capability_parts[1]
+            action = capability_parts[2] if len(capability_parts) >= 3 else execution.capability_id
+            plugin_output = output.get("pluginOutput")
+            summary = output.get("message")
+            if not isinstance(summary, str) or not summary.strip():
+                if isinstance(plugin_output, dict) and plugin_output.get("sent") is True:
+                    summary = "전송 완료"
+                else:
+                    summary = "플러그인 실행 결과를 확인해줘."
+            items.append({
+                "executionId": execution.execution_id,
+                "pluginExecutionId": output.get("pluginExecutionId"),
+                "pluginId": plugin_id,
+                "action": action,
+                "status": execution.status.value,
+                "approvalState": execution.approval_state.value,
+                "summary": summary,
+                "startedAt": execution.started_at.isoformat(),
+                "completedAt": execution.completed_at.isoformat() if execution.completed_at else None,
+            })
+        return items
+
+    @router.get("/plugin-executions")
+    def desktop_plugin_executions(
+        request: Request,
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> dict[str, object]:
+        _require_local_desktop(request)
+        return {"items": _plugin_execution_payload(limit)}
+
     @router.get("/state")
     def desktop_state(
         request: Request,
@@ -833,6 +991,7 @@ def build_desktop_router(
             "projectState": None,
             "events": events[-20:],
             "latestEventCursor": int(events[-1]["cursor"]) if events else 0,
+            "pluginExecutions": _plugin_execution_payload(),
         }
         active_memories = coordinator.memory.list_records(status=MemoryStatus.ACTIVE, limit=500)
         candidate_memories = coordinator.memory.list_records(status=MemoryStatus.CANDIDATE, limit=500)
@@ -884,6 +1043,7 @@ def build_desktop_router(
                 "candidateCount": len(candidate_memories),
             },
             "plugins": plugins,
+            "pluginExecutions": snapshot["pluginExecutions"],
             "verification": {"claimLatch": trust_gate.health_payload()},
         }
         if project_id is not None:
@@ -993,8 +1153,38 @@ def build_api_router(
     evidence: ProjectEvidenceService | None = None,
     *,
     iseol_bridge_token: str | None = None,
+    conversation_store: ConversationStore | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
+
+    @router.get("/assistant/conversations")
+    def list_assistant_conversations(
+        request: Request,
+        query: str = Query(default="", max_length=500),
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> list[dict[str, object]]:
+        """Expose the existing local transcript to the optional UI plugin."""
+
+        _require_local_desktop(request)
+        try:
+            return flow.coordinator.memory.list_conversations(query=query, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/assistant/conversations/{conversation_id}")
+    def get_assistant_conversation(
+        conversation_id: str,
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=500),
+        before_id: int | None = Query(default=None, alias="beforeId", ge=1),
+    ) -> dict[str, object]:
+        _require_local_desktop(request)
+        try:
+            return flow.coordinator.memory.get_conversation(
+                conversation_id, limit=limit, before_id=before_id
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/requests", response_model=RequestResponse)
     def create_api_request(payload: RequestPayload) -> RequestResponse:
@@ -1096,6 +1286,60 @@ def build_api_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post(
+        "/memory/feedback",
+        response_model=MemoryFeedbackResponse,
+        status_code=201,
+        responses={200: {"model": MemoryFeedbackResponse}},
+    )
+    def record_memory_feedback(payload: MemoryFeedbackPayload) -> JSONResponse:
+        already_exists = False
+        try:
+            flow.coordinator.memory.get_feedback(payload.client_feedback_id)
+            already_exists = True
+        except KeyError:
+            pass
+        try:
+            growth = GrowthService(flow.coordinator.memory, conversation_store)
+            feedback = growth.record_feedback(
+                client_feedback_id=payload.client_feedback_id,
+                conversation_id=payload.conversation_id,
+                request_id=payload.request_id,
+                message_id=payload.message_id,
+                rating=payload.rating,
+                correction=payload.correction,
+                remember=payload.remember,
+                actor=payload.actor,
+            )
+            memory = growth.memory_for_feedback(feedback)
+        except GrowthFeedbackError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        response = MemoryFeedbackResponse(
+            feedback_id=feedback.id,
+            feedback=feedback,
+            memory=memory,
+        )
+        return JSONResponse(
+            status_code=200 if already_exists else 201,
+            content=response.model_dump(mode="json", by_alias=True),
+        )
+
+    @router.post("/memory", response_model=MemoryRecord, status_code=201)
+    def create_explicit_memory(payload: MemoryCreatePayload) -> MemoryRecord:
+        return flow.coordinator.memory.save_explicit_memory(
+            payload.content,
+            source_message_id=payload.source_message_id,
+            actor=payload.actor,
+            kind=payload.kind,
+            scope=payload.scope,
+        )
+
+    @router.patch("/memory/{memory_id}", response_model=MemoryRecord)
+    def edit_explicit_memory(memory_id: str, payload: MemoryEditPayload) -> MemoryRecord:
+        return flow.coordinator.memory.edit(
+            memory_id, payload.content, actor=payload.actor
+        )
 
     @router.post("/memory/{memory_id}/promote", response_model=MemoryRecord)
     def promote_memory(

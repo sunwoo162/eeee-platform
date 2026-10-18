@@ -8,5 +8,5 @@ def test_default_storage_is_user_scoped_not_relative_to_process_directory(monkey
 
     settings = Settings()
 
-    assert settings.data_dir == tmp_path / "Gleave" / "data"
-    assert settings.workspace_root == tmp_path / "Gleave" / "workspaces"
+    assert settings.data_dir == tmp_path / "EEEE"
+    assert settings.workspace_root == tmp_path / "EEEE" / "workspaces"

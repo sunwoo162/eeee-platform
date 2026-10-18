@@ -69,6 +69,24 @@ def test_chatgpt_bridge_health_rejects_legacy_transport_only_response(monkeypatc
     assert _chatgpt_bridge_is_stale(47831) is True
 
 
+def test_chatgpt_bridge_health_does_not_reuse_hidden_auth_required_session(monkeypatch):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            return b'{"status":"ok","service":"chatgpt-web-bridge","connected":true,"browserStatus":"auth-required"}'
+
+    monkeypatch.setattr("app.desktop.runtime.urllib.request.urlopen", lambda *_args, **_kwargs: Response())
+
+    assert _chatgpt_bridge_is_healthy(47831) is False
+
+
 def test_chatgpt_bridge_stale_health_is_detected(monkeypatch):
     class Response:
         status = 200

@@ -61,6 +61,19 @@ function Get-RepositoryFiles {
         }
     }
 }
+
+function Test-IgnoredUntrackedFile {
+    param([System.IO.FileInfo]$File)
+
+    $relative = $File.FullName.Substring($root.Length).TrimStart('\')
+    & git -C $root ls-files --error-unmatch -- $relative 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        return $false
+    }
+    & git -C $root check-ignore --quiet -- $relative 2>$null
+    return $LASTEXITCODE -eq 0
+}
+
 $nestedGit = Get-RepositoryDirectories $root |
     Where-Object {
         $relative = $_.FullName.Substring($root.Length).TrimStart('\')
@@ -80,7 +93,7 @@ $secretLike = Get-RepositoryFiles $root |
         (-not $generated) -and (
             (($_.Name -match '^(\.env(\..*)?|.*\.(pem|key|p12|pfx))$') -and $_.Name -ne '.env.example') -or
             ($_.Name -match '(secret|credential|password|token)' -and $_.Extension -notin @(".md", ".ts", ".py"))
-        )
+        ) -and -not (Test-IgnoredUntrackedFile $_)
     }
 if ($secretLike) {
     throw "Secret-like files were imported: $($secretLike.FullName -join ', ')"

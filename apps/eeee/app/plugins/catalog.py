@@ -34,7 +34,7 @@ class PluginCatalogEntry(BaseModel):
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
     description: str = Field(min_length=1)
-    auth_mode: Literal["token", "oauth", "token-or-oauth"] = Field(alias="authMode")
+    auth_mode: Literal["none", "token", "oauth", "token-or-oauth"] = Field(alias="authMode")
     permissions: list[str] = Field(min_length=1)
     credential_fields: list[CredentialField] = Field(default_factory=list, alias="credentialFields")
     permission_details: list[PermissionDetail] = Field(default_factory=list, alias="permissionDetails")
@@ -53,9 +53,26 @@ class PluginCatalogEntry(BaseModel):
 
 
 class PluginCatalog:
-    """Read-only bundled catalog for currently supported optional connectors."""
+    """Read-only bundled catalog for optional connectors and first-party UI plugins."""
 
     _entries = (
+        PluginCatalogEntry(
+            id="eeee-chat-history", name="EEEE 채팅 기록", version="1.0.0",
+            description="EEEE에게 보낸 명령과 답변을 휴대폰 채팅처럼 확인하고 이어서 대화하는 플러그인",
+            authMode="none", permissions=["conversation.read", "conversation.write"],
+            permissionDetails=[
+                PermissionDetail(
+                    id="conversation.read", label="대화 기록 읽기",
+                    description="EEEE 대화 기록을 읽습니다.", defaultApproved=True,
+                ),
+                PermissionDetail(
+                    id="conversation.write", label="대화 보내기",
+                    description="같은 대화에 새 명령을 보냅니다.", defaultApproved=True,
+                ),
+            ],
+            installSource="bundled-optional", defaultInstalled=False,
+            connector="eeee-core",
+        ),
         PluginCatalogEntry(
             id="notion", name="Notion", version="1.0.0",
             description="Notion pages connector", authMode="token-or-oauth",

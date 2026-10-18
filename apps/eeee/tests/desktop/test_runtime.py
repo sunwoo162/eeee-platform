@@ -88,7 +88,7 @@ def test_chatgpt_login_browser_is_visible(monkeypatch, tmp_path):
     assert "--start-minimized" not in launched[0]
 
 
-def test_embedded_runtime_starts_ollama_when_local_api_is_unavailable(monkeypatch, tmp_path):
+def test_embedded_runtime_starts_ollama_only_for_explicit_legacy_provider(monkeypatch, tmp_path):
     launched = []
     wait_calls = []
 
@@ -111,6 +111,7 @@ def test_embedded_runtime_starts_ollama_when_local_api_is_unavailable(monkeypatc
         settings=Settings(
             data_dir=tmp_path / "data",
             workspace_root=tmp_path / "workspaces",
+            conversation_provider="ollama",
         )
     )
 
@@ -119,6 +120,28 @@ def test_embedded_runtime_starts_ollama_when_local_api_is_unavailable(monkeypatc
     assert wait_calls[0][0:2] == ("127.0.0.1", 11434)
     assert launched[0][0] == ["ollama.exe", "serve"]
     assert launched[0][1]["creationflags"] == subprocess.CREATE_NO_WINDOW
+
+
+def test_embedded_runtime_does_not_start_ollama_for_web_gpt_default(monkeypatch, tmp_path):
+    launched = []
+
+    monkeypatch.setattr(desktop_runtime, "_resolve_ollama_executable", lambda: "ollama.exe")
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "Popen",
+        lambda args, **kwargs: (launched.append((args, kwargs)) or None),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+            conversation_provider="chatgpt_web",
+        )
+    )
+
+    runtime._ensure_local_model_service()
+
+    assert launched == []
 
 
 def test_embedded_runtime_serves_health_and_stops(tmp_path):

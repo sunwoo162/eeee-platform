@@ -85,6 +85,24 @@ def test_chatgpt_web_runtime_does_not_claim_success_when_bridge_is_down(monkeypa
     assert result.status == "unavailable"
 
 
+def test_chatgpt_web_runtime_health_reports_ready_bridge(monkeypatch):
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {
+                "service": "chatgpt-web-bridge",
+                "connected": True,
+                "browserStatus": "ready",
+            }
+
+    monkeypatch.setattr(httpx, "get", lambda *_args, **_kwargs: Response())
+
+    status = ChatGptWebRuntime("http://127.0.0.1:47831").status()
+
+    assert status.status == "ready"
+
+
 def test_chatgpt_web_runtime_preserves_bridge_error_body(monkeypatch):
     class FakeResponse:
         def raise_for_status(self):

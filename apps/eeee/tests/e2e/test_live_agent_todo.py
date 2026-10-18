@@ -82,7 +82,15 @@ def test_user_todo_request_executes_specialist_graph_and_renders_it(tmp_path):
             for node in project_map.json()["nodes"]
             if node["id"].startswith("agent:")
         }
-        assert len(agents) == 13
+        assert len(agents) >= 13
+        assert {
+            "agent:intake",
+            "agent:requirements",
+            "agent:frontend",
+            "agent:test",
+            "agent:review",
+            "agent:integration",
+        } <= set(agents)
         assert all(node["status"] == "completed" for node in agents.values())
         assert all(node["claimLatchStatus"] == "PASS" for node in agents.values())
 

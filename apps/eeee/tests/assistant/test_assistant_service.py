@@ -32,7 +32,7 @@ def test_assistant_service_creates_one_project_runtime_for_project_intent(tmp_pa
     assert result.project_profile is not None
     assert Path(result.project_profile.workspace).is_dir()
     assert result.project_profile.project_id == result.project_id
-    assert result.status == "awaiting_configuration"
+    assert result.status == "blocked"
     assert result.response_verification.profile_version == "claimlatch-v0.2.0"
     assert result.response_verification.decision in {"PASS", "WARN", "BLOCKED"}
     assert service.kernel is not None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Literal
 
@@ -16,7 +17,7 @@ class QualityCheck(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str
-    status: Literal["PASS", "WARN", "BLOCK"]
+    status: Literal["PASS", "WARN", "BLOCK", "NOT_RUN"]
     message: str = Field(min_length=1)
 
 
@@ -173,3 +174,65 @@ class QualityGate:
             "WARN" if any(check.status == "WARN" for check in checks) else "PASS"
         )
         return QualityReport(decision=decision, checks=checks)
+
+
+def inspect_text_integrity(workspace: Path) -> list[QualityCheck]:
+    """Inspect text encoding and tracked diff whitespace without trusting prose."""
+
+    root = Path(workspace).resolve()
+    checks: list[QualityCheck] = []
+    replacement = False
+    bom = False
+    invalid: list[str] = []
+    for path in root.rglob("*"):
+        if not path.is_file() or any(part in {".git", "__pycache__", "node_modules"} for part in path.parts):
+            continue
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".ico", ".exe", ".dll", ".woff", ".woff2", ".pyc", ".db", ".sqlite", ".sqlite3"}:
+            continue
+        raw = path.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            bom = True
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            invalid.append(str(path.relative_to(root)))
+            continue
+        if "\ufffd" in text:
+            replacement = True
+    checks.append(QualityCheck(
+        name="encoding:utf8",
+        status="BLOCK" if invalid else "PASS",
+        message=("Invalid UTF-8 files: " + ", ".join(invalid)) if invalid else "All inspected text files are UTF-8",
+    ))
+    checks.append(QualityCheck(
+        name="encoding:bom",
+        status="BLOCK" if bom else "PASS",
+        message="UTF-8 BOM detected" if bom else "No UTF-8 BOM detected",
+    ))
+    checks.append(QualityCheck(
+        name="encoding:replacement-character",
+        status="BLOCK" if replacement else "PASS",
+        message="Replacement character detected" if replacement else "No replacement character detected",
+    ))
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--check", "--", "."],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if diff.returncode == 0:
+            status = "PASS"
+        elif "not a git repository" in diff.stderr.casefold():
+            status = "NOT_RUN"
+        else:
+            status = "BLOCK"
+        checks.append(QualityCheck(
+            name="git:diff-check",
+            status=status,
+            message=diff.stdout.strip() or diff.stderr.strip() or "git diff --check passed",
+        ))
+    except OSError as exc:
+        checks.append(QualityCheck(name="git:diff-check", status="NOT_RUN", message=str(exc)))
+    return checks

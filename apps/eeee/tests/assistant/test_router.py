@@ -116,3 +116,30 @@ def test_registered_explicit_capability_overrides_keyword_scoring() -> None:
     assert result.capability_id == "knowledge-documents"
     assert result.status == "selected"
 
+
+def test_connected_mail_send_action_beats_broad_mail_read_trigger() -> None:
+    from app.assistant.models import CapabilityDescriptor
+    from app.assistant.registry import CapabilityRegistry
+
+    registry = CapabilityRegistry()
+    registry.set_dynamic_provider(lambda: [
+        CapabilityDescriptor(
+            id="plugin:gmail:mail.list", version="1.0.0", display_name="Gmail Mail",
+            intents=["email"], trigger_phrases=["메일", "gmail"],
+            required_connectors=["plugin:gmail"], side_effect_level="none",
+            approval_level="none", claim_latch_policy="claimlatch-v0.2.0",
+        ),
+        CapabilityDescriptor(
+            id="plugin:gmail:mail.send", version="1.0.0", display_name="Gmail Send",
+            intents=["email"], trigger_phrases=["메일 보내", "gmail"],
+            required_connectors=["plugin:gmail"], side_effect_level="external",
+            approval_level="user", claim_latch_policy="claimlatch-v0.2.0",
+        ),
+    ])
+
+    result = CapabilityRouter(registry).select(
+        AssistantRequest(raw_text="s25011@gsm.hs.kr 에 test라는 메일 보내")
+    )
+
+    assert result.capability_id == "plugin:gmail:mail.send"
+

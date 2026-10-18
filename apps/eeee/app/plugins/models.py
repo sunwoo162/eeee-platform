@@ -39,6 +39,18 @@ class PluginCapability(BaseModel):
     side_effect_level: SideEffectLevel = Field(alias="sideEffectLevel")
     approval_level: Literal["none", "user", "always"] = Field(default="user", alias="approvalLevel")
     version: str = Field(default="1.0.0", min_length=1)
+class PluginAuth(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    mode: Literal["none", "oauth", "api_key", "local"] = "none"
+    provider: str | None = None
+
+
+class PluginHealthSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    action: str = "__health__"
+    timeout_ms: int = Field(default=10_000, alias="timeoutMs", ge=100, le=120_000)
 
 
 class PluginManifest(BaseModel):
@@ -52,6 +64,11 @@ class PluginManifest(BaseModel):
     permissions: list[PluginPermission] = Field(default_factory=list)
     actions: list[PluginAction] = Field(default_factory=list)
     capabilities: list[PluginCapability] = Field(default_factory=list)
+    auth: PluginAuth = Field(default_factory=PluginAuth)
+    health: PluginHealthSpec = Field(default_factory=PluginHealthSpec)
+    memory_scope: Literal["none", "conversation", "project", "account"] = Field(
+        default="none", alias="memoryScope"
+    )
 
     @model_validator(mode="after")
     def validate_references(self) -> "PluginManifest":
@@ -86,8 +103,20 @@ class PluginManifest(BaseModel):
 
 
 PluginStatus = Literal[
-    "available", "not_installed", "awaiting_authentication", "connecting",
-    "connected", "paused", "failed", "disabled",
+    "available",
+    "not_installed",
+    "installed",
+    "awaiting_authentication",
+    "auth_required",
+    "connected",
+    "ready",
+    "running",
+    "degraded",
+    "failed",
+    "disabled",
+    "removed",
+    "connecting",
+    "paused",
 ]
 PluginHealthStatus = Literal["healthy", "unhealthy", "unavailable"]
 

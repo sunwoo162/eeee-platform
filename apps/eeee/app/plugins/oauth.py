@@ -34,6 +34,27 @@ class OAuthProviderConfig(BaseModel):
     client_id: str = Field(alias="clientId", min_length=1)
     client_secret: str | None = Field(default=None, alias="clientSecret", repr=False)
     scopes: list[str] = Field(min_length=1)
+    scope_by_permission: dict[str, list[str]] = Field(
+        default_factory=dict, alias="scopeByPermission"
+    )
+    authorization_params: dict[str, str] = Field(
+        default_factory=dict, alias="authorizationParams"
+    )
+
+    def scopes_for_permissions(self, approved_permissions: set[str] | frozenset[str]) -> list[str]:
+        """Return only the provider scopes needed by the approved EEEE permissions."""
+
+        if not approved_permissions or not self.scope_by_permission:
+            # Preserve the original provider-wide configuration contract for
+            # existing deployments and direct broker callers that do not yet
+            # provide an approved permission set.
+            return list(dict.fromkeys(self.scopes))
+        selected: list[str] = []
+        for permission in sorted(approved_permissions):
+            selected.extend(self.scope_by_permission.get(permission, []))
+        if not selected:
+            raise OAuthError("OAuth provider scopes are not configured for approved permissions")
+        return list(dict.fromkeys(selected))
 
 
 class OAuthAuthorizationRequest(BaseModel):
@@ -100,6 +121,18 @@ class HttpOAuthTransport:
             response = httpx.post(config.token_endpoint, data=data, timeout=15.0)
             response.raise_for_status()
             payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            provider_error = None
+            try:
+                error_payload = exc.response.json()
+            except ValueError:
+                error_payload = {}
+            if isinstance(error_payload, dict):
+                raw_error = error_payload.get("error")
+                if isinstance(raw_error, str) and raw_error:
+                    provider_error = raw_error
+            suffix = f" ({provider_error})" if provider_error else f" (HTTP {exc.response.status_code})"
+            raise OAuthError(f"OAuth token exchange failed{suffix}") from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise OAuthError("OAuth token exchange failed") from exc
         access_token = payload.get("access_token")
@@ -171,6 +204,7 @@ class OAuthBroker:
         approved_permissions: set[str] | frozenset[str] = frozenset(),
         account_label: str | None = None,
     ) -> OAuthAuthorizationRequest:
+        provider_scopes = config.scopes_for_permissions(approved_permissions)
         state = secrets.token_urlsafe(32)
         verifier = secrets.token_urlsafe(48)
         challenge = _pkce_challenge(verifier)
@@ -186,10 +220,11 @@ class OAuthBroker:
             account_label=account_label,
         )
         query = urlencode({
+            **config.authorization_params,
             "response_type": "code",
             "client_id": config.client_id,
             "redirect_uri": redirect_uri,
-            "scope": " ".join(config.scopes),
+            "scope": " ".join(provider_scopes),
             "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",

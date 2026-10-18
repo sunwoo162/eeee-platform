@@ -40,7 +40,8 @@ try {
         tests/project_runtime `
         tests/e2e/test_core_project_flow.py `
         tests/e2e/test_todo_generation.py `
-        tests/e2e/test_async_project_acceptance.py
+        tests/e2e/test_async_project_acceptance.py `
+        tests/e2e/test_natural_language_project_execution.py
     if ($LASTEXITCODE -ne 0) {
         throw "EEEE core pytest verification failed."
     }

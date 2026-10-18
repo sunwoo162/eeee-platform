@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
+import re
 import shutil
-from typing import Mapping
+from collections.abc import Mapping
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,7 +21,7 @@ from app.plugins.connections import PluginConnection
 from app.plugins.connectors import ConnectorConnection, ConnectorHealth, PluginConnector
 from app.plugins.credentials import KeyringCredentialStore
 from app.plugins.intents import build_plugin_action_input
-from app.runtime.store import PluginConnectionStore, PluginInstallation, PluginInstallationStore
+from app.runtime.store import ExecutionStore, PluginConnectionStore, PluginInstallation, PluginInstallationStore
 from app.storage.sqlite import SQLiteStore
 
 
@@ -110,6 +113,7 @@ class PluginPlatformService:
         self.catalog_source = catalog or PluginCatalog()
         self.installations = PluginInstallationStore(store)
         self.connections = PluginConnectionStore(store)
+        self.executions = ExecutionStore(store)
         self.credentials = credentials or KeyringCredentialStore()
         self.connectors = dict(connectors or {})
         self.plugin_install_root = Path(plugin_install_root) if plugin_install_root else None
@@ -449,7 +453,14 @@ class PluginPlatformService:
                 ))
         return projected
 
-    def invoke(self, user_id: str, capability_id: str, value: dict[str, object]) -> ExecutionEnvelope:
+    def invoke(
+        self,
+        user_id: str,
+        capability_id: str,
+        value: dict[str, object],
+        *,
+        approval_envelope: ExecutionEnvelope | None = None,
+    ) -> ExecutionEnvelope:
         descriptors = {item.id: item for item in self.capabilities(user_id)}
         descriptor = descriptors.get(capability_id)
         if descriptor is None:
@@ -460,12 +471,11 @@ class PluginPlatformService:
             action = "get_page"
         context = value.get("context")
         context = context if isinstance(context, dict) else {}
-        approved = value.get("approved") is True or context.get("approved") is True
         requires_approval = descriptor.approval_level != "none"
         audit_input = {
             key: item
             for key, item in value.items()
-            if key not in {"action", "context", "approved", "text"}
+            if key not in {"action", "context", "approved", "approvalRequestId", "text"}
         }
         raw_text = value.get("text")
         try:
@@ -477,40 +487,103 @@ class PluginPlatformService:
         except Exception as exc:
             return _blocked_envelope(
                 capability_id,
-                str(exc).strip() or "plugin input could not be understood",
+                _sanitize_message(str(exc).strip() or "plugin input could not be understood"),
+                error_code="invalid_plugin_input",
             )
-        envelope = ExecutionEnvelope(
-            executionId=f"plugin-execution-{uuid4().hex}", requestId=f"plugin-request-{uuid4().hex}",
-            capabilityId=capability_id, toolId=plugin_id, actor="EEEE", input=audit_input,
-            sideEffectLevel=descriptor.side_effect_level,
-            requiredApproval=requires_approval,
-            approvalState=ApprovalState.APPROVED if approved else ApprovalState.AWAITING_APPROVAL
-            if requires_approval else ApprovalState.NOT_REQUIRED,
-        )
-        if requires_approval and not approved:
-            return envelope.transition(
-                ExecutionStatus.AWAITING_APPROVAL,
-                output={
-                    "status": "awaiting_approval",
-                    "message": "메일을 보내기 전에 사용자 승인이 필요해.",
-                    "action": action,
-                },
+        fingerprint = _plugin_approval_fingerprint(user_id, capability_id, action, audit_input)
+        approval_request_id = value.get("approvalRequestId") or context.get("approvalRequestId")
+        approved = False
+        direct_approval = False
+        envelope: ExecutionEnvelope | None = None
+        if requires_approval and approval_envelope is not None:
+            if not (
+                approval_envelope.capability_id == capability_id
+                and approval_envelope.required_approval
+                and approval_envelope.status is ExecutionStatus.RUNNING
+                and approval_envelope.approval_state is ApprovalState.APPROVED
+            ):
+                return _blocked_envelope(
+                    capability_id, "plugin approval could not be verified",
+                    error_code="invalid_plugin_approval",
+                )
+            approved = True
+        elif requires_approval:
+            candidate = None
+            if isinstance(approval_request_id, str) and approval_request_id.strip():
+                try:
+                    candidate = self.executions.get(approval_request_id)
+                except KeyError:
+                    candidate = None
+            same_request = bool(
+                candidate is not None
+                and candidate.tool_id == plugin_id
+                and candidate.capability_id == capability_id
+                and candidate.input.get("principal") == user_id
+                and candidate.input.get("approvalFingerprint") == fingerprint
+            )
+            if same_request and candidate.status in {
+                ExecutionStatus.COMPLETED, ExecutionStatus.BLOCKED, ExecutionStatus.FAILED,
+            }:
+                return candidate
+            valid_candidate = same_request and candidate.status is ExecutionStatus.AWAITING_APPROVAL
+            if valid_candidate and value.get("approved") is True:
+                envelope, claimed = self.executions.claim_approval(candidate.execution_id)
+                if not claimed:
+                    return envelope
+                approved = True
+                direct_approval = True
+            elif valid_candidate:
+                return candidate
+            else:
+                envelope = ExecutionEnvelope(
+                    executionId=f"plugin-execution-{uuid4().hex}", requestId=f"plugin-request-{uuid4().hex}",
+                    capabilityId=capability_id, toolId=plugin_id, actor="EEEE",
+                    input={**audit_input, "principal": user_id, "approvalFingerprint": fingerprint},
+                    sideEffectLevel=descriptor.side_effect_level,
+                    requiredApproval=True, approvalState=ApprovalState.AWAITING_APPROVAL,
+                )
+                self.executions.save(envelope)
+                waiting = envelope.transition(
+                    ExecutionStatus.AWAITING_APPROVAL,
+                    output={
+                        "status": "awaiting_approval",
+                        "message": "메일을 보내기 전에 사용자 승인이 필요해.",
+                        "action": action,
+                    },
+                )
+                self.executions.save(waiting)
+                return waiting
+        if envelope is None:
+            envelope = ExecutionEnvelope(
+                executionId=f"plugin-execution-{uuid4().hex}", requestId=f"plugin-request-{uuid4().hex}",
+                capabilityId=capability_id, toolId=plugin_id, actor="EEEE", input=audit_input,
+                sideEffectLevel=descriptor.side_effect_level,
+                requiredApproval=requires_approval,
+                approvalState=ApprovalState.APPROVED if approved else ApprovalState.NOT_REQUIRED,
             )
         connection = self.connections.get(user_id, plugin_id)
         credential = self.credentials.get(connection.credential_ref) if connection.credential_ref else None
         if credential is None:
-            return _blocked_envelope(capability_id, "plugin credential is unavailable")
+            return _blocked_envelope(capability_id, "plugin credential is unavailable", error_code="credential_unavailable")
         try:
             connector = self._connector(plugin_id)
             transient = connector.connect(user_id, _credential_from_json(credential), set(connection.approved_permissions))
-            output = connector.invoke(transient, action, audit_input)
-            running = envelope.transition(
+            output = _redact_value(connector.invoke(transient, action, audit_input))
+            if not isinstance(output, dict):
+                output = {"result": output}
+            running = envelope if envelope.status is ExecutionStatus.RUNNING else envelope.transition(
                 ExecutionStatus.RUNNING,
                 approval_state=ApprovalState.APPROVED if requires_approval else ApprovalState.NOT_REQUIRED,
             )
-            return running.transition(ExecutionStatus.COMPLETED, output=output)
-        except Exception as exc:
-            return _blocked_envelope(capability_id, str(exc).strip() or "plugin invocation failed")
+            completed = running.transition(ExecutionStatus.COMPLETED, output=output)
+            if direct_approval:
+                self.executions.save(completed)
+            return completed
+        except Exception:
+            return _blocked_envelope(
+                capability_id, "plugin provider failed while running the action",
+                error_code="plugin_provider_failed",
+            )
 
     def _connector(self, plugin_id: str) -> PluginConnector:
         try:
@@ -549,7 +622,12 @@ def _credential_from_json(value: str) -> dict[str, str]:
     return payload
 
 
-def _blocked_envelope(capability_id: str, message: str) -> ExecutionEnvelope:
+def _blocked_envelope(
+    capability_id: str,
+    message: str,
+    *,
+    error_code: str = "plugin_blocked",
+) -> ExecutionEnvelope:
     envelope = ExecutionEnvelope(
         executionId=f"plugin-execution-{uuid4().hex}", requestId=f"plugin-request-{uuid4().hex}",
         capabilityId=capability_id, toolId="plugin", actor="EEEE", input={},
@@ -557,5 +635,46 @@ def _blocked_envelope(capability_id: str, message: str) -> ExecutionEnvelope:
     return envelope.transition(
         ExecutionStatus.BLOCKED,
         output={"status": "blocked", "message": message},
-        error=ExecutionError(code="plugin_blocked", message=message),
+        error=ExecutionError(code=error_code, message=message),
     )
+
+
+_SENSITIVE_KEYS = {
+    "access_token", "refresh_token", "client_secret", "api_key", "apikey",
+    "authorization", "cookie", "password", "secret", "credential", "token",
+}
+
+
+def _redact_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): "[REDACTED]" if str(key).casefold().replace("-", "_") in _SENSITIVE_KEYS
+            else _redact_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_message(value)
+    return value
+
+
+def _sanitize_message(message: str) -> str:
+    sanitized = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1[REDACTED]", message)
+    return re.sub(
+        r"(?i)((?:access|refresh)?_?(?:token|secret|password)|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+",
+        r"\1=[REDACTED]",
+        sanitized,
+    )
+
+
+def _plugin_approval_fingerprint(
+    user_id: str, capability_id: str, action: str, audit_input: Mapping[str, object]
+) -> str:
+    payload = {
+        "userId": user_id, "capabilityId": capability_id, "action": action,
+        "input": dict(audit_input),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()

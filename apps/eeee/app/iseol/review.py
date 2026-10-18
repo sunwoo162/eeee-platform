@@ -88,7 +88,8 @@ class ProjectQualityEvaluator:
         elif browser == "BLOCK":
             blockers.append("Browser UI verification failed")
         for extension_id in plan.missing_extensions:
-            limitations.append(f"Missing extension is a limitation, not a success: {extension_id}")
+            blockers.append(f"Required extension is missing: {extension_id}")
+            limitations.append(f"Missing extension remains unconfigured: {extension_id}")
         if plan.missing_extensions:
             limitations.append("External connector work remains unconfigured")
 

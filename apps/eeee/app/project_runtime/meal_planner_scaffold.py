@@ -67,7 +67,31 @@ export function renderApp(root) {
   const form = root.querySelector('#meal-form');
   const draw = () => {
     empty.hidden = meals.length > 0;
-    list.innerHTML = MEAL_SECTIONS.map((section) => `<section data-section="${section}"><h2>${labels[section]}</h2>${meals.filter((meal) => meal.section === section).map((meal) => `<article data-id="${meal.id}"><strong>${meal.name}</strong><span>${meal.note}</span><button data-edit="${meal.id}">수정</button><button data-delete="${meal.id}">삭제</button></article>`).join('')}</section>`).join('');
+    list.replaceChildren();
+    MEAL_SECTIONS.forEach((section) => {
+      const sectionElement = document.createElement('section');
+      sectionElement.dataset.section = section;
+      const heading = document.createElement('h2');
+      heading.textContent = labels[section];
+      sectionElement.append(heading);
+      meals.filter((meal) => meal.section === section).forEach((meal) => {
+        const article = document.createElement('article');
+        article.dataset.id = meal.id;
+        const name = document.createElement('strong');
+        name.textContent = meal.name;
+        const note = document.createElement('span');
+        note.textContent = meal.note;
+        const edit = document.createElement('button');
+        edit.dataset.edit = meal.id;
+        edit.textContent = '수정';
+        const remove = document.createElement('button');
+        remove.dataset.delete = meal.id;
+        remove.textContent = '삭제';
+        article.append(name, note, edit, remove);
+        sectionElement.append(article);
+      });
+      list.append(sectionElement);
+    });
   };
   form.addEventListener('submit', (event) => { event.preventDefault(); meals = addMeal(meals, { section: root.querySelector('#meal-section').value, name: root.querySelector('#meal-name').value, note: root.querySelector('#meal-note').value }); form.reset(); draw(); });
   list.addEventListener('click', (event) => { const id = event.target.dataset.delete || event.target.dataset.edit; if (!id) return; if (event.target.dataset.delete) meals = deleteMeal(meals, id); else meals = updateMeal(meals, id, { note: '수정됨' }); draw(); });

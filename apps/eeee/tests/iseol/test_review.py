@@ -106,4 +106,17 @@ def test_quality_report_records_missing_plugin_as_limitation_not_success(tmp_pat
     )
 
     assert any("connector.figma.read" in limitation for limitation in report.limitations)
+    assert any("connector.figma.read" in blocker for blocker in report.blockers)
     assert report.grade != "portfolio_ready"
+
+
+def test_missing_required_extension_forces_replan_grade(tmp_path) -> None:
+    _workspace(tmp_path)
+    plan = _plan().model_copy(update={"missing_extensions": ["connector.figma.read"]})
+
+    report = ProjectQualityEvaluator().evaluate(
+        tmp_path, _intent(), plan, _qa(),
+        {"decision": "PASS", "receiptId": "receipt-1", "claimLatchReportId": "report-1"},
+    )
+
+    assert report.grade == "revision_required"

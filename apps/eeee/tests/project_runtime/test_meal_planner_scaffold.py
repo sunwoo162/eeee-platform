@@ -21,3 +21,14 @@ def test_meal_planner_scaffold_contains_real_vertical_slice_contract(tmp_path) -
         assert token in content
     assert "TODO" not in content
     assert "placeholder" not in content.casefold()
+
+
+def test_meal_planner_does_not_interpolate_user_data_into_inner_html(tmp_path) -> None:
+    root = tmp_path / "meal-planner"
+    MealPlannerTemplate.create(root, "오늘 식단")
+
+    script = (root / "apps/web/src/pages/home/ui.js").read_text(encoding="utf-8")
+
+    assert "meal.name" not in script or "textContent" in script
+    assert "meal.note" not in script or "textContent" in script
+    assert "list.innerHTML = MEAL_SECTIONS.map" not in script

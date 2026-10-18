@@ -111,17 +111,17 @@ legacy model is `qwen2.5:7b`; this does not affect the Web GPT primary route.
 
 ## Release stabilization verification — 2026-10-19
 
-The existing uncommitted EEEE/ISEOL implementation was re-verified before
-release cleanup. Fresh results:
+The existing EEEE/ISEOL implementation and the release-review fixes were
+re-verified before release cleanup. Fresh results:
 
 - Focused EEEE assistant/API/desktop/ISEOL/memory/plugin/project-runtime
   coverage: `416 passed, 1 warning`.
-- Full EEEE Python suite: `948 passed, 1 skipped, 1 warning`.
+- Full EEEE Python suite: `956 passed, 1 skipped, 1 warning`.
 - Plugin/capability/OAuth/intent lifecycle suite: `87 passed, 1 warning`.
-- `scripts/verify-all.ps1 -Full`: EEEE `948 passed, 1 skipped, 1 warning`,
+- `scripts/verify-all.ps1 -Full`: EEEE `956 passed, 1 skipped, 1 warning`,
   ISEOL `25/25`, ClaimLatch adapter `5/5`, Mobile `1/1`; unified verification
   passed.
-- `scripts/verify-core-product.ps1`: `374 passed, 1 warning`; static UI
+- `scripts/verify-core-product.ps1`: `375 passed, 1 warning`; static UI
   checks `2/2`; strict UTF-8 and `git diff --check` passed.
 - `scripts/build-desktop.ps1` completed successfully. The packaged
   `GleaveDesktop.exe --self-test` and `--gui-self-test` both returned exit
@@ -135,6 +135,28 @@ local Gmail OAuth values were not copied into the repository or package.
 External connector account authentication remains an environment-gated
 manual check. This record does not claim that every provider's OAuth session
 or external side effect has been newly verified by the deterministic suite.
+
+Release-review fixes included in this verification:
+
+- External plugin approval now requires a server-issued approval execution ID
+  and a matching request fingerprint; forged `approved=true` requests and
+  changed-request replays remain awaiting approval.
+- Plugin connector output and provider failures are redacted or converted to
+  stable error codes before returning or persisting them.
+- OAuth start failures now map permission errors to 403 and connector/config
+  failures to actionable 409/503 responses.
+- ISEOL compiles intent-selected agents, skips irrelevant backend/data work,
+  and always retains test, security, review, documentation, and integration
+  gates.
+- Missing required extensions and failed QA/ClaimLatch/release evidence now
+  propagate `blocked` into the durable project outcome instead of being
+  persisted as completed.
+- The meal planner scaffold renders user meal values with DOM text nodes,
+  preventing user-controlled `innerHTML` interpolation.
+
+The packaged desktop verification was also repeated with the actual CLI
+flags: `--self-test`, `--gui-self-test`, and a second `--self-test`; all three
+returned exit code `0`.
 
 ## Post-live completion verification
 

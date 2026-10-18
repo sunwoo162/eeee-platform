@@ -176,5 +176,18 @@ def test_first_party_invoke_uses_platform_and_preserves_action_approval(tmp_path
         },
     )
     assert completed.status_code == 200
-    assert completed.json()["status"] == "completed"
-    assert completed.json()["output"]["input"]["to"] == "s25011@gsm.hs.kr"
+    assert completed.json()["status"] == "awaiting_approval"
+    approval_id = waiting.json()["executionId"]
+
+    approved = client.post(
+        "/api/plugins/gmail/invoke",
+        json={
+            "action": "mail.send",
+            "input": {"to": "s25011@gsm.hs.kr", "subject": "test", "body": "test"},
+            "approved": True,
+            "approvalRequestId": approval_id,
+        },
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "completed"
+    assert approved.json()["output"]["input"]["to"] == "s25011@gsm.hs.kr"

@@ -46,6 +46,20 @@ class GenericFakeConnector(FakeConnector):
     plugin_id = "gmail"
 
 
+class LeakyFakeConnector(GenericFakeConnector):
+    def invoke(self, connection, action, value):
+        return {
+            "access_token": "super-secret-access-token",
+            "nested": {"refresh_token": "super-secret-refresh-token"},
+            "action": action,
+        }
+
+
+class FailingLeakyConnector(GenericFakeConnector):
+    def invoke(self, connection, action, value):
+        raise RuntimeError("Authorization: Bearer super-secret-provider-token")
+
+
 class RefreshingFakeConnector(GenericFakeConnector):
     def connect(self, user_id, credential, approved_permissions):
         return ConnectorConnection(
@@ -267,14 +281,71 @@ def test_platform_extracts_natural_language_input_and_requires_send_approval(tmp
     assert waiting.input["to"] == "s25011@gsm.hs.kr"
     assert waiting.input["subject"] == "test"
 
-    completed = platform.invoke(
+    forged = platform.invoke(
         "user-a", "plugin:gmail:mail.send",
         {"text": "s25011@gsm.hs.kr 에 test라는 메일 보내", "approved": True},
+    )
+
+    assert forged.status.value == "awaiting_approval"
+    assert forged.execution_id != waiting.execution_id
+
+    completed = platform.invoke(
+        "user-a", "plugin:gmail:mail.send",
+        {
+            "text": "s25011@gsm.hs.kr 에 test라는 메일 보내",
+            "approved": True,
+            "approvalRequestId": waiting.execution_id,
+        },
     )
 
     assert completed.status.value == "completed"
     assert completed.approval_state.value == "approved"
     assert completed.input["body"] == "test"
+    replay = platform.invoke(
+        "user-a", "plugin:gmail:mail.send",
+        {
+            "text": "s25011@gsm.hs.kr 에 test라는 메일 보내",
+            "approved": True,
+            "approvalRequestId": waiting.execution_id,
+        },
+    )
+    assert replay.execution_id == completed.execution_id
+    assert replay.status.value == "completed"
+
+
+def test_platform_redacts_connector_output_and_failure_details(tmp_path) -> None:
+    connector = LeakyFakeConnector()
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store, credentials=MemoryCredentialStore(), connectors={"gmail": connector}
+    )
+    platform.install("gmail")
+    platform.connect("user-a", "gmail", {"mail.read"}, {"access_token": "credential"}, "Work")
+
+    result = platform.invoke("user-a", "plugin:gmail:mail.list", {"query": "unread"})
+
+    assert result.status.value == "completed"
+    assert result.output["access_token"] == "[REDACTED]"
+    assert result.output["nested"]["refresh_token"] == "[REDACTED]"
+    assert "super-secret" not in result.model_dump_json()
+
+
+def test_platform_replaces_connector_exception_details_with_stable_error(tmp_path) -> None:
+    connector = FailingLeakyConnector()
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store, credentials=MemoryCredentialStore(), connectors={"gmail": connector}
+    )
+    platform.install("gmail")
+    platform.connect("user-a", "gmail", {"mail.read"}, {"access_token": "credential"}, "Work")
+
+    result = platform.invoke("user-a", "plugin:gmail:mail.list", {"query": "unread"})
+
+    assert result.status.value == "blocked"
+    assert result.error.code == "plugin_provider_failed"
+    assert "super-secret" not in result.model_dump_json()
 
 
 def test_platform_returns_blocked_envelope_for_incomplete_natural_language_send(tmp_path) -> None:

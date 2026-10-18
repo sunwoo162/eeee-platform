@@ -134,6 +134,27 @@ def test_oauth_requires_installation_and_configuration(tmp_path) -> None:
     assert response.status_code == 503
 
 
+def test_oauth_start_maps_permission_and_connector_failures_to_actionable_statuses(tmp_path) -> None:
+    application = _application(tmp_path)
+    client = TestClient(application)
+    assert client.post("/api/plugins/notion/install").status_code == 200
+
+    forbidden = client.post(
+        "/api/plugins/notion/oauth/start",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"approvedPermissions": ["not-a-permission"]},
+    )
+    assert forbidden.status_code == 403
+
+    application.state.plugin_platform.connectors.pop("notion")
+    unavailable = client.post(
+        "/api/plugins/notion/oauth/start",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"approvedPermissions": ["pages.read"]},
+    )
+    assert unavailable.status_code == 409
+
+
 def test_oauth_cancel_returns_friendly_page_and_terminal_status(tmp_path) -> None:
     client = TestClient(_application(tmp_path))
     assert client.post("/api/plugins/notion/install").status_code == 200

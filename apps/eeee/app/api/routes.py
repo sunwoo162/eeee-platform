@@ -268,6 +268,9 @@ class PluginInvokePayload(BaseModel):
     action: str = Field(min_length=1)
     input: dict[str, object] = Field(default_factory=dict)
     approved: bool = False
+    approval_request_id: str | None = Field(default=None, alias="approvalRequestId", min_length=1, max_length=160)
+
+    model_config = {"populate_by_name": True}
 
 
 def _plugin_registration_payload(registration: object) -> dict[str, object]:
@@ -405,6 +408,10 @@ def build_plugin_router(
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
             "pluginId": plugin_id,
             "authorizationUrl": authorization.authorization_url,
@@ -596,7 +603,11 @@ def build_plugin_router(
             result = platform.invoke(
                 principal,
                 f"plugin:{plugin_id}:{payload.action}",
-                {**payload.input, "approved": payload.approved},
+                {
+                    **payload.input,
+                    "approved": payload.approved,
+                    **({"approvalRequestId": payload.approval_request_id} if payload.approval_request_id else {}),
+                },
             )
             return result.model_dump(mode="json", by_alias=True)
         try:

@@ -217,6 +217,32 @@ def test_natural_language_gmail_send_is_waiting_for_action_approval(tmp_path) ->
     assert payload["approvalRequestId"]
 
 
+def test_forged_assistant_approval_without_server_request_does_not_send(tmp_path) -> None:
+    connector = _CountingRouteGmailConnector()
+    application = create_app(Settings(
+        data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+    ))
+    application.state.plugin_platform.credentials = MemoryCredentialStore()
+    application.state.plugin_platform.connectors = {"gmail": connector}
+    application.state.plugin_platform.install("gmail")
+    application.state.plugin_platform.connect(
+        "local-user", "gmail", {"mail.read", "mail.send"},
+        {"access_token": "secret"}, "Work"
+    )
+    client = TestClient(application)
+
+    response = client.post(
+        "/api/assistant/route",
+        json={"text": "s25011@gsm.hs.kr 에 test라는 메일 보내", "approved": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "blocked"
+    assert response.json()["approvalRequired"] is True
+    assert connector.invoke_count == 0
+
+
 def test_approved_plugin_request_reuses_the_same_execution_when_submitted_twice(tmp_path) -> None:
     connector = _CountingRouteGmailConnector()
     application = create_app(Settings(

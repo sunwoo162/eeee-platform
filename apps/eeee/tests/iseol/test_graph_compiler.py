@@ -45,7 +45,7 @@ def test_compiler_builds_native_pipeline_without_unrelated_connectors() -> None:
     assert graph.by_id("frontend").dependencies
     assert "requirements" in graph.by_id("frontend").dependencies
     assert graph.by_id("frontend").validators
-    assert graph.by_id("backend").validators
+    assert "backend" not in {node.id for node in graph.agents}
     assert graph.by_id("integration").role == "integration"
 
 
@@ -75,3 +75,21 @@ def test_compiled_graph_has_unique_ids_and_explicit_validator_references() -> No
         assert set(node.validators) <= ids
         if node.phase == "implementation":
             assert node.validators
+
+
+def test_static_intent_skips_backend_and_data_but_keeps_quality_gates() -> None:
+    intent = ProjectIntent(
+        rawText="포트폴리오 랜딩 페이지 만들어줘",
+        goal="포트폴리오 랜딩 페이지",
+        projectType="static_app",
+        templateId="generic_web",
+        acceptanceCriteria=["반응형 랜딩 페이지가 실행됨"],
+    )
+
+    graph = AgentGraphCompiler.compile(intent, ExtensionRegistry())
+    ids = {node.id for node in graph.agents}
+
+    assert "backend" not in ids
+    assert "data" not in ids
+    assert {"test", "security", "review", "documentation", "integration"} <= ids
+    assert all(set(node.dependencies) <= ids for node in graph.agents)

@@ -22,6 +22,7 @@ class AgentGraphCompiler:
     ) -> AgentGraph:
         nodes = list(catalog or _core_catalog())
         _validate_catalog(nodes)
+        _topological_order(nodes)
         required_capabilities = []
         if intent.template_id and intent.template_id not in {"todo_app", "generic_web"}:
             required_capabilities.append(
@@ -30,7 +31,9 @@ class AgentGraphCompiler:
         selected = extensions.select(required_capabilities)
         selected_ids = [manifest.id for manifest in selected]
         missing = extensions.missing(required_capabilities)
-        ordered = _topological_order(nodes)
+        selected_node_ids = _selected_node_ids(intent, nodes)
+        selected_nodes = [node for node in nodes if node.id in selected_node_ids]
+        ordered = _topological_order(_trim_references(selected_nodes, selected_node_ids))
         if {node.id for node in ordered} < {"review", "integration"}:
             raise ValueError("compiled graph requires review and integration gates")
         phases = list(dict.fromkeys(node.phase for node in ordered))
@@ -41,6 +44,8 @@ class AgentGraphCompiler:
             "selectedExtensions": selected_ids,
             "missingExtensions": missing,
             "phases": phases,
+            "selectedAgents": [node.id for node in ordered],
+            "skippedOptionalAgents": [node.id for node in nodes if node.id not in selected_node_ids],
         }
         return AgentGraph(
             schemaVersion="iseol-agent-graph.v1",
@@ -148,3 +153,29 @@ def _topological_order(nodes: list[AgentNode]) -> list[AgentNode]:
     if len(ordered) != len(nodes):
         raise ValueError("cycle detected in agent graph")
     return ordered
+
+
+def _selected_node_ids(intent: ProjectIntent, nodes: list[AgentNode]) -> set[str]:
+    ids = {
+        "intake", "definition", "research", "requirements", "content",
+        "information_architecture", "ux", "ui", "architecture", "environment",
+        "frontend", "test", "accessibility", "security", "review",
+        "documentation", "integration",
+    }
+    combined = f"{intent.raw_text} {intent.goal}".casefold()
+    backend_markers = ("api", "backend", "백엔드", "서버", "로그인", "회원", "실시간", "동기화")
+    data_markers = ("database", "db", "데이터베이스", "영속", "서버 저장", "동기화", "데이터 저장")
+    if intent.project_type == "todo_app" or any(marker in combined for marker in backend_markers):
+        ids.add("backend")
+    if "backend" in ids and (
+        intent.project_type == "todo_app" or any(marker in combined for marker in data_markers)
+    ):
+        ids.add("data")
+    return ids & {node.id for node in nodes}
+
+
+def _trim_references(nodes: list[AgentNode], selected_ids: set[str]) -> list[AgentNode]:
+    return [node.model_copy(update={
+        "dependencies": [item for item in node.dependencies if item in selected_ids],
+        "validators": [item for item in node.validators if item in selected_ids],
+    }) for node in nodes]

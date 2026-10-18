@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -84,7 +86,9 @@ class KernelService:
         required_approval = registered is not None and registered.descriptor.approval_level != "none"
         approved = request.context.get("approved") is True
         approval_request_id = request.context.get("approvalRequestId")
+        approval_fingerprint = _approval_fingerprint(request)
         parent: ExecutionEnvelope | None = None
+        valid_approval = False
         if isinstance(approval_request_id, str) and approval_request_id.strip():
             try:
                 candidate = self.executions.get(approval_request_id)
@@ -95,8 +99,10 @@ class KernelService:
                 and candidate.tool_id == "eeee.route"
                 and candidate.required_approval
                 and candidate.capability_id == capability_id
+                and candidate.input.get("approvalFingerprint") == approval_fingerprint
             ):
                 parent = candidate
+                valid_approval = True
                 original_request = candidate.input.get("request")
                 original_text = (
                     original_request.get("raw_text")
@@ -125,14 +131,21 @@ class KernelService:
                 input={"request": request.model_dump(mode="json"), "context": context.model_dump(mode="json")},
                 side_effect_level=registered.descriptor.side_effect_level if registered else SideEffectLevel.NONE,
                 required_approval=required_approval,
-                approval_state=(ApprovalState.APPROVED if approved else ApprovalState.AWAITING_APPROVAL)
+                approval_state=ApprovalState.AWAITING_APPROVAL
                 if required_approval else ApprovalState.NOT_REQUIRED,
             )
+            if required_approval:
+                parent = parent.model_copy(update={
+                    "input": {
+                        **dict(parent.input),
+                        "approvalFingerprint": approval_fingerprint,
+                    },
+                })
             self._record(parent)
             self._event(parent, "assistant.route.started", {
                 "capabilityId": selection.capability_id, "selectionStatus": selection.status,
             })
-        elif not approved:
+        elif not valid_approval or not approved:
             # A stale/duplicated approval prompt is read-only. It must never
             # create another execution or alter the existing approval state.
             return parent
@@ -169,7 +182,7 @@ class KernelService:
             return self._finish_route(parent, CapabilityOutcome(
                 {"status": "blocked", "message": stale_reason}, ExecutionStatus.BLOCKED,
             ), selection)
-        if required_approval and not approved:
+        if required_approval and not valid_approval:
             approval_plugin_id = None
             if isinstance(selection.capability_id, str) and selection.capability_id.startswith("plugin:"):
                 parts = selection.capability_id.split(":", 2)
@@ -206,7 +219,13 @@ class KernelService:
                 ):
                     platform_execution = self.plugin_platform.invoke(
                         "local-user", selection.capability_id,
-                        {"text": request.raw_text, "context": request.context},
+                        {
+                            "text": request.raw_text,
+                            "context": request.context,
+                            "approved": approved,
+                            "approvalRequestId": parent.execution_id,
+                        },
+                        approval_envelope=parent,
                     )
                     platform_status = platform_execution.status
                     platform_output = {
@@ -459,3 +478,18 @@ class KernelService:
             code="invalid_request" if isinstance(exc, ValueError) else "capability_failed",
             message=str(exc).strip() or type(exc).__name__,
         )
+
+
+def _approval_fingerprint(request: AssistantRequest) -> str:
+    context = {
+        key: value for key, value in request.context.items()
+        if key not in {"approved", "approvalRequestId"}
+    }
+    payload = {
+        "rawText": request.raw_text,
+        "requestedCapability": request.requested_capability,
+        "context": context,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()

@@ -566,7 +566,14 @@ class ProjectExecutionCapability:
                 else todo_run.status if todo_run is not None
                 else None
             )
-            project_status = "completed" if quality_status == "PASS" else profile.provisioning_status
+            missing_extensions = list(agent_graph.get("context", {}).get("missingExtensions", [])) \
+                if isinstance(agent_graph.get("context"), dict) else []
+            execution_status = _project_execution_status(
+                quality_status=quality_status,
+                final_blockers=list(final_report.blockers) if final_report is not None else [],
+                missing_extensions=missing_extensions,
+            )
+            project_status = execution_status.value
             return CapabilityOutcome({
                 "status": project_status,
                 "message": "Project Runtime이 생성되었고 외부 연결 상태를 확인해야 해.",
@@ -576,8 +583,7 @@ class ProjectExecutionCapability:
                 "missingConnectors": missing, "documentExecutionId": document_execution_id,
                 "executionPlanPath": provisioned.execution_plan_path,
                 "agentGraph": agent_graph,
-                "missingExtensions": list(agent_graph.get("context", {}).get("missingExtensions", []))
-                if isinstance(agent_graph.get("context"), dict) else [],
+                "missingExtensions": missing_extensions,
                 "agentExecutionReport": agent_execution_report.model_dump(mode="json", by_alias=True)
                 if agent_execution_report is not None else None,
                 "planningSessionId": planning_handoff.planning_session_id,
@@ -594,7 +600,7 @@ class ProjectExecutionCapability:
                 "finalBlockers": list(final_report.blockers) if final_report is not None else [],
                 "finalLimitations": list(final_report.limitations) if final_report is not None else [],
                 "memoryCandidateIds": [record.id for record in memory_records],
-            }, ExecutionStatus.COMPLETED)
+            }, execution_status)
 
         try:
             child = envelope_context.run_child(
@@ -621,6 +627,21 @@ class ProjectExecutionCapability:
         status = (ExecutionStatus.FAILED if child.error is not None and child.error.code == "stale_project_revision"
                   else child.status)
         return CapabilityOutcome(output, status, child.error)
+
+
+def _project_execution_status(
+    *,
+    quality_status: str | None,
+    final_blockers: list[str],
+    missing_extensions: list[str],
+) -> ExecutionStatus:
+    """Keep durable project state blocked until every release gate is evidenced."""
+
+    if missing_extensions or final_blockers:
+        return ExecutionStatus.BLOCKED
+    if quality_status is not None and quality_status != "PASS":
+        return ExecutionStatus.BLOCKED
+    return ExecutionStatus.COMPLETED
 
 
 def _read_agent_graph(path: str | None) -> dict[str, Any]:

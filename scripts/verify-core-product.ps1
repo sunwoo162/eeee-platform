@@ -78,6 +78,12 @@ foreach ($relativePath in $trackedFiles) {
     }
 }
 
+$encodingCheck = & $python (Join-Path $root "scripts\check-encoding.py") 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $encodingCheck | Write-Error
+    throw "Tracked text encoding verification failed."
+}
+
 foreach ($diffArgs in @(@("HEAD"), @("HEAD~1", "HEAD"))) {
     $diffCheck = & git -c core.safecrlf=false -C $root diff --check $diffArgs 2>&1
     if ($LASTEXITCODE -ne 0) {

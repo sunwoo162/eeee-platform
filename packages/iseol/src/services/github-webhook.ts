@@ -1,4 +1,4 @@
-﻿import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 export function verifyGitHubSignature(secret: string, body: Buffer, signature?: string | null): boolean {
   if (!secret || !signature?.startsWith("sha256=")) return false;

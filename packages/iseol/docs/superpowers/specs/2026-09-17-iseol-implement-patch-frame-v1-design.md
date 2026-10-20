@@ -1,4 +1,4 @@
-﻿# Iseol IMPLEMENT PATCH_FRAME_V1 Design
+# Iseol IMPLEMENT PATCH_FRAME_V1 Design
 
 ## Problem
 IMPLEMENT currently requires the model to serialize a large nested JSON result containing a unified diff. Repeated live runs fail with malformed object JSON before patch validation or Desktop dispatch.

@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 import { createHmac } from "node:crypto";
 import { shouldReviewPullRequestAction, verifyGitHubSignature } from "../src/services/github-webhook.js";

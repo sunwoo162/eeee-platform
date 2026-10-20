@@ -1,4 +1,4 @@
-﻿import { google, calendar_v3 } from "googleapis";
+import { google, calendar_v3 } from "googleapis";
 
 export type CalendarEventInput = {
   summary: string;

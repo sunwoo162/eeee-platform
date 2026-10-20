@@ -1,4 +1,4 @@
-﻿import type { ReviewFinding, ReviewResult } from "./review-types.js";
+import type { ReviewFinding, ReviewResult } from "./review-types.js";
 
 export function changedLinesFromPatch(filePath: string, patch?: string | null): Set<string> {
   const changed = new Set<string>();

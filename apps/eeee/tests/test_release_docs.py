@@ -33,3 +33,12 @@ def test_core_verification_docs_match_current_runtime():
     assert "pytest" in script
     assert "git diff --check" in script
     assert "UTF-8" in script
+
+
+def test_encoding_check_is_part_of_repository_verification():
+    checker = (REPOSITORY_ROOT / "scripts/check-encoding.py").read_text(encoding="utf-8")
+
+    assert '"git", "ls-files"' in checker
+    assert "UTF-8 BOM found" in checker
+    assert "replacement/mojibake marker found" in checker
+    assert "strict UTF-8" in checker

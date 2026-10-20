@@ -1,4 +1,4 @@
-﻿import { Octokit } from "@octokit/rest";
+import { Octokit } from "@octokit/rest";
 import { aggregateCiFindings } from "./ci-review-aggregate.js";
 import type { CiReviewArtifact } from "./ci-review-types.js";
 import { parseGitHubRepository } from "../github.js";

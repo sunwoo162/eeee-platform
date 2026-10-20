@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 import { resolve } from "node:path";
 import type { HarnessRuntimeRunEnvelope } from "../src/harness/contracts.js";

@@ -189,6 +189,7 @@ console.log(JSON.stringify({ status: 'passed' }));
             if value:
                 env[key] = value
         process = None
+        process_group_id = None
         try:
             process = subprocess.Popen(
                 [str(node_executable), "-e", self._SCRIPT],
@@ -200,21 +201,35 @@ console.log(JSON.stringify({ status: 'passed' }));
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
                 start_new_session=os.name != "nt",
             )
+            if os.name != "nt":
+                try:
+                    process_group_id = os.getpgid(process.pid)
+                except OSError:
+                    process_group_id = None
             stdout, stderr = process.communicate(timeout=60)
         except subprocess.TimeoutExpired:
             if process is not None:
-                process.kill()
                 if os.name == "nt":
                     subprocess.run(
                         ["taskkill", "/PID", str(process.pid), "/T", "/F"],
                         capture_output=True,
                         check=False,
                     )
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
                 else:
                     try:
-                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                        if process_group_id is not None:
+                            os.killpg(process_group_id, signal.SIGKILL)
+                        else:
+                            process.kill()
                     except (OSError, ProcessLookupError):
-                        pass
+                        try:
+                            process.kill()
+                        except OSError:
+                            pass
                 try:
                     process.communicate(timeout=5)
                 except subprocess.TimeoutExpired:

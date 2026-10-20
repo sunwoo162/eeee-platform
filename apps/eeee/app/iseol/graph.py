@@ -34,8 +34,11 @@ class AgentGraphCompiler:
         selected_node_ids = _selected_node_ids(intent, nodes)
         selected_nodes = [node for node in nodes if node.id in selected_node_ids]
         ordered = _topological_order(_trim_references(selected_nodes, selected_node_ids))
-        if {node.id for node in ordered} < {"review", "integration"}:
-            raise ValueError("compiled graph requires review and integration gates")
+        required_gates = {"review", "integration", "release", "operations", "improvement"}
+        if {node.id for node in ordered} < required_gates:
+            raise ValueError(
+                "compiled graph requires review, integration, release, operations, and improvement gates"
+            )
         phases = list(dict.fromkeys(node.phase for node in ordered))
         context = {
             "canonicalIntent": f"project.create.{intent.project_type}",
@@ -117,6 +120,21 @@ def _core_catalog() -> list[AgentNode]:
         _node("review", "review", "release", "구조·품질·인코딩과 차단 이슈를 검토한다.", ["frontend", "backend", "data", "test", "accessibility", "security"]),
         _node("documentation", "documentation", "operations", "실행법·결정·제한사항을 기록한다.", ["requirements", "review"]),
         _node("integration", "integration", "release", "검증된 결과를 통합하고 릴리스한다.", ["test", "review", "documentation"]),
+        _node(
+            "release", "release", "release",
+            "검증된 산출물과 릴리스 증거를 묶고 배포 가능 여부를 판정한다.",
+            ["integration"], validators=["review"],
+        ),
+        _node(
+            "operations", "operations", "operations",
+            "운영·모니터링·롤백 절차와 책임 경계를 기록한다.",
+            ["release"], validators=["review"],
+        ),
+        _node(
+            "improvement", "improvement", "improvement",
+            "사용자 피드백과 운영 결과를 다음 개선 작업과 회귀 기준으로 연결한다.",
+            ["operations"], validators=["review"],
+        ),
     ]
 
 
@@ -160,7 +178,7 @@ def _selected_node_ids(intent: ProjectIntent, nodes: list[AgentNode]) -> set[str
         "intake", "definition", "research", "requirements", "content",
         "information_architecture", "ux", "ui", "architecture", "environment",
         "frontend", "test", "accessibility", "security", "review",
-        "documentation", "integration",
+        "documentation", "integration", "release", "operations", "improvement",
     }
     core_ids = {node.id for node in _core_catalog()}
     ids.update(node.id for node in nodes if node.id not in core_ids)

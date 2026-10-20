@@ -50,3 +50,36 @@ test("playwright browser config uses strict booleans and preserves bounded optio
     ISEOL_CHATGPT_BROWSER_HEADLESS: "1",
   }, roots), /true|false/i);
 });
+
+test("playwright browser config accepts only loopback CDP endpoints", () => {
+  const profileRoot = resolve("C:/iseol-browser-profile");
+  const accepted = [
+    "http://127.0.0.1:9222",
+    "http://localhost:9222",
+    "ws://[::1]:9222/devtools/browser/session",
+  ];
+
+  for (const cdpUrl of accepted) {
+    const config = resolvePlaywrightBrowserDriverConfig({
+      ISEOL_CHATGPT_BROWSER_ENABLED: "true",
+      ISEOL_CHATGPT_BROWSER_PROFILE_ROOT: profileRoot,
+      ISEOL_CHATGPT_BROWSER_CDP_URL: cdpUrl,
+    }, roots);
+    assert.equal(config.enabled, true);
+    if (config.enabled) assert.equal(config.cdpUrl, cdpUrl);
+  }
+
+  const rejected = [
+    "http://example.com:9222",
+    "http://127.0.0.1:9222@attacker.example",
+    "http://[::2]:9222",
+    "not-a-url",
+  ];
+  for (const cdpUrl of rejected) {
+    assert.throws(() => resolvePlaywrightBrowserDriverConfig({
+      ISEOL_CHATGPT_BROWSER_ENABLED: "true",
+      ISEOL_CHATGPT_BROWSER_PROFILE_ROOT: profileRoot,
+      ISEOL_CHATGPT_BROWSER_CDP_URL: cdpUrl,
+    }, roots), /CDP.*loopback/i, cdpUrl);
+  }
+});

@@ -2,6 +2,9 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 
 type EnvLike = Record<string, string | undefined>;
 
+const LOOPBACK_CDP_PROTOCOLS = new Set(["http:", "https:", "ws:", "wss:"]);
+const LOOPBACK_CDP_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
 export type PlaywrightBrowserRoots = {
   repositoryRoot: string;
   modelRoot: string;
@@ -49,6 +52,19 @@ function assertSafeProfileRoot(profileRoot: string, roots: PlaywrightBrowserRoot
   }
 }
 
+export function assertLoopbackCdpUrl(value: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("ISEOL_CHATGPT_BROWSER_CDP_URL must be a valid loopback CDP URL");
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (!LOOPBACK_CDP_PROTOCOLS.has(parsed.protocol) || !LOOPBACK_CDP_HOSTS.has(host)) {
+    throw new Error("ISEOL_CHATGPT_BROWSER_CDP_URL must use a loopback endpoint");
+  }
+}
+
 export function resolvePlaywrightBrowserDriverConfig(
   env: EnvLike,
   roots: PlaywrightBrowserRoots,
@@ -63,5 +79,6 @@ export function resolvePlaywrightBrowserDriverConfig(
   const executablePath = env.ISEOL_CHATGPT_BROWSER_EXECUTABLE?.trim() || undefined;
   const headless = strictBoolean(env.ISEOL_CHATGPT_BROWSER_HEADLESS, false, "ISEOL_CHATGPT_BROWSER_HEADLESS");
   const cdpUrl = env.ISEOL_CHATGPT_BROWSER_CDP_URL?.trim() || undefined;
+  if (cdpUrl) assertLoopbackCdpUrl(cdpUrl);
   return { enabled: true, profileRoot, ...(executablePath ? { executablePath } : {}), headless, ...(cdpUrl ? { cdpUrl } : {}), ...(roots.chatGptWebRoot ? { lifecycleRoot: roots.chatGptWebRoot } : {}) };
 }

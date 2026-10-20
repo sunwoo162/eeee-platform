@@ -219,6 +219,15 @@ def test_chat_history_is_installed_from_the_catalog_and_can_be_launched(tmp_path
     assert launch.json()["entrypoint"].endswith("eeee_chat_history/main.py") or launch.json()["entrypoint"].endswith("eeee_chat_history\\main.py")
 
 
+def test_chat_history_launch_requires_installation(tmp_path) -> None:
+    client = TestClient(_application(tmp_path))
+
+    launch = client.get("/api/plugins/eeee-chat-history/launch")
+
+    assert launch.status_code == 409
+    assert launch.json()["detail"] == "plugin must be installed before opening"
+
+
 def test_malformed_user_scope_is_rejected(tmp_path) -> None:
     client = TestClient(_application(tmp_path))
     response = client.get(

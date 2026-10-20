@@ -27,6 +27,9 @@ body { margin: 0; background: radial-gradient(circle at top right, #223b3e, #101
 .eeee-plugin-details { display: grid; gap: .2rem; min-width: 0; }
 .eeee-plugin-description { color: #aab7c0; font-size: .78rem; overflow-wrap: anywhere; }
 .plugin-setup-message { color: #f5ce72; font-size: .74rem; overflow-wrap: anywhere; }
+.plugin-handoff-message { font-size: .74rem; overflow-wrap: anywhere; }
+.plugin-handoff-success { color: #71e6c2; }
+.plugin-handoff-error { color: #ff9f9f; }
 .plugin-next-action { color: #aab7c0; font-size: .78rem; text-align: right; }
 .eeee-plugin-list-legacy { display: none; }
 .plugin-action { border: 1px solid #6b82ed; border-radius: 8px; background: rgba(107, 130, 237, .18); color: #eef3f7; padding: .35rem .7rem; cursor: pointer; }

@@ -10,6 +10,8 @@ let projectMapTimer = null;
 const pendingApprovalRequestIds = new Set();
 const pendingResearchRequestIds = new Set();
 const pendingRunExecutionIds = new Set();
+const pluginHandoffStates = new Map();
+const pluginHandoffInFlight = new Set();
 let designReferenceRequestId = 0;
 let visualVerificationRequestId = 0;
 
@@ -310,7 +312,9 @@ function renderEeeePluginStatus(plugins) {
       if (!button) return;
       const plugin = (stateList.__eeeePlugins || []).find((item) => item.pluginId === button.dataset.pluginId);
       if (!plugin) return;
+      if (plugin.nextAction === "open" && pluginHandoffInFlight.has(plugin.pluginId)) return;
       button.disabled = true;
+      if (plugin.nextAction === "open") pluginHandoffInFlight.add(plugin.pluginId);
       try {
         if (plugin.nextAction === "install") {
           await requestJson(`/api/plugins/${encodeURIComponent(plugin.pluginId)}/install`, { method: "POST" });
@@ -326,13 +330,36 @@ function renderEeeePluginStatus(plugins) {
           else if (typeof window !== "undefined") window.location.href = result.authorizationUrl;
         } else if (plugin.nextAction === "resume") {
           await requestJson(`/api/plugins/${encodeURIComponent(plugin.pluginId)}/resume`, { method: "POST" });
+        } else if (plugin.nextAction === "open") {
+          const result = await requestJson(`/api/plugins/${encodeURIComponent(plugin.pluginId)}/launch`);
+          if (!result || typeof result !== "object" || Array.isArray(result)
+            || result.pluginId !== plugin.pluginId
+            || typeof result.entrypoint !== "string" || !result.entrypoint.trim()) {
+            throw { detail: "플러그인 열기 응답이 올바르지 않습니다." };
+          }
+          const message = "데스크톱에서 채팅 기록을 열 수 있도록 준비됨.";
+          pluginHandoffStates.set(plugin.pluginId, { kind: "success", message });
+          const status = $("#eeee-control-status");
+          status.textContent = message;
+          status.className = "status success";
+          renderEeeePluginStatus(stateList.__eeeePlugins || []);
+          return;
         }
         await refreshEeeeControlCenter();
       } catch (error) {
         const status = $("#eeee-control-status");
-        status.textContent = error?.detail || "플러그인 연결에 실패했습니다.";
+        const detail = error?.detail || error?.message;
+        const message = plugin.nextAction === "open"
+          ? `플러그인을 열지 못했습니다. 다시 시도해 주세요.${detail ? ` (${detail})` : ""}`
+          : (detail || "플러그인 연결에 실패했습니다.");
+        if (plugin.nextAction === "open") {
+          pluginHandoffStates.set(plugin.pluginId, { kind: "error", message });
+          renderEeeePluginStatus(stateList.__eeeePlugins || []);
+        }
+        status.textContent = message;
         status.className = "status error";
       } finally {
+        if (plugin.nextAction === "open") pluginHandoffInFlight.delete(plugin.pluginId);
         button.disabled = false;
       }
     });
@@ -360,7 +387,7 @@ function renderEeeePluginStatus(plugins) {
     failed: "오류",
     disabled: "설정 필요",
   };
-  const nextActionLabels = { install: "설치", connect: "연결", reconnect: "다시 연결", resume: "재개" };
+  const nextActionLabels = { install: "설치", connect: "연결", reconnect: "다시 연결", resume: "재개", open: "열기" };
   const renderEmpty = (list, message) => {
     const empty = document.createElement("li");
     empty.className = "muted";
@@ -387,6 +414,13 @@ function renderEeeePluginStatus(plugins) {
       setupMessage.className = "plugin-setup-message";
       setupMessage.textContent = plugin.setupMessage;
       details.append(setupMessage);
+    }
+    const handoff = pluginHandoffStates.get(plugin.pluginId);
+    if (handoff) {
+      const handoffMessage = document.createElement("small");
+      handoffMessage.className = `plugin-handoff-message plugin-handoff-${handoff.kind}`;
+      handoffMessage.textContent = handoff.message;
+      details.append(handoffMessage);
     }
     const status = document.createElement("span");
     status.className = `plugin-status plugin-status-${plugin.status || "unknown"}`;

@@ -13,7 +13,9 @@ TEXT_EXTENSIONS = {
     ".txt", ".xml", ".yml", ".yaml",
 }
 SKIP_PARTS = {".git", ".venv", "venv", "node_modules", "dist", "build", "__pycache__"}
-MOJIBAKE_MARKERS = ("Ã", "Â", "â€", "ðŸ", "ï¿½")
+MOJIBAKE_MARKERS = (
+    "\u00c3", "\u00c2", "\u00e2\u20ac", "\u00f0\u0178", "\u00ef\u00bf\u00bd",
+)
 
 
 def tracked_files() -> list[Path]:
@@ -39,8 +41,11 @@ def main() -> int:
         if raw.startswith(b"\xef\xbb\xbf"):
             failures.append(f"{path}: UTF-8 BOM found")
         markers = [marker for marker in MOJIBAKE_MARKERS if marker in text]
-        if "�" in text or markers:
-            failures.append(f"{path}: replacement/mojibake marker found: {markers or ['�']}")
+        replacement_character = chr(0xFFFD)
+        if replacement_character in text or markers:
+            failures.append(
+                f"{path}: replacement/mojibake marker found: {markers or ['U+FFFD']}"
+            )
 
     print(f"Encoding check: {checked} tracked text files inspected")
     if failures:

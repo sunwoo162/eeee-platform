@@ -29,6 +29,8 @@ jobs:
       - name: Check repository hygiene
         shell: pwsh
         run: .\scripts\check-repository.ps1
+      - name: Check tracked text encoding
+        run: python .\scripts\check-encoding.py
       - name: Build and test ISEOL contracts, QA, and organization
         working-directory: packages/iseol
         shell: pwsh

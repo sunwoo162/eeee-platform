@@ -1,4 +1,4 @@
-﻿# Iseol Calendar and Code Review Design
+# Iseol Calendar and Code Review Design
 
 ## Goal
 Extend Iseol with project calendar management, GitHub schedule synchronization, and a clean Gemini Code Assist-style pull request review bot without disrupting existing Notion, Figma, GitHub log, scrum, contest, voice, or music features.

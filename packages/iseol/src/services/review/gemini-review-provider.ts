@@ -1,4 +1,4 @@
-﻿import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { reviewResultSchema, type ReviewResult } from "./review-types.js";
 
 const REVIEW_JSON_SCHEMA = {

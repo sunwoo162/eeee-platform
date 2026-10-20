@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 import { changedLinesFromPatch, filterReviewFindings } from "../src/services/review/review-filter.js";
 import { reviewResultSchema } from "../src/services/review/review-types.js";

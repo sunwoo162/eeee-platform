@@ -1,4 +1,4 @@
-﻿import type { ReviewFinding, ReviewResult } from "./review-types.js";
+import type { ReviewFinding, ReviewResult } from "./review-types.js";
 
 const LABEL = { critical: "🔴 Critical", major: "🟠 Major", minor: "🟡 Minor" } as const;
 

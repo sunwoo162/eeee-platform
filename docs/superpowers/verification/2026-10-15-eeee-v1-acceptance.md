@@ -231,3 +231,23 @@ for the current head; older sections remain historical evidence.
 The only warning in these runs is the installed Starlette/httpx compatibility
 warning. No new live external connector OAuth session, external mail send, or
 live provider generation is claimed by this deterministic verification.
+
+## Encoding audit — 2026-10-20
+
+The clean `origin/main` worktree initially exposed UTF-8 BOMs in 18 tracked
+ISEOL text files. There were no invalid UTF-8 sequences, replacement
+characters, or mojibake markers. The 18 BOMs were removed without changing
+file content semantics, and `scripts/check-encoding.py` was added to the
+repository verification path and CI.
+
+Fresh result after the cleanup:
+
+- `scripts/check-encoding.py`: 1,506 tracked text files inspected; strict
+  UTF-8, BOM, replacement-character, and mojibake checks passed.
+- `scripts/verify-core-product.ps1`: `381 passed, 1 warning`; static UI
+  checks `2/2`; encoding and `git diff --check` passed.
+- `scripts/verify-all.ps1 -Full`: EEEE `980 passed, 1 skipped, 1 warning`;
+  ISEOL `25/25`; ClaimLatch adapter `5/5`; Mobile `1/1`; unified verification
+  passed.
+- `scripts/build-desktop.ps1`: packaged Desktop build and both self-tests
+  passed.

@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 import { GitHubScheduleSyncService } from "../src/services/github-schedule-sync.js";
 

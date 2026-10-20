@@ -66,6 +66,9 @@ class ConversationService:
             conversation_id, client_message_id
         )
         if existing is not None:
+            existing_message = self.store.get_message(existing.user_message_id)
+            if existing_message.content != content:
+                raise ValueError("client_message_id was reused with different message content")
             return existing, False
         if not self._accepting:
             raise CoreShuttingDownError()

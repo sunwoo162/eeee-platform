@@ -126,10 +126,14 @@ def build_conversation_router(
     def list_conversations(
         limit: int = Query(default=50, ge=1, le=100),
     ) -> dict[str, object]:
+        conversations = service.store.list_conversations(limit=limit)
         return {
             "items": [
-                _conversation_payload(item)
-                for item in service.store.list_conversations(limit=limit)
+                {
+                    **_conversation_payload(item),
+                    "messageCount": service.store.message_count(item.id),
+                }
+                for item in conversations
             ],
             "nextCursor": None,
         }

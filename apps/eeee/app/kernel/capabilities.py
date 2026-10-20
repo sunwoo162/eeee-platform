@@ -250,6 +250,12 @@ class ProjectExecutionCapability:
                 "projectId": project_id,
                 "workspace": str(workspace),
                 "projectIntent": intake.intent.model_dump(mode="json", by_alias=True),
+                "requiresExternalApproval": intake.intent.requires_external_approval,
+                "externalActions": [
+                    action.model_dump(mode="json", by_alias=True)
+                    for action in intake.intent.external_actions
+                ],
+                "approved": request.context.get("approved") is True,
                 "clarificationQuestions": [
                     question.model_dump(mode="json", by_alias=True)
                     for question in intake.questions
@@ -266,6 +272,9 @@ class ProjectExecutionCapability:
                 "projectId": str(plan.inputs["projectId"]),
                 "workspace": str(plan.inputs["workspace"]),
                 "projectIntent": plan.inputs.get("projectIntent"),
+                "externalActionRequired": bool(plan.inputs.get("requiresExternalApproval")),
+                "externalActions": plan.inputs.get("externalActions", []),
+                "approved": plan.inputs.get("approved") is True,
                 "clarificationQuestions": plan.inputs.get("clarificationQuestions", []),
             },
         )
@@ -430,6 +439,7 @@ class ProjectExecutionCapability:
                     project_id=project.id,
                     project_revision=project.revision,
                     workspace=project.workspace,
+                    acceptance_criteria=intent.acceptance_criteria,
                 )
                 trust = (
                     self.coordinator.trust_pipeline.release_gate(_child, prepared.qa_report)
@@ -492,6 +502,7 @@ class ProjectExecutionCapability:
                     project_revision=project.revision,
                     workspace=project.workspace,
                     template_id=intent.template_id or "generic_web",
+                    acceptance_criteria=intent.acceptance_criteria,
                 )
                 trust = (
                     self.coordinator.trust_pipeline.release_gate(_child, prepared.qa_report)

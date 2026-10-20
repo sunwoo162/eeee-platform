@@ -171,3 +171,21 @@ def test_web_runner_generic_template_does_not_require_todo_contract(tmp_path):
     names = {item["name"] for item in prepared.qa_report["checks"]}
     assert "template:generic_web" in names
     assert "product-baseline:todo-workflow" not in names
+
+
+def test_web_runner_records_acceptance_criteria_against_qa_evidence(tmp_path):
+    root = tmp_path / "generic-project"
+    create_web_app_scaffold(root, "카페 홈페이지")
+
+    prepared = WebProjectRunner().prepare(
+        project_id="project-generic",
+        project_revision="rev-1",
+        workspace=root,
+        template_id="generic_web",
+        acceptance_criteria=["핵심 화면이 실행됨"],
+    )
+
+    trace = prepared.qa_report["requirementTraceability"]
+    assert trace[0]["criterion"] == "핵심 화면이 실행됨"
+    assert trace[0]["status"] == "verified"
+    assert trace[0]["evidenceIds"] == prepared.qa_report["evidenceIds"]

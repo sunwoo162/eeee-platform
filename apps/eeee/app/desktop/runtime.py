@@ -72,6 +72,16 @@ def _resolve_node_executable(configured: str) -> str:
     return configured
 
 
+def _resolve_bridge_node_executable(configured: str) -> str:
+    """Prefer the Node runtime shipped inside a frozen desktop bundle."""
+
+    if getattr(sys, "frozen", False) and configured.casefold() in {"node", "node.exe"}:
+        bundled = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "chatgpt-runtime" / "node.exe"
+        if bundled.is_file():
+            return str(bundled)
+    return _resolve_node_executable(configured)
+
+
 def _resolve_ollama_executable() -> str | None:
     discovered = shutil.which("ollama")
     if discovered:
@@ -348,7 +358,7 @@ class EmbeddedApiRuntime:
             "a", encoding="utf-8"
         )
         self._chatgpt_bridge = subprocess.Popen(
-            [_resolve_node_executable(self.settings.chatgpt_web_node_path), str(script)],
+            [_resolve_bridge_node_executable(self.settings.chatgpt_web_node_path), str(script)],
             cwd=str(script.parent),
             env=env,
             stdout=self._chatgpt_bridge_log,

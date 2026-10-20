@@ -2,6 +2,34 @@
   "id": "eeee-chat-history",
   "name": "EEEE 채팅 기록",
   "version": "1.0.0",
-  "entrypoint": "main.py",
-  "permissions": ["conversation.read", "conversation.write"]
+  "protocolVersion": "1",
+  "command": ["python", "main.py"],
+  "permissions": [
+    {
+      "id": "conversation.read",
+      "description": "EEEE 대화 기록을 읽습니다.",
+      "sideEffectLevel": "none"
+    },
+    {
+      "id": "conversation.write",
+      "description": "EEEE 대화에 새 명령을 보냅니다.",
+      "sideEffectLevel": "local"
+    }
+  ],
+  "actions": [
+    {
+      "id": "conversation.list",
+      "description": "EEEE 대화 기록을 조회합니다.",
+      "permissionIds": ["conversation.read"],
+      "sideEffectLevel": "none"
+    },
+    {
+      "id": "conversation.send",
+      "description": "EEEE 대화에 새 메시지를 보냅니다.",
+      "permissionIds": ["conversation.write"],
+      "sideEffectLevel": "local"
+    }
+  ],
+  "auth": {"mode": "local"},
+  "memoryScope": "conversation"
 }

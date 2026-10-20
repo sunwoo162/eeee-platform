@@ -342,7 +342,8 @@ def build_plugin_router(
         return views
 
     @router.post("/{plugin_id}/install")
-    def install_plugin(plugin_id: str) -> object:
+    def install_plugin(plugin_id: str, request: Request) -> object:
+        _require_local_desktop(request)
         if platform is None:
             raise HTTPException(status_code=503, detail="Plugin platform is unavailable")
         try:
@@ -353,7 +354,8 @@ def build_plugin_router(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.delete("/{plugin_id}/install", status_code=204)
-    def uninstall_plugin(plugin_id: str) -> Response:
+    def uninstall_plugin(plugin_id: str, request: Request) -> Response:
+        _require_local_desktop(request)
         if platform is None:
             raise HTTPException(status_code=503, detail="Plugin platform is unavailable")
         try:

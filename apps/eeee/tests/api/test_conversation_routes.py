@@ -79,6 +79,21 @@ def test_v1_turn_submission_is_idempotent_for_client_message_id(tmp_path) -> Non
     assert len(client.get(f"/v1/conversations/{conversation['id']}/messages").json()["items"]) == 2
 
 
+def test_v1_conversation_list_includes_durable_message_count(tmp_path) -> None:
+    client = make_client(tmp_path)
+    conversation = client.post("/v1/conversations", json={"title": "기록"}).json()
+    client.post(
+        f"/v1/conversations/{conversation['id']}/turns",
+        json={"clientMessageId": "count-1", "content": "메시지 수를 세어줘"},
+    )
+
+    listed = client.get("/v1/conversations")
+
+    assert listed.status_code == 200
+    item = next(item for item in listed.json()["items"] if item["id"] == conversation["id"])
+    assert item["messageCount"] == 1
+
+
 def test_v1_runtime_reports_ollama_model_readiness_separately_from_core_health(tmp_path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",

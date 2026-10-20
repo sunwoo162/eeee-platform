@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
@@ -75,12 +76,26 @@ class ProjectQualityEvaluator:
             blockers.append("Independent QA did not PASS")
         if not isinstance(qa.get("evidenceIds"), list) or not qa.get("evidenceIds"):
             blockers.append("QA evidence is missing")
+        else:
+            qa_evidence = {
+                str(item).strip()
+                for item in qa["evidenceIds"]
+                if isinstance(item, str) and item.strip()
+            }
+            check_evidence = {
+                str(check.get("evidenceId")).strip()
+                for check in qa.get("checks", [])
+                if isinstance(check, Mapping) and isinstance(check.get("evidenceId"), str) and check.get("evidenceId", "").strip()
+            } if isinstance(qa.get("checks"), list) else set()
+            if not qa_evidence or not qa_evidence.issubset(check_evidence):
+                blockers.append("QA evidence is not linked to verification checks")
         if claim.get("decision") != "PASS" or not claim.get("receiptId") or not claim.get("claimLatchReportId"):
             blockers.append("ClaimLatch evidence is missing or not PASS")
         if any(check.status == "BLOCK" for check in integrity):
             blockers.append("Encoding or diff integrity check is blocked")
         if not _has_rollback_evidence(root):
             blockers.append("Rollback evidence is missing")
+        requirement_traceability = _requirement_traceability(intent, qa, blockers)
 
         browser = _browser_status(qa)
         if browser == "NOT_RUN":
@@ -97,7 +112,11 @@ class ProjectQualityEvaluator:
             "requirements": (15, "요구사항", [
                 _check("requirements:goal", bool(intent.goal.strip()), "Initial goal is explicit"),
                 _check("requirements:acceptance", bool(intent.acceptance_criteria), "Acceptance criteria exist"),
-                _check("requirements:traceability", bool(plan.tasks), "Execution tasks are linked"),
+                _check(
+                    "requirements:traceability",
+                    bool(requirement_traceability) and all(item.get("status") == "verified" for item in requirement_traceability),
+                    "Acceptance criteria are linked to verified QA evidence",
+                ),
             ]),
             "research-content-ia": (10, "조사·콘텐츠·정보구조", [
                 _check("research:phase", "definition" in plan.phases, "Definition/research phase is selected"),
@@ -139,7 +158,7 @@ class ProjectQualityEvaluator:
         if blockers:
             grade: ReportGrade = "replan_required" if any("QA" in item or "ClaimLatch" in item or "Rollback" in item for item in blockers) else "revision_required"
         elif limitations or score < 90:
-            grade = "client_ready_with_notes" if score >= 75 else "revision_required"
+            grade = "client_ready_with_notes" if score >= 85 else "revision_required"
         else:
             grade = "portfolio_ready"
         report = FinalProjectReport(
@@ -149,12 +168,9 @@ class ProjectQualityEvaluator:
             finalResult={"grade": grade, "score": score},
             selectedGraph={"phases": plan.phases, "taskCount": len(plan.tasks)},
             artifacts=_artifact_paths(root),
-            requirementTraceability=[
-                {"criterion": criterion, "status": "planned"}
-                for criterion in intent.acceptance_criteria
-            ],
+            requirementTraceability=requirement_traceability,
             gateResults={"qa": qa.get("status", "NOT_RUN"), "claimLatch": claim.get("decision", "NOT_RUN"), "browser": browser},
-            retries=[],
+            retries=[dict(item) for item in qa.get("retries", []) if isinstance(item, Mapping)],
             testResults=list(qa.get("checks", [])) if isinstance(qa.get("checks"), list) else [],
             categories=categories,
             score=score,
@@ -181,8 +197,68 @@ def _category(category_id: str, title: str, max_points: int, checks: list[Qualit
     return QualityCategoryResult(id=category_id, title=title, maxPoints=max_points, score=score, status=status, checks=checks)
 
 
+_ROLLBACK_EVIDENCE = re.compile(
+    r"(?im)^\s*(?:rollback(?:\s+(?:procedure|command))?|복구(?:\s+(?:절차|명령))?)\s*:\s*(?P<value>\S.*)$"
+)
+
+
 def _has_rollback_evidence(root: Path) -> bool:
-    return any("rollback" in path.read_text(encoding="utf-8", errors="replace").casefold() for path in (root / "DEPLOYMENT.md", root / "PROJECT_LOG.md") if path.is_file())
+    placeholders = {"todo", "tbd", "n/a", "none", "미정", "없음", "..."}
+    for path in (root / "DEPLOYMENT.md", root / "PROJECT_LOG.md"):
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in _ROLLBACK_EVIDENCE.finditer(text):
+            value = match.group("value").strip()
+            if value and value.casefold() not in placeholders:
+                return True
+        normalized = text.casefold()
+        if all(token in normalized for token in ("rollback", "release_manifest", "git revision", "project_log")):
+            return True
+    return False
+
+
+def _requirement_traceability(
+    intent: ProjectIntent,
+    qa: Mapping[str, object],
+    blockers: list[str],
+) -> list[dict[str, object]]:
+    """Require each acceptance criterion to point at current QA evidence."""
+
+    if not intent.acceptance_criteria:
+        return []
+    raw_items = qa.get("requirementTraceability")
+    qa_evidence = {
+        str(item).strip()
+        for item in qa.get("evidenceIds", [])
+        if isinstance(item, str) and item.strip()
+    } if isinstance(qa.get("evidenceIds"), list) else set()
+    normalized: list[dict[str, object]] = []
+    invalid = False
+    for criterion in intent.acceptance_criteria:
+        match = next(
+            (
+                item for item in raw_items
+                if isinstance(item, Mapping) and item.get("criterion") == criterion
+            ),
+            None,
+        ) if isinstance(raw_items, list) else None
+        evidence_ids = [
+            str(item).strip()
+            for item in (match.get("evidenceIds", []) if isinstance(match, Mapping) else [])
+            if isinstance(item, str) and item.strip()
+        ]
+        status = str(match.get("status", "unverified")).casefold() if isinstance(match, Mapping) else "unverified"
+        verified = status in {"verified", "pass", "passed"} and bool(evidence_ids) and set(evidence_ids).issubset(qa_evidence)
+        normalized.append({
+            "criterion": criterion,
+            "status": "verified" if verified else "unverified",
+            "evidenceIds": evidence_ids if verified else [],
+        })
+        invalid = invalid or not verified
+    if invalid:
+        blockers.append("Requirement traceability evidence is missing")
+    return normalized
 
 
 def _browser_status(qa: Mapping[str, object]) -> str:
@@ -194,7 +270,7 @@ def _browser_status(qa: Mapping[str, object]) -> str:
             if isinstance(check, Mapping) and check.get("name") == "browser:ui-e2e":
                 status = str(check.get("status", "")).casefold()
                 return "NOT_RUN" if status == "not_run" else "PASS" if status in {"passed", "pass"} else "BLOCK"
-    return "PASS"
+    return "NOT_RUN"
 
 
 def _artifact_paths(root: Path) -> list[str]:

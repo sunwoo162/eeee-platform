@@ -35,8 +35,23 @@ def test_portfolio_quality_profile_passes_generated_todo_artifacts(tmp_path) -> 
     from app.project_runtime.scaffold import create_todo_scaffold
 
     create_todo_scaffold(tmp_path)
-    (tmp_path / "QA_REPORT.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "QA_REPORT.json").write_text(
+        '{"status":"PASS","independent":true,"evidenceIds":["qa-1"],"checks":[{"evidenceId":"qa-1"}]}\n',
+        encoding="utf-8",
+    )
     report = ProductQualityProfile.portfolio_grade().evaluate(tmp_path, require_release_evidence=False)
 
     assert report.decision == "PASS", report
     assert all(check.status == "PASS" for check in report.checks)
+
+
+def test_portfolio_quality_profile_blocks_empty_or_malformed_qa_evidence(tmp_path) -> None:
+    from app.project_runtime.scaffold import create_todo_scaffold
+
+    create_todo_scaffold(tmp_path)
+    (tmp_path / "QA_REPORT.json").write_text("{}\n", encoding="utf-8")
+
+    report = ProductQualityProfile.portfolio_grade().evaluate(tmp_path, require_release_evidence=False)
+
+    assert report.decision == "BLOCK"
+    assert any(check.name == "quality:qa-report" and check.status == "BLOCK" for check in report.checks)

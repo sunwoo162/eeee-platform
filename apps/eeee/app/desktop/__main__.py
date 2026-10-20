@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         help="run the bundled EEEE chat history plugin entrypoint",
     )
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--conversation-id", default="desktop-default")
+    parser.add_argument("--conversation-id", default="")
     arguments = parser.parse_args(argv)
     if arguments.self_test:
         return run_self_test()

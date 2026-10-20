@@ -1,8 +1,19 @@
 from app.desktop.runtime import (
     _chatgpt_bridge_is_healthy,
     _chatgpt_bridge_is_stale,
+    _resolve_bridge_node_executable,
     _terminate_port_owner,
 )
+
+
+def test_frozen_bridge_prefers_bundled_node_runtime(tmp_path, monkeypatch):
+    bundled = tmp_path / "chatgpt-runtime" / "node.exe"
+    bundled.parent.mkdir()
+    bundled.write_bytes(b"node")
+    monkeypatch.setattr("app.desktop.runtime.sys.frozen", True, raising=False)
+    monkeypatch.setattr("app.desktop.runtime.sys._MEIPASS", str(tmp_path), raising=False)
+
+    assert _resolve_bridge_node_executable("node") == str(bundled)
 
 
 def test_chatgpt_bridge_health_requires_connected_response(monkeypatch):

@@ -466,7 +466,15 @@ class PluginPlatformService:
         if descriptor is None:
             return _blocked_envelope(capability_id, "plugin capability is not connected and healthy")
         plugin_id = capability_id.split(":", 2)[1]
-        action = str(value.get("action") or capability_id.rsplit(":", 1)[-1])
+        declared_action = capability_id.rsplit(":", 1)[-1]
+        requested_action = value.get("action")
+        if requested_action is not None and str(requested_action) != declared_action:
+            return _blocked_envelope(
+                capability_id,
+                "plugin action does not match the selected capability",
+                error_code="invalid_plugin_action",
+            )
+        action = declared_action
         if plugin_id == "notion" and action == "pages":
             action = "get_page"
         context = value.get("context")

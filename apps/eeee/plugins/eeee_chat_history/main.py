@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -31,33 +33,130 @@ class CoreApiClient:
         return response.json() if response.status_code != 204 else {}
 
     def get_conversations(self, *, query: str = "", limit: int = 50) -> list[dict[str, object]]:
+        """Read the same durable conversation store used by the main desktop UI."""
         result = self._request(
-            "GET", "/api/assistant/conversations", params={"query": query, "limit": limit}
+            "GET", "/v1/conversations", params={"limit": limit}
         )
-        if not isinstance(result, list):
+        if not isinstance(result, dict) or not isinstance(result.get("items"), list):
             raise RuntimeError("Core returned an invalid conversation list")
-        return [item for item in result if isinstance(item, dict)]
+        normalized: list[dict[str, object]] = []
+        needle = query.strip().casefold()
+        for item in result["items"]:
+            if not isinstance(item, dict):
+                continue
+            conversation_id = str(item.get("id") or "")
+            title = str(item.get("title") or "새 대화")
+            if not conversation_id or (needle and needle not in title.casefold()):
+                continue
+            normalized.append({
+                "conversationId": conversation_id,
+                "preview": title,
+                "messageCount": int(item.get("messageCount") or 0),
+                "updatedAt": item.get("updatedAt"),
+            })
+        return normalized
 
     def get_conversation(
         self,
-        conversation_id: str = "desktop-default",
+        conversation_id: str,
         *,
         limit: int = 100,
         before_id: int | None = None,
     ) -> dict[str, object]:
         if not conversation_id or "/" in conversation_id or "\\" in conversation_id:
             raise ValueError("conversation_id must be a path-safe value")
-        params: dict[str, object] = {"limit": limit}
-        if before_id is not None:
-            params["beforeId"] = before_id
-        result = self._request("GET", f"/api/assistant/conversations/{conversation_id}", params=params)
-        if not isinstance(result, dict):
+        result = self._request(
+            "GET",
+            f"/v1/conversations/{conversation_id}/messages",
+            params={"afterSequence": 0, "limit": limit},
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("items"), list):
             raise RuntimeError("Core returned an invalid conversation")
-        return result
+        turns = [
+            {
+                "id": item.get("id"),
+                "role": item.get("role"),
+                "content": item.get("content"),
+                "status": item.get("status"),
+                "createdAt": item.get("createdAt"),
+            }
+            for item in result["items"]
+            if isinstance(item, dict)
+        ]
+        return {"conversationId": conversation_id, "turns": turns, "nextBeforeId": None}
 
     def send_conversation_message(
         self, text: str, *, conversation_id: str = "desktop-default"
     ) -> dict[str, object]:
+        conversation_id = conversation_id.strip()
+        if not conversation_id:
+            conversations = self.get_conversations(limit=1)
+            if conversations:
+                conversation_id = str(conversations[0]["conversationId"])
+            else:
+                created = self._request(
+                    "POST", "/v1/conversations", json={"title": "새 대화"}
+                )
+                if not isinstance(created, dict) or not created.get("id"):
+                    raise RuntimeError("Core could not create a conversation")
+                conversation_id = str(created["id"])
+        request = self._request(
+            "POST",
+            f"/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": f"eeee-chat-history-{uuid4().hex}",
+                "content": text,
+            },
+        )
+        if not isinstance(request, dict) or not isinstance(request.get("requestId"), str):
+            raise RuntimeError("Core returned an invalid conversation request")
+        events = self._request_events(str(request["requestId"]))
+        for event in events:
+            if event.get("eventType") == "message.completed":
+                payload = event.get("payload")
+                if isinstance(payload, dict):
+                    return {
+                        "status": "completed",
+                        "message": str(payload.get("content") or ""),
+                        "requestId": request["requestId"],
+                        "conversationId": conversation_id,
+                    }
+            if event.get("eventType") in {"request.failed", "request.interrupted", "request.cancelled"}:
+                payload = event.get("payload")
+                reason = payload.get("error") if isinstance(payload, dict) else None
+                return {
+                    "status": "failed",
+                    "message": str(reason or "대화 요청이 완료되지 않았어."),
+                    "requestId": request["requestId"],
+                    "conversationId": conversation_id,
+                }
+        return {
+            "status": "accepted",
+            "message": "답변을 기다리는 중이야.",
+            "requestId": request["requestId"],
+            "conversationId": conversation_id,
+        }
+
+    def _request_events(self, request_id: str) -> list[dict[str, object]]:
+        with httpx.stream(
+            "GET",
+            f"{self.base_url}/v1/requests/{request_id}/events",
+            params={"afterSequence": 0, "timeoutSeconds": min(self.timeout, 60.0)},
+            timeout=self.timeout + 5.0,
+        ) as response:
+            if response.is_error:
+                raise RuntimeError(response.text)
+            events: list[dict[str, object]] = []
+            for line in response.iter_lines():
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    event = json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
+            return events
         result = self._request(
             "POST",
             "/api/assistant/route",
@@ -71,7 +170,7 @@ class CoreApiClient:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="EEEE chat history plugin")
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--conversation-id", default="desktop-default")
+    parser.add_argument("--conversation-id", default="")
     args = parser.parse_args(argv)
 
     from PySide6.QtWidgets import QApplication

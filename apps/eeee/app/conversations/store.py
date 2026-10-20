@@ -85,6 +85,14 @@ class ConversationStore:
             for row in rows
         ]
 
+    def message_count(self, conversation_id: str) -> int:
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS message_count FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        return int(row["message_count"] if row is not None else 0)
+
     def get_messages(
         self, conversation_id: str, *, after_sequence: int = 0, limit: int = 100
     ) -> list[ConversationMessage]:

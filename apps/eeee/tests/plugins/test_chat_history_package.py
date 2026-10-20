@@ -83,6 +83,37 @@ def test_chat_history_client_reads_the_canonical_conversation_store(monkeypatch)
     ]
 
 
+def test_chat_history_client_uses_the_canonical_message_cursor(monkeypatch) -> None:
+    requests: list[tuple[str, str, dict[str, object]]] = []
+
+    def request(method: str, url: str, **kwargs):
+        requests.append((method, url, kwargs))
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "id": "message-3",
+                        "role": "user",
+                        "content": "세 번째",
+                        "status": "completed",
+                        "sequence": 3,
+                    }
+                ],
+                "nextCursor": 3,
+            },
+        )
+
+    monkeypatch.setattr(httpx, "request", request)
+    client = CoreApiClient("http://127.0.0.1:8123")
+
+    page = client.get_conversation("conversation-1", after_sequence=2, limit=1)
+
+    assert page["nextAfterSequence"] == 3
+    assert page["turns"][0]["content"] == "세 번째"
+    assert requests[0][2]["params"] == {"afterSequence": 2, "limit": 1}
+
+
 def test_chat_history_client_sends_an_idempotent_canonical_turn(monkeypatch) -> None:
     requests: list[tuple[str, str, dict[str, object]]] = []
 

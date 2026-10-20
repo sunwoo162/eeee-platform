@@ -61,14 +61,16 @@ class CoreApiClient:
         conversation_id: str,
         *,
         limit: int = 100,
-        before_id: int | None = None,
+        after_sequence: int = 0,
     ) -> dict[str, object]:
         if not conversation_id or "/" in conversation_id or "\\" in conversation_id:
             raise ValueError("conversation_id must be a path-safe value")
+        if after_sequence < 0:
+            raise ValueError("after_sequence must be nonnegative")
         result = self._request(
             "GET",
             f"/v1/conversations/{conversation_id}/messages",
-            params={"afterSequence": 0, "limit": limit},
+            params={"afterSequence": after_sequence, "limit": limit},
         )
         if not isinstance(result, dict) or not isinstance(result.get("items"), list):
             raise RuntimeError("Core returned an invalid conversation")
@@ -83,7 +85,16 @@ class CoreApiClient:
             for item in result["items"]
             if isinstance(item, dict)
         ]
-        return {"conversationId": conversation_id, "turns": turns, "nextBeforeId": None}
+        next_cursor = result.get("nextCursor")
+        try:
+            next_after_sequence = int(next_cursor) if next_cursor is not None else None
+        except (TypeError, ValueError):
+            next_after_sequence = None
+        return {
+            "conversationId": conversation_id,
+            "turns": turns,
+            "nextAfterSequence": next_after_sequence,
+        }
 
     def send_conversation_message(
         self, text: str, *, conversation_id: str = "desktop-default"
@@ -157,14 +168,6 @@ class CoreApiClient:
                 if isinstance(event, dict):
                     events.append(event)
             return events
-        result = self._request(
-            "POST",
-            "/api/assistant/route",
-            json={"text": text, "conversationId": conversation_id},
-        )
-        if not isinstance(result, dict):
-            raise RuntimeError("Core returned an invalid assistant response")
-        return result
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -34,15 +34,16 @@ class ChatHistoryClient:
             "updatedAt": "2026-10-15T00:00:00+00:00",
         }]
 
-    def get_conversation(self, conversation_id="desktop-default", *, limit=100, before_id=None):
+    def get_conversation(self, conversation_id="desktop-default", *, limit=100, after_sequence=0):
         assert conversation_id == "desktop-default"
+        assert after_sequence == 0
         return {
             "conversationId": conversation_id,
             "turns": [
                 {"id": 1, "role": "user", "content": "첫 명령", "createdAt": "now"},
                 {"id": 2, "role": "assistant", "content": "로컬 답변", "createdAt": "now"},
             ],
-            "nextBeforeId": None,
+            "nextAfterSequence": None,
         }
 
     def send_conversation_message(self, text, *, conversation_id="desktop-default"):

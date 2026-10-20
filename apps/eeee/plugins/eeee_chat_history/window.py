@@ -45,7 +45,7 @@ class ChatHistoryWindow(QWidget):
         super().__init__()
         self.client = client
         self.conversation_id = conversation_id
-        self._next_before_id: int | None = None
+        self._next_after_sequence: int | None = None
         self._turns: list[dict[str, object]] = []
         self._loading = False
         self._active_task: _Task | None = None
@@ -91,10 +91,10 @@ class ChatHistoryWindow(QWidget):
         self.conversations.currentItemChanged.connect(self._conversation_selected)
         root.addWidget(self.conversations)
 
-        self.older_button = QPushButton("이전 메시지 더 보기")
-        self.older_button.clicked.connect(self._load_older)
-        self.older_button.setVisible(False)
-        root.addWidget(self.older_button)
+        self.more_button = QPushButton("다음 메시지 더 보기")
+        self.more_button.clicked.connect(self._load_more)
+        self.more_button.setVisible(False)
+        root.addWidget(self.more_button)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -214,34 +214,36 @@ class ChatHistoryWindow(QWidget):
             self._apply_conversation,
         )
 
-    def _load_older(self) -> None:
-        if self._next_before_id is None:
+    def _load_more(self) -> None:
+        if self._next_after_sequence is None:
             return
         self._run(
             lambda: self.client.get_conversation(
-                self.conversation_id, limit=100, before_id=self._next_before_id
+                self.conversation_id,
+                limit=100,
+                after_sequence=self._next_after_sequence,
             ),
-            self._prepend_conversation,
+            self._append_conversation,
         )
 
     def _apply_conversation(self, value: object) -> None:
         data = value if isinstance(value, dict) else {}
         turns = data.get("turns", [])
-        self._next_before_id = self._optional_int(data.get("nextBeforeId"))
+        self._next_after_sequence = self._optional_int(data.get("nextAfterSequence"))
         self._turns = self._normalize_turns(turns if isinstance(turns, list) else [])
         self._render_turns(self._turns)
-        self.older_button.setVisible(self._next_before_id is not None)
+        self.more_button.setVisible(self._next_after_sequence is not None)
         self.status.setText("대화 기록")
         self.refresh_button.setEnabled(True)
 
-    def _prepend_conversation(self, value: object) -> None:
+    def _append_conversation(self, value: object) -> None:
         data = value if isinstance(value, dict) else {}
         turns = data.get("turns", [])
-        self._next_before_id = self._optional_int(data.get("nextBeforeId"))
+        self._next_after_sequence = self._optional_int(data.get("nextAfterSequence"))
         if isinstance(turns, list):
-            self._turns = self._normalize_turns(turns) + self._turns
+            self._turns += self._normalize_turns(turns)
             self._render_turns(self._turns)
-        self.older_button.setVisible(self._next_before_id is not None)
+        self.more_button.setVisible(self._next_after_sequence is not None)
 
     def _render_turns(self, turns: list[object]) -> None:
         while self.transcript_layout.count():

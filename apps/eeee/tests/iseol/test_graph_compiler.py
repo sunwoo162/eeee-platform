@@ -38,7 +38,7 @@ def test_compiler_builds_native_pipeline_without_unrelated_connectors() -> None:
     assert {node.phase for node in graph.agents} >= {
         "intake", "definition", "requirements", "content", "information_architecture",
         "ux", "ui", "technical_design", "environment", "implementation", "testing",
-        "release", "operations",
+        "release", "operations", "improvement",
     }
     assert "gmail" not in graph.context["selectedExtensions"]
     assert graph.context["selectedExtensions"] == ["meal-planner"]
@@ -47,6 +47,9 @@ def test_compiler_builds_native_pipeline_without_unrelated_connectors() -> None:
     assert graph.by_id("frontend").validators
     assert "backend" not in {node.id for node in graph.agents}
     assert graph.by_id("integration").role == "integration"
+    assert graph.by_id("release").dependencies == ["integration"]
+    assert graph.by_id("operations").dependencies == ["release"]
+    assert graph.by_id("improvement").dependencies == ["operations"]
 
 
 def test_compiler_rejects_duplicate_or_cyclic_catalog() -> None:

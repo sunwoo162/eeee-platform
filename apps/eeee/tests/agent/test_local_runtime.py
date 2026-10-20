@@ -60,6 +60,51 @@ def test_local_runtime_blocks_path_escape_and_does_not_write(tmp_path):
     assert not (tmp_path.parent / "outside.txt").exists()
 
 
+def test_local_runtime_does_not_complete_after_a_failed_command(tmp_path):
+    existing = tmp_path / "src" / "existing.js"
+    existing.parent.mkdir()
+    existing.write_text("before", encoding="utf-8")
+    backend = ScriptedBackend([
+        LocalModelResponse(
+            summary="변경 후 검증",
+            actions=[
+                LocalAction(kind="write", path="src/existing.js", content="after"),
+                LocalAction(kind="write", path="src/new.js", content="new"),
+                LocalAction(kind="run", argv=["python", "-c", "raise SystemExit(3)"]),
+            ],
+            done=True,
+        )
+    ])
+    runtime = LocalAgentRuntime(backend=backend, workspace_root=tmp_path)
+
+    result = runtime.run(request(tmp_path))
+
+    assert result.status == "failed"
+    assert "failed" in (result.error or "").lower()
+    assert existing.read_text(encoding="utf-8") == "before"
+    assert not (tmp_path / "src" / "new.js").exists()
+    assert result.changed_files == []
+
+
+def test_local_runtime_rolls_back_when_reasoning_reaches_step_limit(tmp_path):
+    backend = ScriptedBackend([
+        LocalModelResponse(
+            summary="아직 진행 중",
+            actions=[LocalAction(kind="write", path="src/partial.js", content="partial")],
+            done=False,
+            next_prompt="계속 진행해",
+        )
+    ])
+    runtime = LocalAgentRuntime(backend=backend, workspace_root=tmp_path, max_steps=1)
+
+    result = runtime.run(request(tmp_path))
+
+    assert result.status == "failed"
+    assert "maximum local reasoning steps" in (result.error or "").lower()
+    assert not (tmp_path / "src" / "partial.js").exists()
+    assert result.changed_files == []
+
+
 def test_ollama_backend_converts_local_json_response(monkeypatch, tmp_path):
     class Response:
         def raise_for_status(self):

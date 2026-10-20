@@ -1,9 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { chromium } from "playwright-core";
 import { createPlaywrightBrowserBackend, extractAssistantDomText, getAssistantTextReadDiagnostic } from "../src/chatgpt-web/playwright-browser-backend.js";
 import { parsePatchFrameV1 } from "../src/chatgpt-web/playwright-browser-driver.js";
 
 const config = { enabled: true as const, profileRoot: "C:\\temp\\chatgpt-profile", headless: true };
+
+test("backend rejects a non-loopback CDP endpoint before attempting a connection", async () => {
+  const originalConnectOverCDP = chromium.connectOverCDP;
+  let connectAttempts = 0;
+  chromium.connectOverCDP = async () => {
+    connectAttempts += 1;
+    throw new Error("network connection must not be attempted");
+  };
+  try {
+    await assert.rejects(
+      () => createPlaywrightBrowserBackend({ ...config, cdpUrl: "http://example.com:9222" }),
+      /CDP.*loopback/i,
+    );
+    assert.equal(connectAttempts, 0);
+  } finally {
+    chromium.connectOverCDP = originalConnectOverCDP;
+  }
+});
 
 test("assistant DOM extraction removes controls while preserving rendered response text", () => {
   const removed: string[] = [];

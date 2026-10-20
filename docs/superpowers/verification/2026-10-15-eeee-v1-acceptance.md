@@ -180,3 +180,27 @@ Results:
 - Desktop persistence: `C:\Users\user\AppData\Local\Gleave\config.json`
   stores Web GPT enabled/autostart settings and the dedicated profile path;
   `connect_desktop_api()` loaded that profile and returned Core health `ok`.
+
+## Release stabilization verification — 2026-10-20
+
+The current `origin/main` head (`acc8ab8`) was verified from the clean
+`codex/release-baseline` worktree after installing the same Python and npm
+dependencies used by CI. This section supersedes the older result counts above
+for the current head; older sections remain historical evidence.
+
+- `scripts/verify-all.ps1 -Full`: EEEE `958 passed, 1 skipped, 1 warning` in
+  `213.94s`; ISEOL `25/25`; ClaimLatch adapter `5/5`; Mobile `1/1`; unified
+  verification passed.
+- `scripts/verify-core-product.ps1`: `375 passed, 1 warning` in `142.03s`;
+  static UI checks `2/2`; strict UTF-8 and `git diff --check` passed.
+- Focused plugin lifecycle suite (`tests/plugins`): `75 passed, 1 warning` in
+  `5.27s`.
+- `scripts/build-desktop.ps1` produced `build/desktop/GleaveDesktop.exe`;
+  packaged `--self-test` and `--gui-self-test` both returned exit code `0`.
+  Two additional packaged `--self-test` runs also returned `0` and `0`.
+- The worktree remained clean after verification; build output, Python cache,
+  and dependency directories remained ignored and were not included in Git.
+
+The only warning in these runs is the installed Starlette/httpx compatibility
+warning. No new live external connector OAuth session, external mail send, or
+live provider generation is claimed by this deterministic verification.

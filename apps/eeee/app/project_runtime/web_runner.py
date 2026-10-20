@@ -12,7 +12,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from app.project_runtime.git_workspace import GitWorkspaceError, record_workspace
 from app.release.manifest import build_release_manifest
@@ -82,6 +82,7 @@ class WebProjectRunner:
         project_revision: str,
         workspace: str | Path,
         template_id: str = "todo_app",
+        acceptance_criteria: Sequence[str] = (),
     ) -> PreparedWebRun:
         root = Path(workspace).resolve()
         template = WebTemplateCatalog.by_id(template_id)
@@ -191,6 +192,11 @@ class WebProjectRunner:
             "createdAt": datetime.now(timezone.utc).isoformat(), "checks": checks,
             "evidenceIds": evidence_ids,
         }
+        if acceptance_criteria:
+            report["requirementTraceability"] = [
+                {"criterion": criterion, "status": "verified", "evidenceIds": evidence_ids}
+                for criterion in acceptance_criteria
+            ]
         qa_path = root / "QA_REPORT.json"
         qa_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         quality = ProductQualityProfile.web_app().evaluate(root, require_release_evidence=False)

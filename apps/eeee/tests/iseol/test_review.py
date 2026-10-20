@@ -52,7 +52,14 @@ def _qa() -> dict[str, object]:
         "status": "PASS",
         "independent": True,
         "evidenceIds": ["qa-evidence-1"],
-        "checks": [{"name": "e2e", "status": "passed"}],
+        "requirementTraceability": [
+            {
+                "criterion": "핵심 화면이 실행됨",
+                "status": "verified",
+                "evidenceIds": ["qa-evidence-1"],
+            }
+        ],
+        "checks": [{"name": "e2e", "status": "passed", "evidenceId": "qa-evidence-1"}],
     }
 
 
@@ -120,3 +127,44 @@ def test_missing_required_extension_forces_replan_grade(tmp_path) -> None:
     )
 
     assert report.grade == "revision_required"
+
+
+def test_rollback_word_without_recovery_procedure_does_not_count_as_evidence(tmp_path) -> None:
+    _workspace(tmp_path)
+    (tmp_path / "DEPLOYMENT.md").write_text("# 운영\nrollback\n", encoding="utf-8")
+
+    report = ProjectQualityEvaluator().evaluate(
+        tmp_path, _intent(), _plan(), _qa(),
+        {"decision": "PASS", "receiptId": "receipt-1", "claimLatchReportId": "report-1"},
+    )
+
+    assert "Rollback evidence is missing" in report.blockers
+
+
+def test_requirement_traceability_must_be_verified_by_qa_evidence(tmp_path) -> None:
+    _workspace(tmp_path)
+    qa = _qa()
+    qa.pop("requirementTraceability")
+
+    report = ProjectQualityEvaluator().evaluate(
+        tmp_path, _intent(), _plan(), qa,
+        {"decision": "PASS", "receiptId": "receipt-1", "claimLatchReportId": "report-1"},
+    )
+
+    assert "Requirement traceability evidence is missing" in report.blockers
+    assert report.requirement_traceability == [
+        {"criterion": "핵심 화면이 실행됨", "status": "unverified", "evidenceIds": []}
+    ]
+
+
+def test_final_report_preserves_retry_evidence(tmp_path) -> None:
+    _workspace(tmp_path)
+    qa = _qa()
+    qa["retries"] = [{"agentId": "frontend", "attempt": 2, "reason": "first attempt failed"}]
+
+    report = ProjectQualityEvaluator().evaluate(
+        tmp_path, _intent(), _plan(), qa,
+        {"decision": "PASS", "receiptId": "receipt-1", "claimLatchReportId": "report-1"},
+    )
+
+    assert report.retries == qa["retries"]

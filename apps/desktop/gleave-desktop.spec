@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
@@ -27,7 +28,15 @@ hiddenimports.extend(collect_submodules("pydantic_settings"))
 pyside_binaries = collect_dynamic_libs("PySide6")
 shiboken_binaries = collect_dynamic_libs("shiboken6")
 shiboken_dll = next(source for source, _ in shiboken_binaries if Path(source).name == "shiboken6.abi3.dll")
-binaries = [*pyside_binaries, *shiboken_binaries, (shiboken_dll, "PySide6")]
+node_executable = shutil.which("node")
+if not node_executable:
+    raise SystemExit("Node.js is required to package the ChatGPT Web bridge runtime.")
+binaries = [
+    *pyside_binaries,
+    *shiboken_binaries,
+    (shiboken_dll, "PySide6"),
+    (node_executable, "chatgpt-runtime"),
+]
 
 a = Analysis(
     [str(eeee_root / "app" / "desktop" / "__main__.py")],

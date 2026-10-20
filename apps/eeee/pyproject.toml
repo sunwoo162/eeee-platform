@@ -42,7 +42,8 @@ testpaths = ["tests"]
 addopts = "--import-mode=importlib"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app*", "plugins*"]
 
 [tool.setuptools.package-data]
 app = ["static/*"]
+plugins = ["*.json"]

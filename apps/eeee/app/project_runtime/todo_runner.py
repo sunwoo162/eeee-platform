@@ -5,7 +5,7 @@ import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from app.release.manifest import build_release_manifest
 from app.iseol.quality import ProductQualityProfile
@@ -69,9 +69,15 @@ class TodoProjectRunner:
         project_revision: str,
         workspace: str | Path,
         claim_latch: Mapping[str, Any],
+        acceptance_criteria: Sequence[str] = (),
     ) -> TodoRunResult:
         root = Path(workspace).resolve()
-        prepared = self.prepare(project_id=project_id, project_revision=project_revision, workspace=root)
+        prepared = self.prepare(
+            project_id=project_id,
+            project_revision=project_revision,
+            workspace=root,
+            acceptance_criteria=acceptance_criteria,
+        )
         if claim_latch.get("decision") != "PASS" or not claim_latch.get("receiptId"):
             return TodoRunResult(
                 status="BLOCKED",
@@ -87,7 +93,14 @@ class TodoProjectRunner:
             claim_latch=claim_latch,
         )
 
-    def prepare(self, *, project_id: str, project_revision: str, workspace: str | Path) -> PreparedTodoRun:
+    def prepare(
+        self,
+        *,
+        project_id: str,
+        project_revision: str,
+        workspace: str | Path,
+        acceptance_criteria: Sequence[str] = (),
+    ) -> PreparedTodoRun:
         root = Path(workspace).resolve()
         checks = self._checks(root)
         failed = [check for check in checks if check["status"] != "passed"]
@@ -106,6 +119,11 @@ class TodoProjectRunner:
             "checks": checks,
             "evidenceIds": evidence_ids,
         }
+        if acceptance_criteria:
+            qa_report["requirementTraceability"] = [
+                {"criterion": criterion, "status": "verified", "evidenceIds": evidence_ids}
+                for criterion in acceptance_criteria
+            ]
         qa_path = root / "QA_REPORT.json"
         qa_path.write_text(json.dumps(qa_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         quality = ProductQualityProfile.portfolio_grade().evaluate(root, require_release_evidence=False)

@@ -5,10 +5,23 @@ import pytest
 
 from app.plugins.oauth import (
     OAuthBroker,
+    OAuthError,
     OAuthCancelled,
     OAuthProviderConfig,
     OAuthStateMismatch,
 )
+
+
+def test_oauth_rejects_approved_permissions_without_scope_mapping() -> None:
+    config = OAuthProviderConfig(
+        authorizationEndpoint="https://provider.example/authorize",
+        tokenEndpoint="https://provider.example/token",
+        clientId="public-client",
+        scopes=["read", "write"],
+    )
+
+    with pytest.raises(OAuthError, match="scopes are not configured"):
+        config.scopes_for_permissions({"read"})
 
 
 class FakeOAuthTransport:

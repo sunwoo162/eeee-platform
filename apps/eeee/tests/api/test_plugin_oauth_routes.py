@@ -51,6 +51,7 @@ def _application(tmp_path, connector=None):
                 tokenEndpoint="https://provider.example/token",
                 clientId="public-client",
                 scopes=["pages.read"],
+                scopeByPermission={"pages.read": ["pages.read"]},
             )
         },
     )

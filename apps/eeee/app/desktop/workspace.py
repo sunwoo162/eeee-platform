@@ -395,7 +395,10 @@ class WorkspaceWindow:
                     self._set_plugin_hint(f"플러그인 파일을 찾지 못했어: {entrypoint}")
                     return
                 base_url = str(getattr(self.client, "base_url", "http://127.0.0.1:8000"))
-                conversation_id = "desktop-default"
+                # The history plugin resolves the current canonical conversation
+                # from /v1/conversations.  Do not send the retired memory-store
+                # sentinel here; it would split the transcript into two stores.
+                conversation_id = ""
                 if getattr(sys, "frozen", False):
                     command = [
                         sys.executable,

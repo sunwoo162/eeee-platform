@@ -41,7 +41,7 @@ class _Task(QRunnable):
 class ChatHistoryWindow(QWidget):
     """A separate, bounded chat surface backed by EEEE Core conversation APIs."""
 
-    def __init__(self, client: Any, *, conversation_id: str = "desktop-default"):
+    def __init__(self, client: Any, *, conversation_id: str = ""):
         super().__init__()
         self.client = client
         self.conversation_id = conversation_id
@@ -115,6 +115,7 @@ class ChatHistoryWindow(QWidget):
         composer = QHBoxLayout()
         self.input = QLineEdit()
         self.input.setPlaceholderText("EEEE에게 메시지 보내기")
+        self.input.setMaxLength(50_000)
         self.input.returnPressed.connect(self._send)
         composer.addWidget(self.input, 1)
         self.send_button = QPushButton("보내기")
@@ -305,6 +306,10 @@ class ChatHistoryWindow(QWidget):
 
     def _send_finished(self, text: str, result: object) -> None:
         self.send_button.setEnabled(True)
+        if isinstance(result, dict):
+            conversation_id = result.get("conversationId")
+            if isinstance(conversation_id, str) and conversation_id:
+                self.conversation_id = conversation_id
         self._turns.append({"role": "user", "content": text})
         self._add_bubble("user", text)
         if isinstance(result, dict):

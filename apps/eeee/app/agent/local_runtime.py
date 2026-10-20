@@ -176,6 +176,8 @@ class LocalAgentRuntime:
         events: list[dict[str, object]] = []
         changed_files: list[str] = []
         test_commands: list[str] = []
+        snapshots: dict[Path, bytes | None] = {}
+        created_directories: list[Path] = []
         context: list[dict[str, object]] = []
         prompt = self._initial_prompt(request)
         try:
@@ -184,7 +186,14 @@ class LocalAgentRuntime:
                 context.append({"step": step, "summary": response.summary})
                 for action in response.actions:
                     observation = self._apply_action(
-                        action, request, workspace, events, changed_files, test_commands
+                        action,
+                        request,
+                        workspace,
+                        events,
+                        changed_files,
+                        test_commands,
+                        snapshots,
+                        created_directories,
                     )
                     context.append(observation)
                 if response.done or any(action.kind == "finish" for action in response.actions):
@@ -193,23 +202,42 @@ class LocalAgentRuntime:
                         changed_files=changed_files, test_commands=test_commands, error=None,
                     )
                 prompt = response.next_prompt or "Review the observations, continue the task, and return the next structured action."
+            self._rollback(workspace, snapshots, created_directories)
+            changed_files.clear()
+            events.append({"type": "rollback", "reason": "step_limit"})
             return AgentResult(
                 status="failed", summary="Local agent reached its step limit", events=events,
                 changed_files=changed_files, test_commands=test_commands,
                 error=f"maximum local reasoning steps exceeded: {self.max_steps}",
             )
         except (ValueError, WorkspaceExecutionBlocked, OSError) as exc:
+            self._rollback(workspace, snapshots, created_directories)
+            changed_files.clear()
+            events.append({"type": "rollback", "reason": str(exc)})
             return AgentResult(
                 status="failed", summary="Local agent action was blocked", events=events,
                 changed_files=changed_files, test_commands=test_commands, error=str(exc),
             )
         except Exception as exc:
+            self._rollback(workspace, snapshots, created_directories)
+            changed_files.clear()
+            events.append({"type": "rollback", "reason": str(exc)})
             return AgentResult(
                 status="failed", summary="Local agent runtime failed", events=events,
                 changed_files=changed_files, test_commands=test_commands, error=str(exc),
             )
 
-    def _apply_action(self, action, request, workspace, events, changed_files, test_commands):
+    def _apply_action(
+        self,
+        action,
+        request,
+        workspace,
+        events,
+        changed_files,
+        test_commands,
+        snapshots,
+        created_directories,
+    ):
         if action.kind == "finish":
             return {"type": "finish"}
         if action.kind == "read":
@@ -222,7 +250,15 @@ class LocalAgentRuntime:
             if action.content is None:
                 raise ValueError("write action requires content")
             path = self._safe_path(workspace, action.path)
+            if path not in snapshots:
+                snapshots[path] = path.read_bytes() if path.is_file() else None
+            missing_parents = []
+            parent = path.parent
+            while parent != workspace and not parent.exists():
+                missing_parents.append(parent)
+                parent = parent.parent
             path.parent.mkdir(parents=True, exist_ok=True)
+            created_directories.extend(reversed(missing_parents))
             path.write_text(action.content, encoding="utf-8", newline="\n")
             relative = self._relative(workspace, path)
             if relative not in changed_files:
@@ -240,8 +276,30 @@ class LocalAgentRuntime:
             events.append({"type": "command", "command": command, "status": result.status,
                            "stdout": result.stdout, "stderr": result.stderr,
                            "evidenceId": self._evidence_id(command, result.stdout + result.stderr)})
+            if result.status != "passed":
+                detail = result.stderr.strip() or result.stdout.strip() or result.status
+                raise ValueError(f"test command failed: {command}: {detail}")
             return {"type": "run", "command": command, "status": result.status, "stdout": result.stdout, "stderr": result.stderr}
         raise ValueError(f"unsupported local action: {action.kind}")
+
+    @staticmethod
+    def _rollback(workspace, snapshots, created_directories) -> None:
+        for path, content in reversed(list(snapshots.items())):
+            try:
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(content)
+            except OSError:
+                # Preserve the original failure. The failed result still
+                # carries the rollback event so the caller can investigate.
+                continue
+        for directory in reversed(created_directories):
+            try:
+                directory.rmdir()
+            except OSError:
+                continue
 
     @staticmethod
     def _initial_prompt(request: AgentRequest) -> str:

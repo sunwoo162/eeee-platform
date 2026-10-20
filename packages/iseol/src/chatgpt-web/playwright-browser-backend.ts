@@ -1,7 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { PlaywrightBrowserDriverConfig } from "./playwright-browser-config.js";
+import { assertLoopbackCdpUrl, type PlaywrightBrowserDriverConfig } from "./playwright-browser-config.js";
 import { withDurableFileStateLock } from "../services/file-state-lock.js";
 
 export interface PlaywrightBrowserBackend {
@@ -158,6 +158,7 @@ export async function createPlaywrightBrowserBackend(
   let ownsContext = true;
   let context: BrowserContext;
   if (config.cdpUrl) {
+    assertLoopbackCdpUrl(config.cdpUrl);
     connectedBrowser = await chromium.connectOverCDP(config.cdpUrl);
     context = connectedBrowser.contexts()[0] ?? await connectedBrowser.newContext();
     ownsContext = false;

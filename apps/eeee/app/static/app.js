@@ -382,6 +382,12 @@ function renderEeeePluginStatus(plugins) {
     description.className = "eeee-plugin-description";
     description.textContent = plugin.description || "설치 가능한 EEEE 플러그인";
     details.append(name, description);
+    if (plugin.setupMessage) {
+      const setupMessage = document.createElement("small");
+      setupMessage.className = "plugin-setup-message";
+      setupMessage.textContent = plugin.setupMessage;
+      details.append(setupMessage);
+    }
     const status = document.createElement("span");
     status.className = `plugin-status plugin-status-${plugin.status || "unknown"}`;
     status.textContent = labels[plugin.status] || plugin.status || "확인 필요";
@@ -395,7 +401,9 @@ function renderEeeePluginStatus(plugins) {
     } else {
       const action = document.createElement("span");
       action.className = "plugin-next-action";
-      action.textContent = plugin.nextAction === "configure" ? "연결 설정 준비 중" : "";
+      action.textContent = plugin.nextAction === "configure"
+        ? (plugin.setupMessage || "연결 설정 필요")
+        : "";
       item.append(details, status, action);
     }
     (plugin.status === "not_installed" ? availableList : installedList).append(item);

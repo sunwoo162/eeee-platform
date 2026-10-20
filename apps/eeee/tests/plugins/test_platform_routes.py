@@ -49,6 +49,8 @@ def test_catalog_install_connect_and_disconnect_are_redacted_and_user_scoped(tmp
     catalog = client.get("/api/plugins/catalog").json()
     notion = next(item for item in catalog if item["id"] == "notion")
     assert notion["status"] == "not_installed"
+    assert notion["setupStatus"] == "ready"
+    assert notion["setupMessage"] == "설치 후 계정을 연결할 수 있습니다."
     assert notion["nextAction"] == "install"
     assert [field["key"] for field in notion["credentialFields"]] == ["token", "parentPageId"]
     assert [item["defaultApproved"] for item in notion["permissionDetails"]] == [True, False]
@@ -110,6 +112,76 @@ def test_install_is_local_and_does_not_require_provider_connector(tmp_path) -> N
     assert gmail["nextAction"] == "configure"
 
 
+def test_catalog_reports_missing_oauth_configuration_before_install(tmp_path) -> None:
+    client = TestClient(_application(tmp_path))
+
+    gmail = next(item for item in client.get("/api/plugins/catalog").json() if item["id"] == "gmail")
+
+    assert gmail["status"] == "not_installed"
+    assert gmail["setupStatus"] == "provider_configuration_required"
+    assert gmail["setupMessage"] == "OAuth 제공자 설정이 필요합니다."
+    assert gmail["nextAction"] == "install"
+
+
+def test_catalog_reports_missing_connector_when_oauth_configuration_exists(tmp_path) -> None:
+    application = create_app(Settings(
+        data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+        plugin_provider_config_json=(
+            '{"gmail": {"baseUrl": "https://gmail.example", "oauth": {'
+            '"authorizationEndpoint": "https://accounts.example/authorize", '
+            '"tokenEndpoint": "https://accounts.example/token", '
+            '"clientId": "public-client", "scopes": ["mail.read"]}}}'
+        ),
+    ))
+    application.state.plugin_platform.connectors.pop("gmail")
+    client = TestClient(application)
+
+    gmail = next(item for item in client.get("/api/plugins/catalog").json() if item["id"] == "gmail")
+
+    assert gmail["setupStatus"] == "connector_unavailable"
+    assert gmail["setupMessage"] == "플러그인 connector를 사용할 수 없습니다."
+    assert gmail["nextAction"] == "install"
+    assert "public-client" not in client.get("/api/plugins/catalog").text
+
+
+def test_catalog_marks_configured_connector_ready_before_install(tmp_path) -> None:
+    application = create_app(Settings(
+        data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+        plugin_provider_config_json=(
+            '{"gmail": {"baseUrl": "https://gmail.example", "oauth": {'
+            '"authorizationEndpoint": "https://accounts.example/authorize", '
+            '"tokenEndpoint": "https://accounts.example/token", '
+            '"clientId": "public-client", "scopes": ["mail.read"]}}}'
+        ),
+    ))
+    client = TestClient(application)
+
+    gmail = next(item for item in client.get("/api/plugins/catalog").json() if item["id"] == "gmail")
+
+    assert gmail["setupStatus"] == "ready"
+    assert gmail["setupMessage"] == "설치 후 계정을 연결할 수 있습니다."
+    assert gmail["status"] == "not_installed"
+    assert gmail["nextAction"] == "install"
+
+
+def test_catalog_does_not_report_connected_when_oauth_setup_is_missing(tmp_path) -> None:
+    application = _application(tmp_path)
+    application.state.plugin_platform.connectors["gmail"] = HealthyGmailConnector()
+    platform = application.state.plugin_platform
+    platform.install("gmail")
+    platform.connect("local-user", "gmail", {"mail.read"}, {"access_token": "token"}, None)
+    client = TestClient(application)
+
+    gmail = next(item for item in client.get("/api/plugins/catalog").json() if item["id"] == "gmail")
+
+    assert gmail["setupStatus"] == "provider_configuration_required"
+    assert gmail["status"] == "disabled"
+    assert gmail["status"] != "connected"
+    assert gmail["nextAction"] == "configure"
+
+
 def test_install_and_uninstall_are_local_only(tmp_path) -> None:
     from fastapi import HTTPException
     from starlette.requests import Request
@@ -128,6 +200,8 @@ def test_chat_history_is_installed_from_the_catalog_and_can_be_launched(tmp_path
     catalog = client.get("/api/plugins/catalog").json()
     history = next(item for item in catalog if item["id"] == "eeee-chat-history")
     assert history["status"] == "not_installed"
+    assert history["setupStatus"] == "not_required"
+    assert history["setupMessage"] == "추가 제공자 설정이 필요하지 않습니다."
     assert history["nextAction"] == "install"
 
     installed = client.post("/api/plugins/eeee-chat-history/install")

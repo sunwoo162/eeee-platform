@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from app.plugins.catalog import CredentialField, PermissionDetail
@@ -39,6 +41,10 @@ class PluginCatalogView(BaseModel):
     install_source: str = Field(alias="installSource")
     default_installed: bool = Field(alias="defaultInstalled")
     status: str
+    setup_status: Literal[
+        "ready", "provider_configuration_required", "connector_unavailable", "not_required"
+    ] = Field(alias="setupStatus")
+    setup_message: str = Field(alias="setupMessage")
     next_action: str = Field(alias="nextAction")
 
 

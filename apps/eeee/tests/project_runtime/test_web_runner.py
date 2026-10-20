@@ -1,12 +1,17 @@
 import json
+import shutil
 import socket
+import subprocess
 import urllib.error
 import urllib.request
 from urllib.parse import quote
+from pathlib import Path
+
+import pytest
 
 from app.project_runtime.web_scaffold import create_web_app_scaffold
 from app.project_runtime.meal_planner_scaffold import MealPlannerTemplate
-from app.project_runtime.web_runner import WebProjectRunner
+from app.project_runtime.web_runner import BrowserUIE2ERunner, WebProjectRunner
 
 
 def _port() -> int:
@@ -189,3 +194,127 @@ def test_web_runner_records_acceptance_criteria_against_qa_evidence(tmp_path):
     assert trace[0]["criterion"] == "핵심 화면이 실행됨"
     assert trace[0]["status"] == "verified"
     assert trace[0]["evidenceIds"] == prepared.qa_report["evidenceIds"]
+
+
+def test_web_runner_runs_browser_before_api_session_smoke(tmp_path):
+    root = tmp_path / "web-project"
+    create_web_app_scaffold(root, "Todo Web")
+
+    class FreshBrowserUIE2ERunner:
+        def run(self, *, url, workspace, template_id):
+            status, _ = _request(url + "/api/session")
+            assert status == 401
+            return {
+                "name": "browser:ui-e2e",
+                "status": "passed",
+                "evidenceId": "evidence-browser-fresh-session",
+                "path": str(workspace),
+                "detail": "browser login starts from an unauthenticated session",
+            }
+
+    prepared = WebProjectRunner(browser_ui_runner=FreshBrowserUIE2ERunner()).prepare(
+        project_id="project-web",
+        project_revision="rev-1",
+        workspace=root,
+    )
+
+    assert prepared.qa_report["browserVerification"] == "PASS"
+
+
+def test_browser_ui_e2e_script_asserts_state_not_only_element_presence():
+    script = BrowserUIE2ERunner._SCRIPT
+
+    assert "isChecked()" in script
+    assert "count()" in script
+    assert "waitFor({ state: 'detached' })" in script
+    assert "waitForFunction" in script
+
+
+def test_browser_ui_e2e_rejects_non_local_url(tmp_path):
+    runner = BrowserUIE2ERunner(
+        playwright_core=tmp_path / "missing-playwright-core",
+        chrome_executable=tmp_path / "missing-chrome.exe",
+        node_executable=tmp_path / "missing-node.exe",
+    )
+
+    result = runner.run(
+        url="http://localhost:8787@attacker.example",
+        workspace=tmp_path,
+        template_id="todo_app",
+    )
+
+    assert result["status"] == "failed"
+
+
+def test_web_runner_records_available_browser_ui_e2e_evidence(tmp_path):
+    root = tmp_path / "web-project"
+    create_web_app_scaffold(root, "Todo Web")
+
+    class StubBrowserUIE2ERunner:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, *, url, workspace, template_id):
+            self.calls.append((url, workspace, template_id))
+            return {
+                "name": "browser:ui-e2e",
+                "status": "passed",
+                "evidenceId": "evidence-browser-ui-pass",
+                "path": str(workspace),
+                "detail": "demo login; todo create/complete; filter; delete; reload persistence; viewports=1440x900,390x844",
+            }
+
+    browser_runner = StubBrowserUIE2ERunner()
+    prepared = WebProjectRunner(browser_ui_runner=browser_runner).prepare(
+        project_id="project-web",
+        project_revision="rev-1",
+        workspace=root,
+    )
+
+    browser_check = next(item for item in prepared.qa_report["checks"] if item["name"] == "browser:ui-e2e")
+    assert browser_check["status"] == "passed"
+    assert browser_check["evidenceId"] == "evidence-browser-ui-pass"
+    assert prepared.qa_report["browserVerification"] == "PASS"
+    assert prepared.qa_report["verificationScope"] == "local-api-static-browser-ui"
+    assert prepared.qa_report["evidenceIds"][-1] == "evidence-browser-ui-pass"
+    assert len(browser_runner.calls) == 1
+    assert browser_runner.calls[0][1:] == (root.resolve(), "todo_app")
+
+
+def test_browser_ui_e2e_runner_reports_not_run_when_local_runtime_is_missing(tmp_path):
+    runner = BrowserUIE2ERunner(
+        playwright_core=tmp_path / "missing-playwright-core",
+        chrome_executable=tmp_path / "missing-chrome.exe",
+        node_executable=tmp_path / "missing-node.exe",
+    )
+
+    result = runner.availability()
+
+    assert result["status"] == "not_run"
+    assert "playwright-core" in result["detail"]
+    assert "Chrome" in result["detail"]
+
+
+
+
+def test_browser_ui_e2e_script_is_valid_for_node(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is not installed")
+    script = tmp_path / "browser-ui-e2e.js"
+    script.write_text(BrowserUIE2ERunner._SCRIPT, encoding="utf-8")
+
+    completed = subprocess.run([node, "--check", str(script)], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_browser_ui_e2e_script_loads_playwright_core_from_node_commonjs():
+    assert "require(process.env.EEEE_PLAYWRIGHT_CORE)" in BrowserUIE2ERunner._SCRIPT
+    assert BrowserUIE2ERunner._SCRIPT.lstrip().startswith("(async () => {")
+
+
+def test_browser_ui_e2e_runner_uses_repository_playwright_core_path():
+    expected = Path(__file__).resolve().parents[4] / "packages" / "iseol" / "node_modules" / "playwright-core"
+
+    assert BrowserUIE2ERunner._default_playwright_core() == expected

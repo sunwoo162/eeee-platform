@@ -20,6 +20,7 @@ def test_web_control_center_has_plugin_status_surface(tmp_path) -> None:
     assert "renderEeeePluginStatus" in script
     assert "eeee-plugin-search" in script
     assert 'nextActionLabels = { install: "설치"' in script
+    assert "setupMessage" in script
     assert "/oauth/start" in script
     assert "approvedPermissions" in script
     assert "plugin-action" in script

@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 from collections.abc import Mapping
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -78,6 +79,15 @@ _GENERIC_PLUGIN_ACTIONS: dict[str, tuple[dict[str, object], ...]] = {
 }
 
 _FIRST_PARTY_UI_PLUGIN_IDS = {"eeee-chat-history"}
+PluginSetupStatus = Literal[
+    "ready", "provider_configuration_required", "connector_unavailable", "not_required"
+]
+_PLUGIN_SETUP_MESSAGES: dict[PluginSetupStatus, str] = {
+    "ready": "설치 후 계정을 연결할 수 있습니다.",
+    "provider_configuration_required": "OAuth 제공자 설정이 필요합니다.",
+    "connector_unavailable": "플러그인 connector를 사용할 수 없습니다.",
+    "not_required": "추가 제공자 설정이 필요하지 않습니다.",
+}
 
 
 class PluginInstallationView(BaseModel):
@@ -121,6 +131,26 @@ class PluginPlatformService:
 
     def catalog(self) -> list[PluginCatalogEntry]:
         return self.catalog_source.list()
+
+    def setup_diagnostic(
+        self, plugin_id: str, *, oauth_configured: bool
+    ) -> tuple[PluginSetupStatus, str]:
+        """Describe whether a catalog entry can be connected safely.
+
+        OAuth configuration is intentionally represented only as a boolean;
+        provider URLs, client IDs, and secrets never cross this boundary.
+        """
+
+        entry = self.catalog_source.get(plugin_id)
+        if entry.auth_mode == "none":
+            status: PluginSetupStatus = "not_required"
+        elif entry.auth_mode == "oauth" and not oauth_configured:
+            status = "provider_configuration_required"
+        elif entry.connector not in self.connectors:
+            status = "connector_unavailable"
+        else:
+            status = "ready"
+        return status, _PLUGIN_SETUP_MESSAGES[status]
 
     def install(self, plugin_id: str) -> PluginInstallationView:
         entry = self.catalog_source.get(plugin_id)

@@ -319,17 +319,31 @@ def build_plugin_router(
         views = []
         for entry in platform.catalog():
             status = platform.status(entry.id, principal)
-            next_action = {
-                "not_installed": "install",
-                "available": "connect",
-                "awaiting_authentication": "connect",
-                "installed": "configure",
-                "connecting": "wait",
-                "connected": "open",
-                "failed": "reconnect",
-                "paused": "resume",
-                "disabled": "configure",
-            }.get(status, "connect")
+            setup_status, setup_message = platform.setup_diagnostic(
+                entry.id, oauth_configured=entry.id in (oauth_configs or {})
+            )
+            if setup_status in {"provider_configuration_required", "connector_unavailable"}:
+                if status == "not_installed":
+                    # Installation is local and must remain available before the
+                    # operator configures the provider connector.
+                    next_action = "install"
+                elif status == "connected":
+                    status = "disabled"
+                    next_action = "configure"
+                else:
+                    next_action = "configure"
+            else:
+                next_action = {
+                    "not_installed": "install",
+                    "available": "connect",
+                    "awaiting_authentication": "connect",
+                    "installed": "configure",
+                    "connecting": "wait",
+                    "connected": "open",
+                    "failed": "reconnect",
+                    "paused": "resume",
+                    "disabled": "configure",
+                }.get(status, "connect")
             views.append(PluginCatalogView(
                 id=entry.id, name=entry.name, version=entry.version,
                 description=entry.description, authMode=entry.auth_mode,
@@ -337,6 +351,7 @@ def build_plugin_router(
                 permissionDetails=entry.permission_details,
                 installSource=entry.install_source,
                 defaultInstalled=entry.default_installed, status=status,
+                setupStatus=setup_status, setupMessage=setup_message,
                 nextAction=next_action,
             ))
         return views

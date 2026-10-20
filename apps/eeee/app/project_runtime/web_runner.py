@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import signal
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlsplit
 
 from app.project_runtime.git_workspace import GitWorkspaceError, record_workspace
 from app.release.manifest import build_release_manifest
@@ -45,8 +47,286 @@ class WebRunResult:
     git_commit: str | None = None
 
 
+class BrowserUIE2ERunner:
+    """Run the bounded local browser flow when its optional runtime is present."""
+
+    _SCRIPT = r'''
+(async () => {
+const { chromium } = require(process.env.EEEE_PLAYWRIGHT_CORE);
+
+const baseUrl = process.env.EEEE_BROWSER_URL;
+let browser;
+let context;
+
+try {
+  browser = await chromium.launch({
+    headless: true,
+    executablePath: process.env.EEEE_CHROME_EXECUTABLE,
+  });
+  context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}/`, { waitUntil: 'networkidle' });
+  await page.locator('#login').click();
+  const authStatus = page.locator('#auth-status');
+  await authStatus.waitFor();
+  await page.waitForFunction(() => document.querySelector('#auth-status')?.textContent.includes('Demo 로그인'));
+  const initialTodoCount = await page.locator('#todo-list li').count();
+
+  await page.locator('#todo-title').fill('브라우저 점검');
+  await page.locator('#todo-priority').selectOption('high');
+  await page.locator('#todo-tags').fill('e2e');
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith('/api/todos') && response.request().method() === 'POST' && response.status() === 201),
+    page.locator('#todo-form button').click(),
+  ]);
+  await page.waitForFunction((count) => document.querySelectorAll('#todo-list li').length >= count + 1, initialTodoCount);
+  const completedTodo = page.locator('#todo-list li').first();
+  await completedTodo.waitFor();
+  const completedTodoId = await completedTodo.getAttribute('data-id');
+  const completedTodoById = page.locator(`#todo-list li[data-id="${completedTodoId}"]`);
+  const completedCheckbox = completedTodo.locator('input[type="checkbox"]');
+  const updateResponse = page.waitForResponse((response) => response.url().includes('/api/todos/') && response.request().method() === 'PATCH' && response.status() === 200);
+  await completedCheckbox.check();
+  await updateResponse;
+  if (!(await completedCheckbox.isChecked())) {
+    throw new Error('todo completion was not reflected in the browser');
+  }
+
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=completed'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('completed'),
+  ]);
+  await completedTodoById.waitFor();
+  if (!(await completedTodoById.locator('input[type="checkbox"]').isChecked())) {
+    throw new Error('completed filter did not retain the completed todo');
+  }
+
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=all'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('all'),
+  ]);
+  await page.locator('#todo-title').fill('삭제 대상');
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith('/api/todos') && response.request().method() === 'POST' && response.status() === 201),
+    page.locator('#todo-form button').click(),
+  ]);
+  await page.waitForFunction((count) => document.querySelectorAll('#todo-list li').length >= count + 2, initialTodoCount);
+  const deletedTodoId = await page.locator('#todo-list li').first().getAttribute('data-id');
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=active'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('active'),
+  ]);
+  const deletedTodo = page.locator(`#todo-list li[data-id="${deletedTodoId}"]`);
+  await deletedTodo.waitFor();
+  page.once('dialog', async (dialog) => { await dialog.accept(); });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos/') && response.request().method() === 'DELETE' && response.status() === 204),
+    deletedTodo.locator('button.danger').click(),
+  ]);
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=active'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('active'),
+  ]);
+  await deletedTodo.waitFor({ state: 'detached' });
+  await page.reload({ waitUntil: 'networkidle' });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=completed'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('completed'),
+  ]);
+  await completedTodoById.waitFor();
+  if (!(await completedTodoById.locator('input[type="checkbox"]').isChecked())) {
+    throw new Error('completed todo was not persisted after reload');
+  }
+
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.locator('#todo-form').waitFor({ state: 'visible' });
+    if (await page.evaluate(() => window.innerWidth) !== viewport.width) {
+      throw new Error(`viewport mismatch: expected ${viewport.width}`);
+    }
+  }
+} finally {
+  if (context) await context.close();
+  if (browser) await browser.close();
+}
+
+console.log(JSON.stringify({ status: 'passed' }));
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exitCode = 1;
+});
+'''
+
+    def __init__(
+        self,
+        *,
+        playwright_core: str | Path | None = None,
+        chrome_executable: str | Path | None = None,
+        node_executable: str | None = None,
+    ) -> None:
+        self._playwright_core = Path(playwright_core) if playwright_core is not None else None
+        self._chrome_executable = Path(chrome_executable) if chrome_executable is not None else None
+        self._node_executable = node_executable
+
+    def availability(self, workspace: str | Path | None = None) -> dict[str, str]:
+        playwright_core = self._playwright_core or self._default_playwright_core()
+        chrome_executable = self._chrome_executable or self._find_chrome()
+        node_executable = self._node_executable or shutil.which("node")
+        missing = []
+        if not node_executable:
+            missing.append("Node.js")
+        if not playwright_core.is_dir() or not (playwright_core / "package.json").is_file():
+            missing.append("packages/iseol/node_modules/playwright-core")
+        if not chrome_executable or not chrome_executable.is_file():
+            missing.append("system Chrome")
+        if missing:
+            return {
+                "status": "not_run",
+                "detail": "Browser UI E2E NOT_RUN: missing " + ", ".join(missing) + ".",
+            }
+        return {
+            "status": "available",
+            "detail": f"Local browser runtime available: {playwright_core} with {chrome_executable}.",
+        }
+
+    def run(self, *, url: str, workspace: str | Path, template_id: str) -> dict[str, str]:
+        root = Path(workspace).resolve()
+        if template_id != "todo_app":
+            return self._not_run(root, "template does not expose the todo browser contract")
+        parsed = urlsplit(url)
+        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+            return self._failed(root, "Browser UI E2E is restricted to a local URL")
+
+        availability = self.availability(root)
+        if availability["status"] != "available":
+            return self._not_run(root, availability["detail"])
+
+        playwright_core = self._playwright_core or self._default_playwright_core()
+        chrome_executable = self._chrome_executable or self._find_chrome()
+        node_executable = self._node_executable or shutil.which("node")
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "EEEE_BROWSER_URL": url,
+            "EEEE_CHROME_EXECUTABLE": str(chrome_executable),
+            "EEEE_PLAYWRIGHT_CORE": str(playwright_core),
+        }
+        for key in ("TEMP", "TMP", "USERPROFILE", "SYSTEMROOT", "WINDIR", "LOCALAPPDATA"):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
+        process = None
+        process_group_id = None
+        try:
+            process = subprocess.Popen(
+                [str(node_executable), "-e", self._SCRIPT],
+                cwd=root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                start_new_session=os.name != "nt",
+            )
+            if os.name != "nt":
+                try:
+                    process_group_id = os.getpgid(process.pid)
+                except OSError:
+                    process_group_id = None
+            stdout, stderr = process.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            if process is not None:
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        capture_output=True,
+                        check=False,
+                    )
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                else:
+                    try:
+                        if process_group_id is not None:
+                            os.killpg(process_group_id, signal.SIGKILL)
+                        else:
+                            process.kill()
+                    except (OSError, ProcessLookupError):
+                        try:
+                            process.kill()
+                        except OSError:
+                            pass
+                try:
+                    process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            return self._failed(root, "Browser UI E2E timed out after 60 seconds")
+        except OSError as exc:
+            return self._failed(root, f"Browser UI E2E process failed: {exc}")
+        if process.returncode != 0:
+            detail = stderr.strip() or stdout.strip() or f"node exited with {process.returncode}"
+            return self._failed(root, f"Browser UI E2E failed: {detail}")
+        return {
+            "name": "browser:ui-e2e",
+            "status": "passed",
+            "evidenceId": "evidence-browser-ui-e2e",
+            "path": str(root),
+            "detail": "demo login; todo create/complete; completed and active filters; delete; reload persistence; viewports=1440x900,390x844",
+        }
+
+    @staticmethod
+    def _default_playwright_core() -> Path:
+        return Path(__file__).resolve().parents[4] / "packages" / "iseol" / "node_modules" / "playwright-core"
+
+    @staticmethod
+    def _find_chrome() -> Path | None:
+        candidates = [
+            os.environ.get("CHROME_PATH"),
+            os.environ.get("GOOGLE_CHROME_BIN"),
+            str(Path(os.environ["PROGRAMFILES"]) / "Google/Chrome/Application/chrome.exe") if os.environ.get("PROGRAMFILES") else None,
+            str(Path(os.environ["PROGRAMFILES(X86)"]) / "Google/Chrome/Application/chrome.exe") if os.environ.get("PROGRAMFILES(X86)") else None,
+            str(Path(os.environ["LOCALAPPDATA"]) / "Google/Chrome/Application/chrome.exe") if os.environ.get("LOCALAPPDATA") else None,
+            shutil.which("chrome"),
+            shutil.which("google-chrome"),
+            shutil.which("chromium"),
+            shutil.which("chromium-browser"),
+            shutil.which("msedge"),
+        ]
+        for candidate in candidates:
+            if candidate and Path(candidate).is_file():
+                return Path(candidate)
+        return None
+
+    @staticmethod
+    def _not_run(root: Path, detail: str) -> dict[str, str]:
+        return {
+            "name": "browser:ui-e2e",
+            "status": "not_run",
+            "evidenceId": "evidence-browser-not-run",
+            "path": str(root),
+            "detail": detail,
+        }
+
+    @staticmethod
+    def _failed(root: Path, detail: str) -> dict[str, str]:
+        return {
+            "name": "browser:ui-e2e",
+            "status": "failed",
+            "evidenceId": "evidence-browser-ui-e2e-failed",
+            "path": str(root),
+            "detail": detail,
+        }
+
+
 class WebProjectRunner:
     """Start and stop a generated web project without external credentials."""
+
+    def __init__(self, *, browser_ui_runner: Any | None = None) -> None:
+        self.browser_ui_runner = browser_ui_runner or BrowserUIE2ERunner()
 
     def start(self, workspace: str | Path, *, port: int = 8787) -> LocalRuntimeResult:
         root = Path(workspace).resolve()
@@ -158,9 +438,11 @@ class WebProjectRunner:
                 continue
             syntax = subprocess.run([node, "--check", str(path)], capture_output=True, text=True, check=False)
             checks.append(self._check("syntax:" + relative, syntax.returncode == 0, path, syntax.stderr.strip()))
+        browser_check = BrowserUIE2ERunner._not_run(root, "Browser UI E2E was not attempted because the local web runtime did not start.")
         try:
             runtime = self.start(root, port=self._free_port())
             try:
+                browser_check = self.browser_ui_runner.run(url=runtime.url, workspace=root, template_id=template_id)
                 checks.append(self._check("e2e:health", self._json_get(runtime.url + "/api/health").get("status") == "ok", api))
                 before = self._http(runtime.url + "/api/session", method="POST", payload={"mode": "demo"})
                 created = self._http(runtime.url + "/api/todos", method="POST", payload={"title": "release check", "priority": "high"})
@@ -170,13 +452,7 @@ class WebProjectRunner:
         except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
             checks.append(self._check("e2e:health", False, api, str(exc)))
             checks.append(self._check("e2e:demo-auth-and-crud", False, api, str(exc)))
-        checks.append({
-            "name": "browser:ui-e2e",
-            "status": "not_run",
-            "evidenceId": "evidence-browser-not-run",
-            "path": str(root),
-            "detail": "Browser engine is not configured; static/API checks are not browser verification.",
-        })
+        checks.append(browser_check)
         failed = [item for item in checks if item["status"] == "failed"]
         if failed:
             raise ValueError("Web scaffold verification failed: " + "; ".join(item["name"] for item in failed))
@@ -187,8 +463,8 @@ class WebProjectRunner:
             "status": "PASS", "independent": True, "runner": "EEEE.WebProjectRunner",
             "runtimeProfile": "web_app", "authMode": "demo",
             "deploymentReadiness": "awaiting_configuration",
-            "browserVerification": "NOT_RUN",
-            "verificationScope": "local-api-and-static",
+            "browserVerification": "PASS" if browser_check["status"] == "passed" else "NOT_RUN",
+            "verificationScope": "local-api-static-browser-ui" if browser_check["status"] == "passed" else "local-api-and-static",
             "createdAt": datetime.now(timezone.utc).isoformat(), "checks": checks,
             "evidenceIds": evidence_ids,
         }

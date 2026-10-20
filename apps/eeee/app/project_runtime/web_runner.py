@@ -66,49 +66,77 @@ try {
   context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   await page.goto(`${baseUrl}/`, { waitUntil: 'networkidle' });
-  await page.getByRole('button', { name: 'Google로 로그인' }).click();
+  await page.locator('#login').click();
   const authStatus = page.locator('#auth-status');
   await authStatus.waitFor();
-  if (!/Demo 로그인/.test(await authStatus.textContent())) {
-    throw new Error('demo login did not complete in the browser');
-  }
+  await page.waitForFunction(() => document.querySelector('#auth-status')?.textContent.includes('Demo 로그인'));
+  const initialTodoCount = await page.locator('#todo-list li').count();
 
   await page.locator('#todo-title').fill('브라우저 점검');
   await page.locator('#todo-priority').selectOption('high');
   await page.locator('#todo-tags').fill('e2e');
-  await page.getByRole('button', { name: '추가' }).click();
-  const completedTodo = page.locator('#todo-list li').filter({ hasText: '브라우저 점검' });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith('/api/todos') && response.request().method() === 'POST' && response.status() === 201),
+    page.locator('#todo-form button').click(),
+  ]);
+  await page.waitForFunction((count) => document.querySelectorAll('#todo-list li').length >= count + 1, initialTodoCount);
+  const completedTodo = page.locator('#todo-list li').first();
   await completedTodo.waitFor();
+  const completedTodoId = await completedTodo.getAttribute('data-id');
+  const completedTodoById = page.locator(`#todo-list li[data-id="${completedTodoId}"]`);
   const completedCheckbox = completedTodo.locator('input[type="checkbox"]');
+  const updateResponse = page.waitForResponse((response) => response.url().includes('/api/todos/') && response.request().method() === 'PATCH' && response.status() === 200);
   await completedCheckbox.check();
+  await updateResponse;
   if (!(await completedCheckbox.isChecked())) {
     throw new Error('todo completion was not reflected in the browser');
   }
 
-  await page.locator('#todo-filter').selectOption('completed');
-  await completedTodo.waitFor();
-  if (await page.locator('#todo-list li').count() !== 1) {
-    throw new Error('completed filter retained an unexpected todo');
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=completed'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('completed'),
+  ]);
+  await completedTodoById.waitFor();
+  if (!(await completedTodoById.locator('input[type="checkbox"]').isChecked())) {
+    throw new Error('completed filter did not retain the completed todo');
   }
 
-  await page.locator('#todo-filter').selectOption('all');
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=all'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('all'),
+  ]);
   await page.locator('#todo-title').fill('삭제 대상');
-  await page.getByRole('button', { name: '추가' }).click();
-  const deletedTodo = page.locator('#todo-list li').filter({ hasText: '삭제 대상' });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith('/api/todos') && response.request().method() === 'POST' && response.status() === 201),
+    page.locator('#todo-form button').click(),
+  ]);
+  await page.waitForFunction((count) => document.querySelectorAll('#todo-list li').length >= count + 2, initialTodoCount);
+  const deletedTodoId = await page.locator('#todo-list li').first().getAttribute('data-id');
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=active'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('active'),
+  ]);
+  const deletedTodo = page.locator(`#todo-list li[data-id="${deletedTodoId}"]`);
   await deletedTodo.waitFor();
-  await page.locator('#todo-filter').selectOption('active');
-  await deletedTodo.waitFor();
-  if (await page.locator('#todo-list li').count() !== 1) {
-    throw new Error('active filter did not isolate the delete target');
-  }
-  page.once('dialog', (dialog) => dialog.accept());
-  await deletedTodo.getByRole('button', { name: /삭제/ }).click();
-  await deletedTodo.waitFor({ state: 'detached' });
+  page.once('dialog', async (dialog) => { await dialog.accept(); });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos/') && response.request().method() === 'DELETE' && response.status() === 204),
+    deletedTodo.locator('button.danger').click(),
+  ]);
 
   await page.reload({ waitUntil: 'networkidle' });
-  await page.locator('#todo-filter').selectOption('completed');
-  await completedTodo.waitFor();
-  if (!(await completedTodo.locator('input[type="checkbox"]').isChecked())) {
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=active'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('active'),
+  ]);
+  await deletedTodo.waitFor({ state: 'detached' });
+  await page.reload({ waitUntil: 'networkidle' });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes('/api/todos?') && response.url().includes('status=completed'), { timeout: 10000 }),
+    page.locator('#todo-filter').selectOption('completed'),
+  ]);
+  await completedTodoById.waitFor();
+  if (!(await completedTodoById.locator('input[type="checkbox"]').isChecked())) {
     throw new Error('completed todo was not persisted after reload');
   }
 
@@ -198,6 +226,8 @@ console.log(JSON.stringify({ status: 'passed' }));
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
                 start_new_session=os.name != "nt",
             )

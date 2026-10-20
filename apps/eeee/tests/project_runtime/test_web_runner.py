@@ -227,6 +227,7 @@ def test_browser_ui_e2e_script_asserts_state_not_only_element_presence():
     assert "isChecked()" in script
     assert "count()" in script
     assert "waitFor({ state: 'detached' })" in script
+    assert "waitForFunction" in script
 
 
 def test_browser_ui_e2e_rejects_non_local_url(tmp_path):

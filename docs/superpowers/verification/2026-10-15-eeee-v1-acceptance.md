@@ -136,6 +136,33 @@ External connector account authentication remains an environment-gated
 manual check. This record does not claim that every provider's OAuth session
 or external side effect has been newly verified by the deterministic suite.
 
+## Native ISEOL completion audit — 2026-10-20
+
+The current `origin/main` head after PR #62 is `5890dac7fe1838268071d2f795bcd33d7a81a811`.
+The native Python `AgentGraphCompiler` now includes and enforces the complete
+post-integration lifecycle: `release → operations → improvement`. The graph
+cannot compile without the `review`, `integration`, `release`, `operations`,
+and `improvement` gates. These nodes record evidence and decisions; they do
+not silently deploy to an external service or mutate an external account.
+
+Fresh verification from an isolated clean worktree:
+
+- `scripts/verify-all.ps1 -Full`: EEEE `979 passed, 1 skipped, 1 warning`;
+  ISEOL `25/25`; ClaimLatch adapter `5/5`; Mobile `1/1`; unified verification
+  passed.
+- `scripts/verify-core-product.ps1`: `380 passed, 1 warning`; static UI
+  checks `2/2`; strict UTF-8 and `git diff --check` passed.
+- Focused plugin lifecycle suite: `94 passed, 1 warning`.
+- `scripts/build-desktop.ps1`: `GleaveDesktop.exe` built; packaged
+  `--self-test` and `--gui-self-test` both passed with exit code `0`.
+- GitHub PR #62 (`feat: 이설 릴리스 이후 운영 개선 단계 추가`) passed both
+  remote CI checks, received a review comment, and was merged to `main`.
+
+The remaining environment-gated boundaries are unchanged: provider-specific
+OAuth sessions and external side effects require an explicit user-authorized
+manual check, and user-authored plugin creation remains outside the current
+scope. No Ollama fallback or external deployment is claimed by this audit.
+
 Release-review fixes included in this verification:
 
 - External plugin approval now requires a server-issued approval execution ID

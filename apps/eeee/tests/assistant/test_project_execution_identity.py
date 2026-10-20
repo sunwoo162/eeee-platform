@@ -7,6 +7,7 @@ from app.assistant.service import AssistantService
 from app.config import Settings
 from app.coordinator.service import Coordinator
 from app.kernel.capabilities import ProjectExecutionCapability
+from app.kernel.capabilities import EnvelopeContext
 from app.project_runtime.provisioner import ProjectProvisioner
 from app.storage.sqlite import SQLiteStore
 
@@ -65,4 +66,68 @@ def test_project_plan_reuses_resume_project_identity(tmp_path) -> None:
 
     assert plan.inputs["projectId"] == "project-resume-1"
     assert Path(plan.inputs["workspace"]).is_relative_to(settings.workspace_root)
+
+
+def test_project_plan_preserves_external_action_approval_context(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    descriptor = build_default_registry().resolve("project-execution").descriptor
+    capability = ProjectExecutionCapability(
+        descriptor,
+        coordinator=Coordinator(store),
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+    )
+
+    plan = capability.plan(
+        AssistantRequest(
+            raw_text="카페 홈페이지 배포해줘",
+            context={"approved": True},
+        ),
+        AssistantContext(),
+    )
+
+    assert plan.inputs["requiresExternalApproval"] is True
+    assert plan.inputs["externalActions"]
+    assert plan.inputs["approved"] is True
+
+
+def test_project_execution_passes_external_action_context_to_orchestrator(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    descriptor = build_default_registry().resolve("project-execution").descriptor
+    capability = ProjectExecutionCapability(
+        descriptor,
+        coordinator=Coordinator(store),
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+    )
+    plan = capability.plan(
+        AssistantRequest(raw_text="카페 홈페이지 배포해줘"),
+        AssistantContext(),
+    )
+    seen: dict[str, object] = {}
+
+    class RecordingOrchestrator:
+        def run(self, request, _context, _envelope):
+            seen.update(request.context)
+            return {"status": "blocked"}
+
+    capability.orchestrator = RecordingOrchestrator()
+    capability.execute(
+        plan,
+        EnvelopeContext(
+            envelope=object(),
+            assistant_context=AssistantContext(),
+            run_child=lambda **_kwargs: None,
+        ),
+    )
+
+    assert seen["externalActionRequired"] is True
+    assert seen["approved"] is False
+    assert seen["externalActions"]
 

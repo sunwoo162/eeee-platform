@@ -44,11 +44,16 @@ class OAuthProviderConfig(BaseModel):
     def scopes_for_permissions(self, approved_permissions: set[str] | frozenset[str]) -> list[str]:
         """Return only the provider scopes needed by the approved EEEE permissions."""
 
-        if not approved_permissions or not self.scope_by_permission:
-            # Preserve the original provider-wide configuration contract for
-            # existing deployments and direct broker callers that do not yet
-            # provide an approved permission set.
+        if not approved_permissions:
             return list(dict.fromkeys(self.scopes))
+        if not self.scope_by_permission:
+            raise OAuthError("OAuth provider scopes are not configured for approved permissions")
+        missing_permissions = set(approved_permissions) - set(self.scope_by_permission)
+        if missing_permissions:
+            raise OAuthError(
+                "OAuth provider scopes are not configured for approved permissions: "
+                + ", ".join(sorted(missing_permissions))
+            )
         selected: list[str] = []
         for permission in sorted(approved_permissions):
             selected.extend(self.scope_by_permission.get(permission, []))

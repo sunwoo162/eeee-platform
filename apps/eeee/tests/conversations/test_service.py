@@ -1,3 +1,5 @@
+import pytest
+
 from app.conversations.models import MessageStatus, RequestState
 from app.conversations.service import ConversationService
 from app.conversations.store import ConversationStore
@@ -99,3 +101,17 @@ def test_conversation_service_rejects_empty_provider_response(tmp_path) -> None:
     assert messages[-1].status == MessageStatus.FAILED
     assert messages[-1].content == ""
     assert not any(event.event_type == "message.completed" for event in events)
+
+
+def test_conversation_service_rejects_reused_client_id_with_different_content(tmp_path) -> None:
+    store, service = make_service(tmp_path, FakeProvider(["첫 답변"]))
+    conversation = store.create_conversation()
+
+    list(service.stream_turn(conversation.id, content="첫 요청", client_message_id="same"))
+
+    with pytest.raises(ValueError, match="different message content"):
+        service.prepare_turn(
+            conversation.id,
+            content="다른 요청",
+            client_message_id="same",
+        )

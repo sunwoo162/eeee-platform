@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -105,8 +106,13 @@ class ProductQualityProfile(BaseModel):
             if artifact.id == "release-evidence" and not require_release_evidence:
                 continue
             paths = [root / path for path in artifact.paths]
-            exists = all(path.exists() for path in paths)
-            missing = [str(path.relative_to(root)) for path in paths if not path.exists()]
+            missing = [
+                str(path.relative_to(root))
+                for path in paths
+                if not path.exists() or (path.is_file() and path.stat().st_size == 0)
+                or (path.is_dir() and not any(child.is_file() for child in path.rglob("*")))
+            ]
+            exists = not missing
             checks.append(QualityCheck(
                 name=f"quality:{artifact.id}",
                 status="PASS" if exists else "BLOCK",
@@ -114,10 +120,31 @@ class ProductQualityProfile(BaseModel):
             ))
         report_path = root / "QA_REPORT.json"
         manifest_path = root / "RELEASE_MANIFEST.json"
-        if report_path.is_file():
-            checks.append(QualityCheck(name="quality:qa-report", status="PASS", message="Independent QA report is present"))
-        else:
-            checks.append(QualityCheck(name="quality:qa-report", status="BLOCK", message="Independent QA report is missing"))
+        qa_valid = False
+        if report_path.is_file() and report_path.stat().st_size:
+            try:
+                payload = json.loads(report_path.read_text(encoding="utf-8"))
+                qa_evidence = payload.get("evidenceIds") if isinstance(payload, dict) else None
+                checks_evidence = {
+                    check.get("evidenceId")
+                    for check in (payload.get("checks", []) if isinstance(payload, dict) else [])
+                    if isinstance(check, dict) and isinstance(check.get("evidenceId"), str)
+                }
+                qa_valid = (
+                    isinstance(payload, dict)
+                    and payload.get("status") == "PASS"
+                    and payload.get("independent") is True
+                    and isinstance(qa_evidence, list)
+                    and bool(qa_evidence)
+                    and set(qa_evidence).issubset(checks_evidence)
+                )
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+                qa_valid = False
+        checks.append(QualityCheck(
+            name="quality:qa-report",
+            status="PASS" if qa_valid else "BLOCK",
+            message="Independent QA report is present and evidence-linked" if qa_valid else "Independent QA report is missing, malformed, or lacks linked evidence",
+        ))
         if require_release_evidence:
             if manifest_path.is_file():
                 checks.append(QualityCheck(name="quality:release-manifest", status="PASS", message="Release manifest is present"))
@@ -138,6 +165,12 @@ class QualityGate:
 
     def evaluate(self, node: AgentNode, result: AgentResult) -> QualityReport:
         checks: list[QualityCheck] = []
+        if not result.changed_files:
+            checks.append(QualityCheck(
+                name="changed-files",
+                status="BLOCK",
+                message="Completed agent did not report any changed files",
+            ))
         existing_files: list[tuple[Path, str]] = []
         for relative in result.changed_files:
             path = self.workspace / relative

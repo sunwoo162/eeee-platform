@@ -162,6 +162,8 @@ def _selected_node_ids(intent: ProjectIntent, nodes: list[AgentNode]) -> set[str
         "frontend", "test", "accessibility", "security", "review",
         "documentation", "integration",
     }
+    core_ids = {node.id for node in _core_catalog()}
+    ids.update(node.id for node in nodes if node.id not in core_ids)
     combined = f"{intent.raw_text} {intent.goal}".casefold()
     backend_markers = ("api", "backend", "백엔드", "서버", "로그인", "회원", "실시간", "동기화")
     data_markers = ("database", "db", "데이터베이스", "영속", "서버 저장", "동기화", "데이터 저장")

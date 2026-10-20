@@ -3,7 +3,7 @@ import pytest
 from app.iseol.agents import AgentNode
 from app.iseol.contracts import ProjectIntent
 from app.iseol.extensions import ExtensionManifest, ExtensionRegistry
-from app.iseol.graph import AgentGraphCompiler
+from app.iseol.graph import AgentGraphCompiler, _core_catalog
 
 
 def meal_intent() -> ProjectIntent:
@@ -93,3 +93,14 @@ def test_static_intent_skips_backend_and_data_but_keeps_quality_gates() -> None:
     assert "data" not in ids
     assert {"test", "security", "review", "documentation", "integration"} <= ids
     assert all(set(node.dependencies) <= ids for node in graph.agents)
+
+
+def test_compiler_preserves_custom_catalog_agents() -> None:
+    custom = AgentNode(
+        id="brand", taskId="brand", role="brand", title="Brand Agent", goal="브랜드 검토",
+        phase="design", dependencies=["ui"],
+    )
+
+    graph = AgentGraphCompiler.compile(meal_intent(), ExtensionRegistry(), catalog=[*_core_catalog(), custom])
+
+    assert graph.by_id("brand").id == "brand"

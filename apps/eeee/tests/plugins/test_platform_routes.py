@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import pytest
 
 from app.config import Settings
 from app.main import create_app
@@ -107,6 +108,18 @@ def test_install_is_local_and_does_not_require_provider_connector(tmp_path) -> N
     gmail = next(item for item in catalog if item["id"] == "gmail")
     assert gmail["status"] == "installed"
     assert gmail["nextAction"] == "configure"
+
+
+def test_install_and_uninstall_are_local_only(tmp_path) -> None:
+    from fastapi import HTTPException
+    from starlette.requests import Request
+    from app.api.routes import _require_local_desktop
+
+    request = Request({"type": "http", "method": "POST", "path": "/", "headers": [], "client": ("192.0.2.10", 1234)})
+
+    with pytest.raises(HTTPException) as exc_info:
+        _require_local_desktop(request)
+    assert exc_info.value.status_code == 403
 
 
 def test_chat_history_is_installed_from_the_catalog_and_can_be_launched(tmp_path) -> None:

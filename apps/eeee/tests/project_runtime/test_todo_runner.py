@@ -70,3 +70,20 @@ def test_todo_runner_fails_closed_when_scaffold_is_incomplete(tmp_path) -> None:
             workspace=workspace,
             claim_latch=_claim(),
         )
+
+
+def test_todo_runner_records_acceptance_criteria_against_qa_evidence(tmp_path) -> None:
+    workspace = tmp_path / "todo-project"
+    create_todo_scaffold(workspace)
+
+    prepared = TodoProjectRunner().prepare(
+        project_id="project-todo",
+        project_revision="rev-1",
+        workspace=workspace,
+        acceptance_criteria=["Todo를 추가할 수 있음"],
+    )
+
+    trace = prepared.qa_report["requirementTraceability"]
+    assert trace[0]["criterion"] == "Todo를 추가할 수 있음"
+    assert trace[0]["status"] == "verified"
+    assert trace[0]["evidenceIds"] == prepared.qa_report["evidenceIds"]

@@ -41,11 +41,11 @@ class _Task(QRunnable):
 class ChatHistoryWindow(QWidget):
     """A separate, bounded chat surface backed by EEEE Core conversation APIs."""
 
-    def __init__(self, client: Any, *, conversation_id: str = "desktop-default"):
+    def __init__(self, client: Any, *, conversation_id: str = ""):
         super().__init__()
         self.client = client
         self.conversation_id = conversation_id
-        self._next_before_id: int | None = None
+        self._next_after_sequence: int | None = None
         self._turns: list[dict[str, object]] = []
         self._loading = False
         self._active_task: _Task | None = None
@@ -91,10 +91,10 @@ class ChatHistoryWindow(QWidget):
         self.conversations.currentItemChanged.connect(self._conversation_selected)
         root.addWidget(self.conversations)
 
-        self.older_button = QPushButton("이전 메시지 더 보기")
-        self.older_button.clicked.connect(self._load_older)
-        self.older_button.setVisible(False)
-        root.addWidget(self.older_button)
+        self.more_button = QPushButton("다음 메시지 더 보기")
+        self.more_button.clicked.connect(self._load_more)
+        self.more_button.setVisible(False)
+        root.addWidget(self.more_button)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -115,6 +115,7 @@ class ChatHistoryWindow(QWidget):
         composer = QHBoxLayout()
         self.input = QLineEdit()
         self.input.setPlaceholderText("EEEE에게 메시지 보내기")
+        self.input.setMaxLength(50_000)
         self.input.returnPressed.connect(self._send)
         composer.addWidget(self.input, 1)
         self.send_button = QPushButton("보내기")
@@ -213,34 +214,36 @@ class ChatHistoryWindow(QWidget):
             self._apply_conversation,
         )
 
-    def _load_older(self) -> None:
-        if self._next_before_id is None:
+    def _load_more(self) -> None:
+        if self._next_after_sequence is None:
             return
         self._run(
             lambda: self.client.get_conversation(
-                self.conversation_id, limit=100, before_id=self._next_before_id
+                self.conversation_id,
+                limit=100,
+                after_sequence=self._next_after_sequence,
             ),
-            self._prepend_conversation,
+            self._append_conversation,
         )
 
     def _apply_conversation(self, value: object) -> None:
         data = value if isinstance(value, dict) else {}
         turns = data.get("turns", [])
-        self._next_before_id = self._optional_int(data.get("nextBeforeId"))
+        self._next_after_sequence = self._optional_int(data.get("nextAfterSequence"))
         self._turns = self._normalize_turns(turns if isinstance(turns, list) else [])
         self._render_turns(self._turns)
-        self.older_button.setVisible(self._next_before_id is not None)
+        self.more_button.setVisible(self._next_after_sequence is not None)
         self.status.setText("대화 기록")
         self.refresh_button.setEnabled(True)
 
-    def _prepend_conversation(self, value: object) -> None:
+    def _append_conversation(self, value: object) -> None:
         data = value if isinstance(value, dict) else {}
         turns = data.get("turns", [])
-        self._next_before_id = self._optional_int(data.get("nextBeforeId"))
+        self._next_after_sequence = self._optional_int(data.get("nextAfterSequence"))
         if isinstance(turns, list):
-            self._turns = self._normalize_turns(turns) + self._turns
+            self._turns += self._normalize_turns(turns)
             self._render_turns(self._turns)
-        self.older_button.setVisible(self._next_before_id is not None)
+        self.more_button.setVisible(self._next_after_sequence is not None)
 
     def _render_turns(self, turns: list[object]) -> None:
         while self.transcript_layout.count():
@@ -305,6 +308,10 @@ class ChatHistoryWindow(QWidget):
 
     def _send_finished(self, text: str, result: object) -> None:
         self.send_button.setEnabled(True)
+        if isinstance(result, dict):
+            conversation_id = result.get("conversationId")
+            if isinstance(conversation_id, str) and conversation_id:
+                self.conversation_id = conversation_id
         self._turns.append({"role": "user", "content": text})
         self._add_bubble("user", text)
         if isinstance(result, dict):

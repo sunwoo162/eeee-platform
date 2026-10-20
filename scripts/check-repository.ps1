@@ -66,8 +66,8 @@ function Test-IgnoredUntrackedFile {
     param([System.IO.FileInfo]$File)
 
     $relative = $File.FullName.Substring($root.Length).TrimStart('\')
-    & git -C $root ls-files --error-unmatch -- $relative 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    $tracked = @(& git -C $root ls-files -- $relative 2>$null)
+    if ($tracked.Count -gt 0) {
         return $false
     }
     & git -C $root check-ignore --quiet -- $relative 2>$null

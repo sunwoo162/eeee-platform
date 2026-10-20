@@ -256,6 +256,28 @@ def test_connected_first_party_provider_projects_action_capabilities_and_invokes
     assert result.output["action"] == "mail.list"
 
 
+def test_platform_cannot_override_a_capability_with_another_action(tmp_path) -> None:
+    connector = GenericFakeConnector()
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store, credentials=MemoryCredentialStore(), connectors={"gmail": connector}
+    )
+    platform.install("gmail")
+    platform.connect("user-a", "gmail", {"mail.read", "mail.send"}, {"access_token": "secret"}, "Work")
+
+    forged = platform.invoke(
+        "user-a",
+        "plugin:gmail:mail.list",
+        {"action": "mail.send", "to": "s25011@gsm.hs.kr", "subject": "test", "body": "test"},
+    )
+
+    assert forged.status.value == "blocked"
+    assert forged.error is not None
+    assert forged.error.code == "invalid_plugin_action"
+    assert forged.output["status"] == "blocked"
+
+
 def test_platform_extracts_natural_language_input_and_requires_send_approval(tmp_path) -> None:
     connector = GenericFakeConnector()
     store = SQLiteStore(tmp_path / "state.sqlite3")

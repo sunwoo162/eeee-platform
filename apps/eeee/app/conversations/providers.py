@@ -26,6 +26,8 @@ class UnavailableConversationProvider:
     def __init__(self, *, code: str, message: str) -> None:
         self.code = code
         self.message = message
+        self.provider_name = "unavailable"
+        self.active_provider_name = "unavailable"
 
     def stream(self, _messages, *, cancel_event: Event | None = None) -> Iterator[str]:
         if cancel_event is not None and cancel_event.is_set():
@@ -51,6 +53,7 @@ class ChatGptWebConversationProvider:
         self.runtime = runtime
         self.workspace = (workspace or Path.cwd()).resolve()
         self.context_tokens = context_tokens
+        self.model = getattr(runtime, "model", None)
 
     def stream(
         self,
@@ -95,6 +98,9 @@ class ChatGptWebConversationProvider:
 
 class BuiltinConversationProvider:
     """Serve only the bounded, provider-free conversation contract."""
+
+    provider_name = "builtin"
+    model = "bounded-runtime"
 
     def __init__(self, runtime: Any | None = None) -> None:
         self.runtime = runtime or FastLocalConversationRuntime()
@@ -156,6 +162,8 @@ class OllamaWithBuiltinFallbackProvider:
         self.ollama = ollama
         self.builtin = builtin
         self.policy = policy or ProviderPolicy()
+        self.active_provider_name = "ollama"
+        self.active_model = getattr(ollama, "model", None)
 
     def stream(
         self,
@@ -170,6 +178,8 @@ class OllamaWithBuiltinFallbackProvider:
         status, has_status_method = _provider_status(self.ollama)
         ready = not has_status_method or getattr(status, "status", None) == "ready"
         if ready:
+            self.active_provider_name = "ollama"
+            self.active_model = getattr(self.ollama, "model", None)
             yielded = False
             try:
                 for delta in self.ollama.stream(messages, cancel_event=cancel_event):
@@ -192,6 +202,8 @@ class OllamaWithBuiltinFallbackProvider:
                 or "Ollama is unavailable and this request needs a connected provider"
             )
             raise ConversationProviderError(message, code="assistant_provider_unavailable")
+        self.active_provider_name = "builtin"
+        self.active_model = getattr(self.builtin, "model", "bounded-runtime")
         yield from self.builtin.stream(messages, cancel_event=cancel_event)
 
 
@@ -202,6 +214,8 @@ class WebWithBuiltinFallbackProvider:
         self.web = web
         self.builtin = builtin
         self.runtime = runtime
+        self.active_provider_name: str | None = None
+        self.active_model: str | None = None
 
     def stream(
         self,
@@ -210,11 +224,15 @@ class WebWithBuiltinFallbackProvider:
         cancel_event: Event | None = None,
     ) -> Iterator[str]:
         if _web_is_ready(self.runtime):
+            self.active_provider_name = "chatgpt_web"
+            self.active_model = getattr(self.web, "model", None)
             try:
                 yield from self.web.stream(messages, cancel_event=cancel_event)
                 return
             except ConversationProviderError:
                 pass
+        self.active_provider_name = "builtin"
+        self.active_model = getattr(self.builtin, "model", "bounded-runtime")
         yield from self.builtin.stream(messages, cancel_event=cancel_event)
 
 

@@ -317,14 +317,20 @@ class UserPreferenceCapability:
         return CapabilityPlan(
             capability_id=self.descriptor.id,
             summary=f"Remember {preference.key}",
-            inputs={"key": preference.key, "value": preference.value},
+            inputs={
+                "key": preference.key,
+                "value": preference.value,
+                "userId": _request_user_id(request),
+            },
             side_effect_level=self.descriptor.side_effect_level,
             requires_approval=False,
         )
 
     def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
         record = self.coordinator.remember_user_preference(
-            str(plan.inputs["key"]), str(plan.inputs["value"])
+            str(plan.inputs["key"]),
+            str(plan.inputs["value"]),
+            user_id=str(plan.inputs.get("userId", "local-user")),
         )
         return CapabilityOutcome({
             "status": "completed",

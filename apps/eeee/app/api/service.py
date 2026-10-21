@@ -158,7 +158,11 @@ class ApiFlowService:
         if not claim.acquired:
             return claim.run
         run = claim.run
-        self._publish("run.execution.started", {"runId": run.id, "requestId": run.request_id})
+        self._publish(
+            "run.execution.started",
+            {"runId": run.id, "requestId": run.request_id},
+            user_id=user_id,
+        )
         stop_heartbeat = Event()
 
         def heartbeat() -> None:
@@ -280,6 +284,7 @@ class ApiFlowService:
             self._publish(
                 "run.execution.completed",
                 {"runId": run.id, "requestId": run.request_id, "status": result.status},
+                user_id=user_id,
             )
             self._record_legacy_request(
                 run.request_id,
@@ -318,9 +323,18 @@ class ApiFlowService:
             stop_heartbeat.set()
             heartbeat_thread.join()
 
-    def _publish(self, kind: str, payload: dict[str, object]) -> None:
+    def _publish(
+        self,
+        kind: str,
+        payload: dict[str, object],
+        *,
+        user_id: str | None = None,
+    ) -> None:
         if self.event_publisher is not None:
-            self.event_publisher(kind, payload)
+            scoped_payload = dict(payload)
+            if user_id:
+                scoped_payload.setdefault("userId", user_id)
+            self.event_publisher(kind, scoped_payload)
 
     def get_run(self, run_id: str, *, user_id: str | None = None) -> Run:
         run = self.store.get_run(run_id)

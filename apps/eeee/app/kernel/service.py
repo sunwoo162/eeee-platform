@@ -438,9 +438,14 @@ class KernelService:
 
     @staticmethod
     def _make_event(envelope: ExecutionEnvelope, kind: str, payload: dict[str, Any]) -> EventEnvelope:
+        scoped_payload = dict(payload)
+        user_id = envelope.input.get("userId")
+        if isinstance(user_id, str) and user_id:
+            scoped_payload.setdefault("userId", user_id)
         return EventEnvelope(
             event_type=kind, execution_id=envelope.execution_id, request_id=envelope.request_id,
-            project_id=envelope.project_id, project_revision=envelope.project_revision, payload=payload,
+            project_id=envelope.project_id, project_revision=envelope.project_revision,
+            payload=scoped_payload,
         )
 
     def _publish(self, durable: EventEnvelope) -> None:

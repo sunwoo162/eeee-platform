@@ -80,6 +80,31 @@ def test_desktop_events_return_durable_cursor_and_redacted_lifecycle_events(tmp_
         assert "pairingCode" not in event
 
 
+def test_desktop_events_hide_another_users_scoped_events(tmp_path):
+    application = create_app(
+        Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    )
+    application.state.mobile_bridge.publish(
+        "project.user-a", {"userId": "user-a", "projectId": "project-a"}
+    )
+    application.state.mobile_bridge.publish("system.global", {"status": "ok"})
+    client = TestClient(application)
+
+    user_a_events = client.get(
+        "/api/desktop/events",
+        headers={"X-EEEE-User-Id": "user-a"},
+        params={"cursor": 0},
+    ).json()["events"]
+    user_b_events = client.get(
+        "/api/desktop/events",
+        headers={"X-EEEE-User-Id": "user-b"},
+        params={"cursor": 0},
+    ).json()["events"]
+
+    assert [event["kind"] for event in user_a_events] == ["project.user-a", "system.global"]
+    assert [event["kind"] for event in user_b_events] == ["system.global"]
+
+
 def test_desktop_events_preserve_retention_gap_metadata(tmp_path):
     bridge = MobileBridge(tmp_path / "events.sqlite3", event_limit=2)
     bridge.init()

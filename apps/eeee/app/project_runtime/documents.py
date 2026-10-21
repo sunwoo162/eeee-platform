@@ -83,7 +83,9 @@ class ProjectDocumentService:
                 revision=profile.project_revision,
                 reason="Notion token and parent page are not configured",
             )
-            self._publish("project.document.awaiting_configuration", profile, result)
+            self._publish(
+                "project.document.awaiting_configuration", profile, result, user_id=user_id
+            )
             return result
 
         lines = _document_lines(profile)
@@ -99,7 +101,7 @@ class ProjectDocumentService:
                 document=existing,
                 reason="The same project revision is already synchronized",
             )
-            self._publish("project.document.unchanged", profile, result)
+            self._publish("project.document.unchanged", profile, result, user_id=user_id)
             return result
 
         trust = self.trust_gate.verify_action(
@@ -119,7 +121,7 @@ class ProjectDocumentService:
                 trust=trust,
                 reason=trust.reason,
             )
-            self._publish("project.document.blocked", profile, result)
+            self._publish("project.document.blocked", profile, result, user_id=user_id)
             return result
 
         if existing is None:
@@ -144,7 +146,7 @@ class ProjectDocumentService:
             document=document,
             trust=trust,
         )
-        self._publish("project.document.synced", profile, result)
+        self._publish("project.document.synced", profile, result, user_id=user_id)
         return result
 
     def _existing(self, project_id: str) -> ProjectDocumentRecord | None:
@@ -158,6 +160,8 @@ class ProjectDocumentService:
         kind: str,
         profile: ProjectProfile,
         result: ProjectDocumentSyncResult,
+        *,
+        user_id: str = "local-user",
     ) -> None:
         if self.event_publisher is not None:
             self.event_publisher(
@@ -168,6 +172,7 @@ class ProjectDocumentService:
                     "provider": "notion",
                     "status": result.status,
                     "reason": result.reason,
+                    "userId": user_id,
                 },
             )
 

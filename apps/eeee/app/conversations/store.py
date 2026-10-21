@@ -232,6 +232,131 @@ class ConversationStore:
             ).fetchone()
         return str(row["request_id"]) if row is not None and row["request_id"] else None
 
+    def record_route_lifecycle(
+        self,
+        conversation_id: str,
+        route_request_id: str,
+        status: str,
+        *,
+        error_code: str | None = None,
+    ) -> AssistantRequest | None:
+        """Project the legacy assistant route into the canonical request ledger.
+
+        The route already owns a stable request id for idempotency. Reusing it
+        here keeps `/api` and `/v1` observability aligned without creating a
+        second request identity or a second user message.
+        """
+
+        conversation_id = conversation_id.strip()
+        route_request_id = route_request_id.strip()
+        if not conversation_id or not route_request_id:
+            raise ValueError("conversation_id and route_request_id are required")
+        target = {
+            "accepted": RequestState.EXECUTING,
+            "pending": RequestState.EXECUTING,
+            "completed": RequestState.COMPLETED,
+            "blocked": RequestState.FAILED,
+            "failed": RequestState.FAILED,
+            "unsupported": RequestState.FAILED,
+            "needs_clarification": RequestState.FAILED,
+            "plugin_required": RequestState.FAILED,
+            "awaiting_configuration": RequestState.FAILED,
+        }.get(status, RequestState.FAILED)
+        now = _now()
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            user = connection.execute(
+                "SELECT id FROM messages WHERE conversation_id = ? "
+                "AND request_id = ? AND role = 'user' ORDER BY sequence LIMIT 1",
+                (conversation_id, route_request_id),
+            ).fetchone()
+            if user is None:
+                return None
+            row = connection.execute(
+                "SELECT * FROM assistant_requests WHERE id = ?", (route_request_id,)
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    "INSERT INTO assistant_requests "
+                    "(id, conversation_id, user_message_id, client_message_id, state, "
+                    "parent_request_id, attempt, error_code, created_at, updated_at, completed_at, interrupted_at) "
+                    "VALUES (?, ?, ?, ?, ?, NULL, 1, ?, ?, ?, ?, NULL)",
+                    (
+                        route_request_id, conversation_id, user["id"],
+                        f"route:{route_request_id}", RequestState.RECEIVED.value,
+                        None, _iso(now), _iso(now), None,
+                    ),
+                )
+                self._append_event_in_connection(
+                    connection, route_request_id, "request.accepted",
+                    {"requestId": route_request_id, "source": "assistant.route"}, now,
+                )
+                connection.execute(
+                    "UPDATE assistant_requests SET state = ?, updated_at = ? WHERE id = ?",
+                    (RequestState.PERSISTED_USER_MESSAGE.value, _iso(now), route_request_id),
+                )
+                self._append_event_in_connection(
+                    connection, route_request_id, "request.classified",
+                    {"status": RequestState.PERSISTED_USER_MESSAGE.value}, now,
+                )
+                connection.execute(
+                    "UPDATE assistant_requests SET state = ?, updated_at = ? WHERE id = ?",
+                    (RequestState.EXECUTING.value, _iso(now), route_request_id),
+                )
+                self._append_event_in_connection(
+                    connection, route_request_id, "request.executing",
+                    {"status": RequestState.EXECUTING.value}, now,
+                )
+            else:
+                current = RequestState(row["state"])
+                if current in {
+                    RequestState.COMPLETED, RequestState.FAILED,
+                    RequestState.CANCELLED, RequestState.INTERRUPTED,
+                }:
+                    result = connection.execute(
+                        "SELECT * FROM assistant_requests WHERE id = ?", (route_request_id,)
+                    ).fetchone()
+                    return _request_from_row(result)
+            if target != RequestState.EXECUTING:
+                completed_at = _iso(now)
+                final_error = error_code if target == RequestState.FAILED else None
+                connection.execute(
+                    "UPDATE assistant_requests SET state = ?, error_code = ?, updated_at = ?, "
+                    "completed_at = ? WHERE id = ?",
+                    (target.value, final_error, _iso(now), completed_at, route_request_id),
+                )
+                event_type = "request.completed" if target == RequestState.COMPLETED else "request.failed"
+                self._append_event_in_connection(
+                    connection, route_request_id, event_type,
+                    {"status": target.value, "errorCode": final_error}, now,
+                )
+            result = connection.execute(
+                "SELECT * FROM assistant_requests WHERE id = ?", (route_request_id,)
+            ).fetchone()
+        return _request_from_row(result)
+
+    @staticmethod
+    def _append_event_in_connection(
+        connection: sqlite3.Connection,
+        request_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        created_at: datetime,
+    ) -> None:
+        sequence = connection.execute(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM assistant_events WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO assistant_events "
+            "(event_id, request_id, sequence, event_type, payload_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                f"event-{uuid4().hex}", request_id, sequence, event_type,
+                json.dumps(payload, ensure_ascii=False), _iso(created_at),
+            ),
+        )
+
     def list_transcript_summaries(
         self, *, query: str = "", limit: int = 50
     ) -> list[dict[str, object]]:

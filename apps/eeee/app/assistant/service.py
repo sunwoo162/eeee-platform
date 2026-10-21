@@ -174,24 +174,45 @@ class AssistantService:
                     )
                     return result.model_dump(mode="json")
 
-                job_id = self.background_supervisor.submit(
-                    request_id,
-                    run_project,
-                    input_data={
-                        "text": text,
-                        "workspace": workspace,
-                        "requestedCapability": requested_capability,
-                        "conversationId": conversation_id,
-                        "approved": approved,
-                        "approvalRequestId": approval_request_id,
-                        "requestId": request_id,
-                        "projectId": project_id,
-                    },
+                accepted_message = "프로젝트 작업을 백그라운드에서 시작했어. 진행 상황에서 확인할 수 있어."
+                self._remember_turn(
+                    conversation_id, text, accepted_message, request_id=request_id,
+                    status=MessageStatus.PENDING,
                 )
+                self._record_route_lifecycle(conversation_id, request_id, "accepted")
+                try:
+                    job_id = self.background_supervisor.submit(
+                        request_id,
+                        run_project,
+                        input_data={
+                            "text": text,
+                            "workspace": workspace,
+                            "requestedCapability": requested_capability,
+                            "conversationId": conversation_id,
+                            "approved": approved,
+                            "approvalRequestId": approval_request_id,
+                            "requestId": request_id,
+                            "projectId": project_id,
+                        },
+                    )
+                except Exception as exc:
+                    failure_message = (
+                        f"백그라운드 작업을 시작하지 못했어: "
+                        f"{str(exc).strip() or type(exc).__name__}"
+                    )
+                    self._remember_turn(
+                        conversation_id, text, failure_message, request_id=request_id,
+                        status=MessageStatus.FAILED,
+                    )
+                    self._record_route_lifecycle(
+                        conversation_id, request_id, "failed",
+                        error_code="assistant_job_submit_failed",
+                    )
+                    raise
                 result = AssistantRouteResult(
                     status="accepted",
                     selection=selection,
-                    message="프로젝트 작업을 백그라운드에서 시작했어. 진행 상황에서 확인할 수 있어.",
+                    message=accepted_message,
                     project_id=project_id,
                     job_id=job_id,
                     response_verification=ResponseVerification(
@@ -201,11 +222,6 @@ class AssistantService:
                         subject_id=job_id,
                     ),
                 )
-                self._remember_turn(
-                    conversation_id, text, result.message, request_id=request_id,
-                    status=MessageStatus.PENDING,
-                )
-                self._record_route_lifecycle(conversation_id, request_id, "accepted")
                 return result
         request_id = request_id or f"assistant-request-{uuid4().hex}"
         result = self._route_sync(

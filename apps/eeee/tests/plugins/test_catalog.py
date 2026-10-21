@@ -18,8 +18,8 @@ def test_bundled_catalog_exposes_notion_as_optional_not_installed() -> None:
             {"key": "parentPageId", "label": "Parent page ID", "secret": False, "required": True, "placeholder": None},
         ],
         "permissionDetails": [
-            {"id": "pages.read", "label": "페이지 읽기", "description": "Notion 페이지를 읽습니다.", "effect": "none", "defaultApproved": True},
-            {"id": "pages.write", "label": "페이지 쓰기", "description": "Notion 페이지를 만들거나 수정합니다.", "effect": "external", "defaultApproved": False},
+            {"id": "pages.read", "label": "페이지 읽기", "description": "Notion 페이지를 읽습니다.", "effect": "none", "defaultApproved": True, "requires": []},
+            {"id": "pages.write", "label": "페이지 쓰기", "description": "Notion 페이지를 만들거나 수정합니다.", "effect": "external", "defaultApproved": False, "requires": ["pages.read"]},
         ],
         "installSource": "bundled-optional",
         "defaultInstalled": False,

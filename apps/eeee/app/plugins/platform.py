@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.assistant.models import CapabilityDescriptor
 from app.contracts import ApprovalState, ExecutionEnvelope, ExecutionError, ExecutionStatus, SideEffectLevel
-from app.plugins.catalog import PluginCatalog, PluginCatalogEntry
+from app.plugins.catalog import PluginCatalog, PluginCatalogEntry, validate_permission_selection
 from app.plugins.connections import PluginConnection
 from app.plugins.connectors import ConnectorConnection, ConnectorHealth, PluginConnector
 from app.plugins.credentials import KeyringCredentialStore
@@ -245,8 +245,7 @@ class PluginPlatformService:
             raise RuntimeError("plugin must be installed before connecting")
         if entry.connector not in self.connectors:
             raise RuntimeError(f"plugin connector is unavailable: {entry.connector}")
-        if not approved_permissions or not approved_permissions.issubset(set(entry.permissions)):
-            raise PermissionError("plugin permission approval is invalid")
+        validate_permission_selection(entry, approved_permissions)
         try:
             prior = self.connections.get(user_id, plugin_id)
         except KeyError:
@@ -279,9 +278,7 @@ class PluginPlatformService:
         entry = self.catalog_source.get(plugin_id)
         if not self.installations.is_installed(plugin_id):
             raise RuntimeError("plugin must be installed before connecting")
-        requested = set(entry.permissions)
-        if not approved_permissions or not approved_permissions.issubset(requested):
-            raise PermissionError("plugin permission approval is invalid")
+        validate_permission_selection(entry, approved_permissions)
         connector = self._connector(plugin_id)
         try:
             prior = self.connections.get(user_id, plugin_id)

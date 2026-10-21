@@ -508,20 +508,128 @@ class WorkspaceWindow:
                 )
 
             @staticmethod
-            def _default_oauth_permissions(plugin: dict[str, object]) -> list[str]:
+            def _permission_details_by_id(plugin: dict[str, object]) -> dict[str, dict[str, object]]:
                 details = plugin.get("permissionDetails", [])
-                if isinstance(details, list):
-                    defaults = [
-                        str(item.get("id"))
-                        for item in details
-                        if isinstance(item, dict) and item.get("id") and item.get("defaultApproved") is True
-                    ]
-                    if defaults:
-                        return defaults
+                if not isinstance(details, list):
+                    return {}
+                return {
+                    str(item.get("id")): item
+                    for item in details
+                    if isinstance(item, dict) and item.get("id")
+                }
+
+            @classmethod
+            def _close_permission_selection(
+                cls, plugin: dict[str, object], selected: list[str] | set[str]
+            ) -> list[str]:
                 permissions = plugin.get("permissions", [])
                 if not isinstance(permissions, list):
                     return []
-                return [str(permission) for permission in permissions if str(permission).endswith(".read")]
+                available = [str(permission) for permission in permissions]
+                available_set = set(available)
+                details = cls._permission_details_by_id(plugin)
+                closed: list[str] = []
+                pending = [str(permission) for permission in selected]
+                while pending:
+                    permission = pending.pop()
+                    if permission not in available_set or permission in closed:
+                        continue
+                    closed.append(permission)
+                    requires = details.get(permission, {}).get("requires", [])
+                    if isinstance(requires, list):
+                        pending.extend(str(required) for required in requires)
+                return [permission for permission in available if permission in closed]
+
+            @classmethod
+            def _missing_permission_dependencies(
+                cls, plugin: dict[str, object], selected: list[str] | set[str]
+            ) -> list[str]:
+                selected_set = {str(permission) for permission in selected}
+                details = cls._permission_details_by_id(plugin)
+                missing: list[str] = []
+                pending = list(selected_set)
+                seen: set[str] = set()
+                while pending:
+                    permission = pending.pop()
+                    if permission in seen:
+                        continue
+                    seen.add(permission)
+                    requires = details.get(permission, {}).get("requires", [])
+                    if not isinstance(requires, list):
+                        continue
+                    for required in requires:
+                        required_id = str(required)
+                        if required_id not in selected_set and required_id not in missing:
+                            missing.append(required_id)
+                        pending.append(required_id)
+                return missing
+
+            @classmethod
+            def _remove_dependent_permissions(
+                cls, plugin: dict[str, object], selected: set[str], removed_permission: str
+            ) -> set[str]:
+                details = cls._permission_details_by_id(plugin)
+                removed = {removed_permission}
+                changed = True
+                while changed:
+                    changed = False
+                    for permission in selected:
+                        if permission in removed:
+                            continue
+                        requires = details.get(permission, {}).get("requires", [])
+                        if isinstance(requires, list) and any(
+                            str(required) in removed for required in requires
+                        ):
+                            removed.add(permission)
+                            changed = True
+                selected.difference_update(removed)
+                return removed
+
+            def _permission_dependency_hint(
+                self, plugin: dict[str, object], selected: list[str] | set[str]
+            ) -> str | None:
+                missing = self._missing_permission_dependencies(plugin, selected)
+                if not missing:
+                    return None
+                details = self._permission_details_by_id(plugin)
+                labels = [
+                    f"{details.get(permission, {}).get('label') or permission} ({permission})"
+                    for permission in missing
+                ]
+                joined = ", ".join(labels)
+                if self.language == "ko":
+                    return f"선택한 권한을 사용하려면 {joined} 권한도 함께 선택해야 해."
+                return f"The selected permissions also require: {joined}."
+
+            @classmethod
+            def _default_oauth_permissions(cls, plugin: dict[str, object]) -> list[str]:
+                permissions = plugin.get("permissions", [])
+                if not isinstance(permissions, list):
+                    return []
+                available = {str(permission) for permission in permissions}
+                approved = plugin.get("approvedPermissions", [])
+                approved_defaults = (
+                    [str(permission) for permission in approved if str(permission) in available]
+                    if isinstance(approved, list)
+                    else []
+                )
+                if approved_defaults:
+                    return cls._close_permission_selection(plugin, approved_defaults)
+
+                details = cls._permission_details_by_id(plugin)
+                has_explicit_defaults = any(
+                    "defaultApproved" in detail and detail.get("defaultApproved") is not None
+                    for detail in details.values()
+                )
+                if has_explicit_defaults:
+                    defaults = [
+                        permission
+                        for permission in permissions
+                        if bool(details.get(str(permission), {}).get("defaultApproved") is True)
+                    ]
+                else:
+                    defaults = [str(permission) for permission in permissions if str(permission).endswith(".read")]
+                return cls._close_permission_selection(plugin, defaults)
 
             def _disconnect_selected_plugin(self):
                 plugin = self._selected_plugin
@@ -563,6 +671,7 @@ class WorkspaceWindow:
                     for item in permission_details
                     if isinstance(item, dict) and item.get("id")
                 }
+                selected_permissions = set(self._default_oauth_permissions(plugin))
                 for permission in permissions:
                     permission_id = str(permission)
                     detail = details_by_id.get(permission_id, {})
@@ -570,9 +679,50 @@ class WorkspaceWindow:
                     description_text = str(detail.get("description") or "")
                     check = QCheckBox(f"{label} ({description_text})" if description_text else label)
                     check.setProperty("permissionId", permission_id)
-                    check.setChecked(bool(detail.get("defaultApproved", permission_id.endswith(".read"))))
+                    check.setChecked(permission_id in selected_permissions)
                     checks.append(check)
                     form.addRow("권한" if self.language == "ko" else "Permission", check)
+
+                checks_by_id = {
+                    str(check.property("permissionId")): check
+                    for check in checks
+                }
+
+                def sync_permission_selection(permission_id: str, checked: bool):
+                    selected = {
+                        str(check.property("permissionId"))
+                        for check in checks
+                        if check.isChecked()
+                    }
+                    if checked:
+                        selected = set(self._close_permission_selection(plugin, selected))
+                    else:
+                        removed = self._remove_dependent_permissions(plugin, selected, permission_id)
+                        dependent_ids = sorted(removed - {permission_id})
+                        if dependent_ids:
+                            labels = [
+                                str(details_by_id.get(dependent, {}).get("label") or dependent)
+                                for dependent in dependent_ids
+                            ]
+                            removed_label = str(
+                                details_by_id.get(permission_id, {}).get("label") or permission_id
+                            )
+                            self._set_plugin_hint(
+                                f"{removed_label} 권한을 해제해서 {', '.join(labels)} 권한도 함께 해제했어."
+                                if self.language == "ko"
+                                else f"Cleared dependent permissions: {', '.join(labels)}."
+                            )
+                    for check in checks:
+                        should_be_checked = str(check.property("permissionId")) in selected
+                        if check.isChecked() != should_be_checked:
+                            check.setChecked(should_be_checked)
+
+                for permission_id, check in checks_by_id.items():
+                    check.toggled.connect(
+                        lambda checked, permission_id=permission_id: sync_permission_selection(
+                            permission_id, checked
+                        )
+                    )
                 account = QLineEdit()
                 account.setPlaceholderText("예: 개인 계정" if self.language == "ko" else "e.g. Personal account")
                 form.addRow("계정 이름" if self.language == "ko" else "Account label", account)
@@ -617,6 +767,10 @@ class WorkspaceWindow:
                 if not approved:
                     self._set_plugin_hint("최소 한 개의 권한을 확인해야 해." if self.language == "ko" else "Approve at least one permission.")
                     return
+                dependency_hint = self._permission_dependency_hint(plugin, approved)
+                if dependency_hint:
+                    self._set_plugin_hint(dependency_hint)
+                    return
                 plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
                 if use_browser_oauth.isChecked():
                     self._start_oauth_connection(plugin, approved, account.text().strip() or None)
@@ -649,6 +803,10 @@ class WorkspaceWindow:
                 account_label: str | None = None,
             ):
                 if plugin is None:
+                    return
+                dependency_hint = self._permission_dependency_hint(plugin, permissions)
+                if dependency_hint:
+                    self._set_plugin_hint(dependency_hint)
                     return
                 plugin_id = str(plugin.get("id") or plugin.get("pluginId") or "")
                 self._oauth_poll_plugin_id = plugin_id

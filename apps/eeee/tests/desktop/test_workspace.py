@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QCheckBox, QDialog
 
 from app.desktop.workspace import WorkspaceWindow
 
@@ -67,6 +67,22 @@ class PluginWorkspaceClient(WorkspaceClient):
             "description": "Notion pages connector",
             "authMode": "token-or-oauth",
             "permissions": ["pages.read", "pages.write"],
+            "permissionDetails": [
+                {
+                    "id": "pages.read",
+                    "label": "페이지 읽기",
+                    "description": "Notion 페이지를 읽습니다.",
+                    "defaultApproved": True,
+                    "requires": [],
+                },
+                {
+                    "id": "pages.write",
+                    "label": "페이지 쓰기",
+                    "description": "Notion 페이지를 만들거나 수정합니다.",
+                    "defaultApproved": False,
+                    "requires": ["pages.read"],
+                },
+            ],
             "installSource": "bundled-optional",
             "status": "not_installed",
             "nextAction": "install",
@@ -227,6 +243,76 @@ def test_workspace_install_starts_browser_oauth_for_oauth_plugin(monkeypatch):
         ("oauth", "notion", ["pages.read"], None),
     ]
     assert opened == ["https://provider.test/authorize"]
+    window.close()
+
+
+def test_native_oauth_defaults_respect_explicit_false_and_required_permissions():
+    app = QApplication.instance() or QApplication([])
+    window = WorkspaceWindow(WorkspaceClient())
+    _settle()
+
+    assert window._default_oauth_permissions({
+        "permissions": ["pages.read", "pages.write"],
+        "permissionDetails": [
+            {"id": "pages.read", "defaultApproved": False, "requires": []},
+            {"id": "pages.write", "defaultApproved": False, "requires": ["pages.read"]},
+        ],
+    }) == []
+    assert set(window._default_oauth_permissions({
+        "permissions": ["pages.read", "pages.write"],
+        "permissionDetails": [
+            {"id": "pages.read", "defaultApproved": False, "requires": []},
+            {"id": "pages.write", "defaultApproved": True, "requires": ["pages.read"]},
+        ],
+    })) == {"pages.read", "pages.write"}
+    window.close()
+
+
+def test_native_oauth_rejects_missing_permission_dependency_before_starting_oauth(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    client = PluginWorkspaceClient()
+    window = WorkspaceWindow(client)
+    _settle()
+    window.nav.setCurrentRow(3)
+    _settle()
+
+    window._start_oauth_connection(window._selected_plugin, ["pages.write"])
+    _settle()
+
+    assert not [call for call in client.calls if call[0] == "oauth"]
+    assert "pages.read" in window.plugin_hint.text()
+    window.close()
+
+
+def test_native_permission_dialog_closes_required_permissions(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = WorkspaceWindow(WorkspaceClient())
+    _settle()
+    plugin = {
+        "id": "sample",
+        "name": "Sample",
+        "authMode": "oauth",
+        "permissions": ["pages.read", "pages.write"],
+        "permissionDetails": [
+            {"id": "pages.read", "label": "페이지 읽기", "defaultApproved": False, "requires": []},
+            {"id": "pages.write", "label": "페이지 쓰기", "defaultApproved": True, "requires": ["pages.read"]},
+        ],
+    }
+
+    def inspect_dialog(dialog):
+        checks = {
+            str(check.property("permissionId")): check
+            for check in dialog.findChildren(QCheckBox)
+            if check.property("permissionId")
+        }
+        assert checks["pages.read"].isChecked()
+        assert checks["pages.write"].isChecked()
+        checks["pages.read"].setChecked(False)
+        assert not checks["pages.write"].isChecked()
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", inspect_dialog)
+    window._show_plugin_connection_dialog(plugin)
     window.close()
 
 

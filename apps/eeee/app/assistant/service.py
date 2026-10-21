@@ -114,11 +114,17 @@ class AssistantService:
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
         conversation_id: str = "desktop-default", approved: bool = False,
         approval_request_id: str | None = None, request_id: str | None = None,
+        user_id: str = "local-user",
     ) -> AssistantRouteResult:
         request_id = request_id.strip() if request_id else None
         request = AssistantRequest(
             raw_text=text,
-            context={"workspace": workspace, "conversationId": conversation_id, "approved": approved},
+            context={
+                "workspace": workspace,
+                "conversationId": conversation_id,
+                "approved": approved,
+                "userId": user_id,
+            },
             requested_capability=requested_capability,
         )
         if self.background_supervisor is not None:
@@ -153,6 +159,7 @@ class AssistantService:
                             text, workspace, requested_capability=requested_capability,
                             conversation_id=conversation_id, approved=approved, resume_project_id=project_id,
                             approval_request_id=approval_request_id, request_id=request_id,
+                            user_id=user_id,
                         )
                     except Exception as exc:
                         self._remember_turn(
@@ -196,6 +203,7 @@ class AssistantService:
                             "approvalRequestId": approval_request_id,
                             "requestId": request_id,
                             "projectId": project_id,
+                            "userId": user_id,
                         },
                     )
                 except Exception as exc:
@@ -234,6 +242,7 @@ class AssistantService:
             text, workspace, requested_capability=requested_capability,
             conversation_id=conversation_id, approved=approved,
             approval_request_id=approval_request_id, request_id=request_id,
+            user_id=user_id,
         )
         self._remember_turn(
             conversation_id,
@@ -274,6 +283,7 @@ class AssistantService:
         conversation_id: str = "desktop-default", approved: bool = False,
         approval_request_id: str | None = None,
         resume_project_id: str | None = None, request_id: str | None = None,
+        user_id: str = "local-user",
     ) -> AssistantRouteResult:
         implicit_preference = extract_implicit_preference(text)
         if implicit_preference is not None:
@@ -295,6 +305,7 @@ class AssistantService:
                     "workspace": workspace,
                     "conversationId": conversation_id,
                     "approved": approved,
+                    "userId": user_id,
                     **({"requestId": request_id} if request_id else {}),
                     **({"approvalRequestId": approval_request_id} if approval_request_id else {}),
                     **({"resumeProjectId": resume_project_id} if resume_project_id else {}),
@@ -529,12 +540,14 @@ class AssistantService:
         conversation_id = input_data.get("conversationId")
         approved = input_data.get("approved")
         approval_request_id = input_data.get("approvalRequestId")
+        user_id = input_data.get("userId")
         project_id = input_data.get("projectId")
         request_id = input_data.get("requestId")
         if not isinstance(text, str) or not text.strip():
             return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
         resolved_conversation_id = conversation_id if isinstance(conversation_id, str) else "desktop-default"
         resolved_request_id = request_id if isinstance(request_id, str) else None
+        resolved_user_id = user_id if isinstance(user_id, str) and user_id.strip() else "local-user"
 
         def run() -> dict[str, object]:
             self._prepare_background_attempt(
@@ -550,6 +563,7 @@ class AssistantService:
                     approval_request_id=approval_request_id if isinstance(approval_request_id, str) else None,
                     resume_project_id=project_id if isinstance(project_id, str) else None,
                     request_id=resolved_request_id,
+                    user_id=resolved_user_id,
                 )
             except Exception as exc:
                 self._remember_turn(

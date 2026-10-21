@@ -775,6 +775,7 @@ def build_assistant_router(
         payload: AssistantRequestPayload, request: Request
     ) -> AssistantRouteResponse:
         _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
             return AssistantRouteResponse.model_validate(
                 service.route(
@@ -784,6 +785,7 @@ def build_assistant_router(
                     approved=payload.approved,
                     approval_request_id=payload.approval_request_id,
                     request_id=payload.request_id,
+                    user_id=user_id,
                 ).model_dump()
             )
         except ValueError as exc:

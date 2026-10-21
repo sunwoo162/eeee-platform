@@ -326,6 +326,30 @@ def test_connected_gmail_is_selected_and_receives_normalized_natural_language_in
     assert payload["pluginOutput"]["input"]["limit"] == 5
 
 
+def test_assistant_route_uses_the_request_user_plugin_connection(tmp_path) -> None:
+    application = create_app(Settings(
+        data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces",
+        claim_latch_auto_start=False,
+    ))
+    application.state.plugin_platform.credentials = MemoryCredentialStore()
+    application.state.plugin_platform.connectors = {"gmail": _RouteGmailConnector()}
+    application.state.plugin_platform.install("gmail")
+    application.state.plugin_platform.connect(
+        "user-a", "gmail", {"mail.read"}, {"access_token": "secret"}, "Work"
+    )
+    client = TestClient(application)
+
+    response = client.post(
+        "/api/assistant/route",
+        json={"text": "안 읽은 메일 5개 보여줘"},
+        headers={"X-EEEE-User-Id": "user-a"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["plugin_id"] == "gmail"
+
+
 def test_natural_language_gmail_send_is_waiting_for_action_approval(tmp_path) -> None:
     application = create_app(Settings(
         data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces",

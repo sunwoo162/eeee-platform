@@ -44,6 +44,24 @@ def test_iseol_github_review_result_becomes_durable_project_evidence(tmp_path) -
     ).project_revision == "rev-1"
 
 
+def test_github_review_evidence_cannot_be_injected_into_another_users_project(tmp_path) -> None:
+    application = create_app(
+        Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    )
+    application.state.coordinator.create_project(
+        "project-1", "Gleave", str(tmp_path / "workspace"), revision="rev-1", user_id="user-a"
+    )
+    client = TestClient(application)
+
+    response = client.post(
+        "/api/projects/project-1/evidence/github-review",
+        headers={"X-EEEE-User-Id": "user-b"},
+        json=_review("project-1", "rev-1"),
+    )
+
+    assert response.status_code == 404
+
+
 def test_stale_iseol_review_result_is_rejected_before_persistence(tmp_path) -> None:
     application = create_app(
         Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")

@@ -77,6 +77,24 @@ def test_memory_api_persists_explicit_user_preference(tmp_path) -> None:
         assert client.get("/api/memory", params={"query": "한국어"}).json()[0]["content"] == "한국어"
 
 
+def test_memory_api_isolates_preferences_by_user_header(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspace")
+    client = TestClient(create_app(settings))
+    user_a = {"X-EEEE-User-Id": "user-a"}
+    user_b = {"X-EEEE-User-Id": "user-b"}
+
+    created = client.post(
+        "/api/memory/user-preference",
+        headers=user_a,
+        json={"key": "language", "value": "한국어"},
+    )
+
+    assert created.status_code == 200
+    memory_id = created.json()["id"]
+    assert client.get("/api/memory", headers=user_b, params={"query": "한국어"}).json() == []
+    assert client.get(f"/api/memory/{memory_id}", headers=user_b).status_code == 404
+
+
 def test_memory_api_can_list_lifecycle_records_and_delete_one(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspace")
     with TestClient(create_app(settings)) as client:

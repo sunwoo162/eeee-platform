@@ -137,6 +137,7 @@ class ConversationService:
             return
 
         conversation_id = request.conversation_id
+        conversation = self.store.get_conversation_for_request(request.id)
         request = self.store.transition_request(request.id, RequestState.CLASSIFIED)
         yield self.store.append_event(
             request.id, "request.classified", {"status": request.state.value}
@@ -146,7 +147,9 @@ class ConversationService:
         collected = ""
         cancel_event = self._cancel_events.setdefault(request.id, threading.Event())
         try:
-            messages = self.context_builder.build(conversation_id)
+            messages = self.context_builder.build(
+                conversation_id, user_id=conversation.user_id
+            )
             for delta in self.provider.stream(messages, cancel_event=cancel_event):
                 if cancel_event.is_set():
                     raise ConversationCancelled()

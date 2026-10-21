@@ -465,7 +465,9 @@ class ProjectExecutionCapability:
             )
 
         def provision(_child: ExecutionEnvelope) -> CapabilityOutcome:
-            project_brief = self.coordinator.build_project_brief(project.id, state.request_id)
+            project_brief = self.coordinator.build_project_brief(
+                project.id, state.request_id, user_id=user_id
+            )
             planning_handoff = self.planning_service.quick_plan(
                 project, brief,
                 memory_ids=list(dict.fromkeys([
@@ -628,7 +630,9 @@ class ProjectExecutionCapability:
                         }],
                         "createdAt": datetime.now(timezone.utc),
                     })
-                    memory_records = self.coordinator.record_verified_project_outcome(outcome)
+                    memory_records = self.coordinator.record_verified_project_outcome(
+                        outcome, user_id=user_id
+                    )
             elif brief.runtime_profile == "web_app":
                 prepared = self.provisioner.web_runner.prepare(
                     project_id=project.id,

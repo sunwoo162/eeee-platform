@@ -450,13 +450,16 @@ class KernelService:
         }))
 
     def _retrieve_context(self, request: AssistantRequest, supplied: AssistantContext) -> AssistantContext:
-        memories = self.memory.search(request.raw_text)
-        memory_packet = self.memory_context_compiler.compile(request.raw_text, self.memory)
+        user_id = str(request.context.get("userId") or "local-user")
+        memories = self.memory.search(request.raw_text, user_id=user_id)
+        memory_packet = self.memory_context_compiler.compile(
+            request.raw_text, self.memory, user_id=user_id
+        )
         conversation_id = str(request.context.get("conversationId") or "desktop-default")
         conversation_turns = (
             self.conversation_store.recent_conversation_turns(conversation_id)
             if self.conversation_store is not None
-            else self.memory.recent_conversation_turns(conversation_id)
+            else self.memory.recent_conversation_turns(conversation_id, user_id=user_id)
         )
         return AssistantContext(
             memory_ids=list(dict.fromkeys([*supplied.memory_ids, *(item.id for item in memories)])),

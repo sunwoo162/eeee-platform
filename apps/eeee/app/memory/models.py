@@ -31,6 +31,7 @@ class MemoryCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidate_id: str = Field(min_length=1)
+    user_id: str = Field(default="local-user", min_length=1)
     kind: MemoryKind
     content: str = Field(min_length=1)
     scope: dict[str, Any]
@@ -47,6 +48,7 @@ class MemoryRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
+    user_id: str = Field(default="local-user", min_length=1)
     kind: MemoryKind
     content: str = Field(min_length=1)
     scope: dict[str, Any]
@@ -71,6 +73,7 @@ class GrowthFeedback(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
+    user_id: str = Field(default="local-user", min_length=1)
     conversation_id: str = Field(min_length=1)
     request_id: str | None = None
     message_id: str = Field(min_length=1)

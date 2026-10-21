@@ -1319,18 +1319,22 @@ def build_api_router(
     def get_project_brief(request_id: str, request: Request) -> ProjectBriefV1:
         _require_local_desktop(request)
         project_id, _workspace = flow.store.get_request_context(request_id)
-        return flow.coordinator.build_project_brief(project_id, request_id)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return flow.coordinator.build_project_brief(
+            project_id, request_id, user_id=user_id
+        )
 
     @router.post(
         "/projects/{project_id}/outcomes",
         response_model=list[MemoryRecord],
     )
     def ingest_project_outcome(
-        project_id: str, payload: ProjectOutcomeReportV1
+        project_id: str, payload: ProjectOutcomeReportV1, request: Request
     ) -> list[MemoryRecord]:
         if payload.project_id != project_id:
             raise HTTPException(status_code=409, detail="Outcome project does not match the route")
-        return flow.coordinator.record_project_outcome(payload)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return flow.coordinator.record_project_outcome(payload, user_id=user_id)
 
     @router.post(
         "/projects/{project_id}/evidence/github-review",
@@ -1354,6 +1358,7 @@ def build_api_router(
 
     @router.get("/memory", response_model=list[MemoryRecord])
     def search_memory(
+        request: Request,
         query: str = Query(default="", max_length=500),
         status: MemoryStatus | None = Query(default=None),
         source_project_id: str | None = Query(default=None, alias="sourceProjectId", max_length=160),
@@ -1364,6 +1369,7 @@ def build_api_router(
         workstream: str | None = Query(default=None, max_length=120),
         limit: int = Query(default=20, ge=1, le=100),
     ) -> list[MemoryRecord]:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         scope = {
             key: value
             for key, value in {
@@ -1382,21 +1388,26 @@ def build_api_router(
                 query=query,
                 scope=scope or None,
                 limit=limit,
+                user_id=user_id,
             )
-        return flow.coordinator.memory.search(query, scope=scope or None, limit=limit)
+        return flow.coordinator.memory.search(
+            query, scope=scope or None, limit=limit, user_id=user_id
+        )
 
     @router.get("/memory/{memory_id}", response_model=MemoryRecord)
-    def get_memory(memory_id: str) -> MemoryRecord:
+    def get_memory(memory_id: str, request: Request) -> MemoryRecord:
         try:
-            return flow.coordinator.memory.get(memory_id)
+            user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+            return flow.coordinator.memory.get(memory_id, user_id=user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.post("/memory/user-preference", response_model=MemoryRecord)
-    def save_user_preference(payload: UserPreferencePayload) -> MemoryRecord:
+    def save_user_preference(payload: UserPreferencePayload, request: Request) -> MemoryRecord:
         try:
+            user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
             return flow.coordinator.remember_user_preference(
-                payload.key, payload.value, scope=payload.scope
+                payload.key, payload.value, scope=payload.scope, user_id=user_id
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1407,10 +1418,13 @@ def build_api_router(
         status_code=201,
         responses={200: {"model": MemoryFeedbackResponse}},
     )
-    def record_memory_feedback(payload: MemoryFeedbackPayload) -> JSONResponse:
+    def record_memory_feedback(
+        payload: MemoryFeedbackPayload, request: Request
+    ) -> JSONResponse:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         already_exists = False
         try:
-            flow.coordinator.memory.get_feedback(payload.client_feedback_id)
+            flow.coordinator.memory.get_feedback(payload.client_feedback_id, user_id=user_id)
             already_exists = True
         except KeyError:
             pass
@@ -1425,6 +1439,7 @@ def build_api_router(
                 correction=payload.correction,
                 remember=payload.remember,
                 actor=payload.actor,
+                user_id=user_id,
             )
             memory = growth.memory_for_feedback(feedback)
         except GrowthFeedbackError as exc:
@@ -1440,45 +1455,63 @@ def build_api_router(
         )
 
     @router.post("/memory", response_model=MemoryRecord, status_code=201)
-    def create_explicit_memory(payload: MemoryCreatePayload) -> MemoryRecord:
+    def create_explicit_memory(
+        payload: MemoryCreatePayload, request: Request
+    ) -> MemoryRecord:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         return flow.coordinator.memory.save_explicit_memory(
             payload.content,
             source_message_id=payload.source_message_id,
             actor=payload.actor,
             kind=payload.kind,
             scope=payload.scope,
+            user_id=user_id,
         )
 
     @router.patch("/memory/{memory_id}", response_model=MemoryRecord)
-    def edit_explicit_memory(memory_id: str, payload: MemoryEditPayload) -> MemoryRecord:
+    def edit_explicit_memory(
+        memory_id: str, payload: MemoryEditPayload, request: Request
+    ) -> MemoryRecord:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         return flow.coordinator.memory.edit(
-            memory_id, payload.content, actor=payload.actor
+            memory_id, payload.content, actor=payload.actor, user_id=user_id
         )
 
     @router.post("/memory/{memory_id}/promote", response_model=MemoryRecord)
     def promote_memory(
-        memory_id: str, payload: MemoryPromotionPayload
+        memory_id: str, payload: MemoryPromotionPayload, request: Request
     ) -> MemoryRecord:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         return flow.coordinator.promote_memory(
             memory_id,
             actor=payload.actor,
             evidence_ids=payload.evidence_ids,
+            user_id=user_id,
         )
 
     @router.post("/memory/{memory_id}/revoke", response_model=MemoryRecord)
-    def revoke_memory(memory_id: str, payload: MemoryRevokePayload) -> MemoryRecord:
+    def revoke_memory(
+        memory_id: str, payload: MemoryRevokePayload, request: Request
+    ) -> MemoryRecord:
         try:
-            return flow.coordinator.memory.revoke(memory_id, reason=payload.reason)
+            user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+            return flow.coordinator.memory.revoke(
+                memory_id, reason=payload.reason, user_id=user_id
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.post("/memory/{memory_id}/delete", response_model=MemoryDeleteResponse)
-    def delete_memory(memory_id: str, payload: MemoryDeletePayload) -> MemoryDeleteResponse:
+    def delete_memory(
+        memory_id: str, payload: MemoryDeletePayload, request: Request
+    ) -> MemoryDeleteResponse:
         try:
+            user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
             deleted = flow.coordinator.memory.delete(
                 memory_id,
                 actor=payload.actor,
                 reason=payload.reason,
+                user_id=user_id,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

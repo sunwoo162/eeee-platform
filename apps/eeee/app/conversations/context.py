@@ -23,7 +23,8 @@ class ConversationContextBuilder:
         self.max_context_tokens = max_context_tokens
 
     def build(
-        self, conversation_id: str, *, memory_ids: list[str] | None = None
+        self, conversation_id: str, *, memory_ids: list[str] | None = None,
+        user_id: str = "local-user",
     ) -> list[dict[str, str]]:
         # A conservative character budget keeps the provider context bounded
         # without requiring a tokenizer in the Core package.
@@ -34,11 +35,11 @@ class ConversationContextBuilder:
                 memories = []
                 for memory_id in memory_ids:
                     try:
-                        memories.append(self.memory_store.get(memory_id))
+                        memories.append(self.memory_store.get(memory_id, user_id=user_id))
                     except KeyError:
                         continue
             else:
-                memories = self.memory_store.search("", limit=12)
+                memories = self.memory_store.search("", user_id=user_id, limit=12)
             memory_budget = max_characters // 2
             memory_used = 0
             for memory in memories:

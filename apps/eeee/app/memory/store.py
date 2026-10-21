@@ -45,6 +45,13 @@ class MemoryPromotionError(RuntimeError):
     """A memory lifecycle transition is not allowed."""
 
 
+def _normalise_user_id(value: str) -> str:
+    user_id = value.strip()
+    if not user_id:
+        raise ValueError("user_id is required")
+    return user_id
+
+
 class MemoryStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -134,20 +141,55 @@ class MemoryStore:
             }
             if "request_id" not in conversation_columns:
                 connection.execute("ALTER TABLE conversation_turns ADD COLUMN request_id TEXT")
+            memory_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(memory_records)").fetchall()
+            }
+            if "user_id" not in memory_columns:
+                connection.execute(
+                    "ALTER TABLE memory_records ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local-user'"
+                )
+            feedback_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(assistant_feedback)").fetchall()
+            }
+            if "user_id" not in feedback_columns:
+                connection.execute(
+                    "ALTER TABLE assistant_feedback ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local-user'"
+                )
+            turn_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(conversation_turns)").fetchall()
+            }
+            if "user_id" not in turn_columns:
+                connection.execute(
+                    "ALTER TABLE conversation_turns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local-user'"
+                )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memory_user_status "
+                "ON memory_records (user_id, status, created_at)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_feedback_user_created "
+                "ON assistant_feedback (user_id, created_at)"
+            )
+            connection.execute("DROP INDEX IF EXISTS idx_conversation_turns_request_role")
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_turns_request_role "
-                "ON conversation_turns (conversation_id, request_id, role) "
+                "ON conversation_turns (conversation_id, user_id, request_id, role) "
                 "WHERE request_id IS NOT NULL"
             )
 
     def append_conversation_turn(
-        self, conversation_id: str, role: str, content: str, *, request_id: str | None = None
+        self, conversation_id: str, role: str, content: str, *,
+        request_id: str | None = None, user_id: str = "local-user"
     ) -> None:
         """Persist one local conversation turn for short-term continuity."""
 
         conversation_id = conversation_id.strip()
         content = _redact_conversation_content(content.strip())
         request_id = request_id.strip() if request_id else None
+        user_id = _normalise_user_id(user_id)
         if not conversation_id:
             raise ValueError("conversation_id is required")
         if role not in {"user", "assistant"}:
@@ -159,8 +201,8 @@ class MemoryStore:
             if request_id is not None:
                 existing = connection.execute(
                     "SELECT id, content FROM conversation_turns "
-                    "WHERE conversation_id = ? AND request_id = ? AND role = ?",
-                    (conversation_id, request_id, role),
+                    "WHERE conversation_id = ? AND user_id = ? AND request_id = ? AND role = ?",
+                    (conversation_id, user_id, request_id, role),
                 ).fetchone()
                 if existing is not None:
                     if role == "user" and existing["content"] != content:
@@ -173,22 +215,23 @@ class MemoryStore:
                     return
             connection.execute(
                 "INSERT INTO conversation_turns "
-                "(conversation_id, role, content, request_id, created_at) VALUES (?, ?, ?, ?, ?)",
-                (conversation_id, role, content, request_id, now),
+                "(conversation_id, user_id, role, content, request_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (conversation_id, user_id, role, content, request_id, now),
             )
 
     def recent_conversation_turns(
-        self, conversation_id: str, *, limit: int = 12
+        self, conversation_id: str, *, limit: int = 12, user_id: str = "local-user"
     ) -> list[dict[str, str]]:
         """Return the latest turns in chronological order for provider context."""
 
         if limit <= 0:
             return []
+        user_id = _normalise_user_id(user_id)
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT role, content FROM conversation_turns "
-                "WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
-                (conversation_id, limit),
+                "WHERE conversation_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?",
+                (conversation_id, user_id, limit),
             ).fetchall()
         return [
             {"role": str(row["role"]), "content": str(row["content"])}
@@ -196,36 +239,37 @@ class MemoryStore:
         ]
 
     def list_conversations(
-        self, *, query: str = "", limit: int = 50
+        self, *, query: str = "", limit: int = 50, user_id: str = "local-user"
     ) -> list[dict[str, object]]:
         """Return bounded conversation summaries for the Chat History client."""
 
         if limit < 1 or limit > 100:
             raise ValueError("limit must be between 1 and 100")
         query = query.strip()
+        user_id = _normalise_user_id(user_id)
         with self._connect() as connection:
             if query:
                 pattern = f"%{_escape_like(query)}%"
                 rows = connection.execute(
                     "SELECT conversation_id, COUNT(*) AS message_count, MAX(id) AS latest_id "
                     "FROM conversation_turns "
-                    "WHERE conversation_id LIKE ? ESCAPE '\\' "
-                    "OR content LIKE ? ESCAPE '\\' "
+                    "WHERE user_id = ? AND (conversation_id LIKE ? ESCAPE '\\' "
+                    "OR content LIKE ? ESCAPE '\\') "
                     "GROUP BY conversation_id ORDER BY latest_id DESC LIMIT ?",
-                    (pattern, pattern, limit),
+                    (user_id, pattern, pattern, limit),
                 ).fetchall()
             else:
                 rows = connection.execute(
                     "SELECT conversation_id, COUNT(*) AS message_count, MAX(id) AS latest_id "
-                    "FROM conversation_turns GROUP BY conversation_id "
+                    "FROM conversation_turns WHERE user_id = ? GROUP BY conversation_id "
                     "ORDER BY latest_id DESC LIMIT ?",
-                    (limit,),
+                    (user_id, limit),
                 ).fetchall()
             summaries: list[dict[str, object]] = []
             for row in rows:
                 latest = connection.execute(
-                    "SELECT content, created_at FROM conversation_turns WHERE id = ?",
-                    (row["latest_id"],),
+                    "SELECT content, created_at FROM conversation_turns WHERE id = ? AND user_id = ?",
+                    (row["latest_id"], user_id),
                 ).fetchone()
                 if latest is None:
                     continue
@@ -238,11 +282,11 @@ class MemoryStore:
             return summaries
 
     def search_conversations(
-        self, query: str, *, limit: int = 50
+        self, query: str, *, limit: int = 50, user_id: str = "local-user"
     ) -> list[dict[str, object]]:
         """Search transcript text without loading an unbounded transcript."""
 
-        return self.list_conversations(query=query, limit=limit)
+        return self.list_conversations(query=query, limit=limit, user_id=user_id)
 
     def get_conversation(
         self,
@@ -250,6 +294,7 @@ class MemoryStore:
         *,
         limit: int = 100,
         before_id: int | None = None,
+        user_id: str = "local-user",
     ) -> dict[str, object]:
         """Return the newest page, or an older page before an id cursor."""
 
@@ -260,22 +305,23 @@ class MemoryStore:
             raise ValueError("limit must be between 1 and 500")
         if before_id is not None and before_id < 1:
             raise ValueError("before_id must be positive")
+        user_id = _normalise_user_id(user_id)
         with self._connect() as connection:
             count = connection.execute(
-                "SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = ?",
-                (conversation_id,),
+                "SELECT COUNT(*) FROM conversation_turns WHERE conversation_id = ? AND user_id = ?",
+                (conversation_id, user_id),
             ).fetchone()[0]
             if before_id is None:
                 rows = connection.execute(
                     "SELECT id, role, content, created_at FROM conversation_turns "
-                    "WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
-                    (conversation_id, limit + 1),
+                    "WHERE conversation_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?",
+                    (conversation_id, user_id, limit + 1),
                 ).fetchall()
             else:
                 rows = connection.execute(
                     "SELECT id, role, content, created_at FROM conversation_turns "
-                    "WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
-                    (conversation_id, before_id, limit + 1),
+                    "WHERE conversation_id = ? AND user_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+                    (conversation_id, user_id, before_id, limit + 1),
                 ).fetchall()
         has_older = len(rows) > limit
         page = list(reversed(rows[:limit]))
@@ -306,6 +352,7 @@ class MemoryStore:
         remember: bool = False,
         actor: str = "user",
         request_id: str | None = None,
+        user_id: str = "local-user",
     ) -> GrowthFeedback:
         """Persist one user rating without promoting it to memory by default."""
 
@@ -314,6 +361,7 @@ class MemoryStore:
         message_id = message_id.strip()
         actor = actor.strip()
         request_id = request_id.strip() if request_id else None
+        user_id = _normalise_user_id(user_id)
         correction = _redact_conversation_content(correction.strip()) if correction else None
         if not feedback_id or not conversation_id or not message_id or not actor:
             raise ValueError("feedback requires an id, conversation, message, and actor")
@@ -324,6 +372,7 @@ class MemoryStore:
         now = _now()
         feedback = GrowthFeedback(
             id=feedback_id,
+            user_id=user_id,
             conversation_id=conversation_id,
             request_id=request_id,
             message_id=message_id,
@@ -336,7 +385,8 @@ class MemoryStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing_row = connection.execute(
-                "SELECT * FROM assistant_feedback WHERE id = ?", (feedback_id,)
+                "SELECT * FROM assistant_feedback WHERE id = ? AND user_id = ?",
+                (feedback_id, user_id),
             ).fetchone()
             if existing_row is not None:
                 existing = _feedback_from_row(existing_row)
@@ -358,10 +408,11 @@ class MemoryStore:
                 return existing
             connection.execute(
                 "INSERT INTO assistant_feedback "
-                "(id, conversation_id, request_id, message_id, rating, correction, "
-                "remember, memory_id, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(id, user_id, conversation_id, request_id, message_id, rating, correction, "
+                "remember, memory_id, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     feedback.id,
+                    feedback.user_id,
                     feedback.conversation_id,
                     feedback.request_id,
                     feedback.message_id,
@@ -385,6 +436,7 @@ class MemoryStore:
         correction: str,
         actor: str = "user",
         request_id: str | None = None,
+        user_id: str = "local-user",
     ) -> GrowthFeedback:
         """Atomically write feedback and its explicit active memory."""
 
@@ -397,12 +449,14 @@ class MemoryStore:
             correction=correction,
             remember=True,
             actor=actor,
+            user_id=user_id,
         )
         if feedback.correction is None:
             raise ValueError("explicit memory promotion requires correction")
-        memory_id = f"feedback-memory-{hashlib.sha256(feedback.id.encode('utf-8')).hexdigest()[:32]}"
+        memory_id = f"feedback-memory-{hashlib.sha256(f'{feedback.user_id}\0{feedback.id}'.encode('utf-8')).hexdigest()[:32]}"
         memory = MemoryRecord(
             id=memory_id,
+            user_id=feedback.user_id,
             kind="agent_routing_hint",
             content=feedback.correction,
             scope={"conversationId": feedback.conversation_id, "source": "feedback"},
@@ -421,7 +475,8 @@ class MemoryStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing_row = connection.execute(
-                "SELECT * FROM assistant_feedback WHERE id = ?", (feedback.id,)
+                "SELECT * FROM assistant_feedback WHERE id = ? AND user_id = ?",
+                (feedback.id, feedback.user_id),
             ).fetchone()
             if existing_row is not None:
                 existing = _feedback_from_row(existing_row)
@@ -431,10 +486,11 @@ class MemoryStore:
             else:
                 connection.execute(
                     "INSERT INTO assistant_feedback "
-                    "(id, conversation_id, request_id, message_id, rating, correction, "
-                    "remember, memory_id, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(id, user_id, conversation_id, request_id, message_id, rating, correction, "
+                    "remember, memory_id, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         feedback.id,
+                        feedback.user_id,
                         feedback.conversation_id,
                         feedback.request_id,
                         feedback.message_id,
@@ -447,7 +503,8 @@ class MemoryStore:
                     ),
                 )
             memory_row = connection.execute(
-                "SELECT * FROM memory_records WHERE id = ?", (memory.id,)
+                "SELECT * FROM memory_records WHERE id = ? AND user_id = ?",
+                (memory.id, memory.user_id),
             ).fetchone()
             if memory_row is None:
                 _insert_record(connection, memory)
@@ -462,33 +519,40 @@ class MemoryStore:
                         f"Feedback {feedback.id} already maps to different memory content"
                     )
             connection.execute(
-                "UPDATE assistant_feedback SET memory_id = ? WHERE id = ?",
-                (memory.id, feedback.id),
+                "UPDATE assistant_feedback SET memory_id = ? WHERE id = ? AND user_id = ?",
+                (memory.id, feedback.id, feedback.user_id),
             )
         return feedback.model_copy(update={"memory_id": memory.id})
 
-    def get_feedback(self, feedback_id: str) -> GrowthFeedback:
+    def get_feedback(self, feedback_id: str, *, user_id: str = "local-user") -> GrowthFeedback:
+        user_id = _normalise_user_id(user_id)
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM assistant_feedback WHERE id = ?", (feedback_id,)
+                "SELECT * FROM assistant_feedback WHERE id = ? AND user_id = ?",
+                (feedback_id, user_id),
             ).fetchone()
         if row is None:
             raise KeyError(f"Feedback not found: {feedback_id}")
         return _feedback_from_row(row)
 
-    def attach_feedback_memory(self, feedback_id: str, memory_id: str) -> GrowthFeedback:
+    def attach_feedback_memory(
+        self, feedback_id: str, memory_id: str, *, user_id: str = "local-user"
+    ) -> GrowthFeedback:
         if not memory_id.strip():
             raise ValueError("memory_id is required")
+        user_id = _normalise_user_id(user_id)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT * FROM assistant_feedback WHERE id = ?", (feedback_id,)
+                "SELECT * FROM assistant_feedback WHERE id = ? AND user_id = ?",
+                (feedback_id, user_id),
             ).fetchone()
             if row is None:
                 raise KeyError(f"Feedback not found: {feedback_id}")
             current = _feedback_from_row(row)
             memory_row = connection.execute(
-                "SELECT id FROM memory_records WHERE id = ?", (memory_id,)
+                "SELECT id FROM memory_records WHERE id = ? AND user_id = ?",
+                (memory_id, user_id),
             ).fetchone()
             if memory_row is None:
                 raise KeyError(f"Memory not found: {memory_id}")
@@ -497,24 +561,29 @@ class MemoryStore:
                     f"Feedback {feedback_id} already points to another memory"
                 )
             connection.execute(
-                "UPDATE assistant_feedback SET memory_id = ? WHERE id = ?",
-                (memory_id, feedback_id),
+                "UPDATE assistant_feedback SET memory_id = ? WHERE id = ? AND user_id = ?",
+                (memory_id, feedback_id, user_id),
             )
             return current.model_copy(update={"memory_id": memory_id})
 
-    def list_feedback(self, *, limit: int = 100) -> list[GrowthFeedback]:
+    def list_feedback(
+        self, *, limit: int = 100, user_id: str = "local-user"
+    ) -> list[GrowthFeedback]:
         if limit < 1 or limit > 500:
             raise ValueError("limit must be between 1 and 500")
+        user_id = _normalise_user_id(user_id)
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM assistant_feedback ORDER BY created_at DESC LIMIT ?",
-                (limit,),
+                "SELECT * FROM assistant_feedback WHERE user_id = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
             ).fetchall()
         return [_feedback_from_row(row) for row in rows]
 
     def save_candidate(self, candidate: MemoryCandidate) -> MemoryRecord:
         record = MemoryRecord(
             id=candidate.candidate_id,
+            user_id=candidate.user_id,
             kind=candidate.kind,
             content=candidate.content,
             scope=candidate.scope,
@@ -528,7 +597,8 @@ class MemoryStore:
         )
         with self._connect() as connection:
             existing = connection.execute(
-                "SELECT * FROM memory_records WHERE id = ?", (record.id,)
+                "SELECT * FROM memory_records WHERE id = ? AND user_id = ?",
+                (record.id, record.user_id),
             ).fetchone()
             if existing is not None:
                 current = _record_from_row(existing)
@@ -542,18 +612,21 @@ class MemoryStore:
         return record
 
     def save_user_preference(
-        self, key: str, value: str, *, scope: dict[str, Any] | None = None
+        self, key: str, value: str, *, scope: dict[str, Any] | None = None,
+        user_id: str = "local-user",
     ) -> MemoryRecord:
         """Persist an explicit user preference as the sole active value for its key."""
 
         key = key.strip()
         value = value.strip()
+        user_id = _normalise_user_id(user_id)
         if not key or not value:
             raise ValueError("user preference key and value are required")
         preference_scope = {"preferenceKey": key, **(scope or {})}
-        digest = hashlib.sha256(f"{key}\0{value}".encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(f"{user_id}\0{key}\0{value}".encode("utf-8")).hexdigest()
         record = MemoryRecord(
             id=f"user-preference-{digest[:24]}",
+            user_id=user_id,
             kind="user_preference",
             content=value,
             scope=preference_scope,
@@ -570,8 +643,8 @@ class MemoryStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing_rows = connection.execute(
-                "SELECT * FROM memory_records WHERE kind = ? AND status = ?",
-                ("user_preference", MemoryStatus.ACTIVE.value),
+                "SELECT * FROM memory_records WHERE user_id = ? AND kind = ? AND status = ?",
+                (user_id, "user_preference", MemoryStatus.ACTIVE.value),
             ).fetchall()
             old_records = [
                 _record_from_row(row)
@@ -591,18 +664,23 @@ class MemoryStore:
                 _append_event(connection, old.id, "superseded", "user", {"replacementId": record.id})
         return record
 
-    def search_user_preferences(self) -> dict[str, MemoryRecord]:
-        records = [record for record in self.search("", limit=1000) if record.kind == "user_preference"]
+    def search_user_preferences(self, *, user_id: str = "local-user") -> dict[str, MemoryRecord]:
+        records = [
+            record for record in self.search("", user_id=user_id, limit=1000)
+            if record.kind == "user_preference"
+        ]
         return {
             str(record.scope["preferenceKey"]): record
             for record in records
             if isinstance(record.scope.get("preferenceKey"), str)
         }
 
-    def get(self, memory_id: str) -> MemoryRecord:
+    def get(self, memory_id: str, *, user_id: str = "local-user") -> MemoryRecord:
+        user_id = _normalise_user_id(user_id)
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM memory_records WHERE id = ?", (memory_id,)
+                "SELECT * FROM memory_records WHERE id = ? AND user_id = ?",
+                (memory_id, user_id),
             ).fetchone()
         if row is None:
             raise KeyError(f"Memory not found: {memory_id}")
@@ -619,12 +697,15 @@ class MemoryStore:
         source_project_id: str | None = None,
         evidence_ids: list[str] | None = None,
         verification_ids: list[str] | None = None,
+        user_id: str = "local-user",
     ) -> MemoryRecord:
+        user_id = _normalise_user_id(user_id)
         if not content.strip() or not source_message_id.strip() or not actor.strip():
             raise ValueError("explicit memory requires content, source message, and actor")
         now = _now()
         record = MemoryRecord(
             id=f"memory-{uuid4().hex}",
+            user_id=user_id,
             kind=kind,
             content=_redact_conversation_content(content.strip()),
             scope=scope or {},
@@ -647,12 +728,16 @@ class MemoryStore:
             })
         return record
 
-    def edit(self, memory_id: str, content: str, *, actor: str) -> MemoryRecord:
+    def edit(
+        self, memory_id: str, content: str, *, actor: str, user_id: str = "local-user"
+    ) -> MemoryRecord:
+        user_id = _normalise_user_id(user_id)
         if not content.strip() or not actor.strip():
             raise ValueError("memory edit requires content and actor")
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM memory_records WHERE id = ?", (memory_id,)
+                "SELECT * FROM memory_records WHERE id = ? AND user_id = ?",
+                (memory_id, user_id),
             ).fetchone()
             if row is None:
                 raise KeyError(f"Memory not found: {memory_id}")
@@ -674,17 +759,19 @@ class MemoryStore:
         query: str = "",
         scope: dict[str, Any] | None = None,
         limit: int = 100,
+        user_id: str = "local-user",
     ) -> list[MemoryRecord]:
         if limit < 1 or limit > 500:
             raise ValueError("limit must be between 1 and 500")
+        user_id = _normalise_user_id(user_id)
         status_value = status.value if isinstance(status, MemoryStatus) else status
         if status_value is not None:
             try:
                 status_value = MemoryStatus(status_value).value
             except ValueError as exc:
                 raise ValueError(f"Unknown memory status: {status_value}") from exc
-        clauses: list[str] = []
-        params: list[object] = []
+        clauses: list[str] = ["user_id = ?"]
+        params: list[object] = [user_id]
         if status_value is not None:
             clauses.append("status = ?")
             params.append(status_value)
@@ -715,7 +802,10 @@ class MemoryStore:
             filtered.append(record)
         return filtered[:limit]
 
-    def delete(self, memory_id: str, *, actor: str, reason: str) -> MemoryRecord:
+    def delete(
+        self, memory_id: str, *, actor: str, reason: str, user_id: str = "local-user"
+    ) -> MemoryRecord:
+        user_id = _normalise_user_id(user_id)
         if not actor.strip():
             raise MemoryPromotionError("Deletion requires an actor")
         if not reason.strip():
@@ -723,7 +813,8 @@ class MemoryStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT * FROM memory_records WHERE id = ?", (memory_id,)
+                "SELECT * FROM memory_records WHERE id = ? AND user_id = ?",
+                (memory_id, user_id),
             ).fetchone()
             if row is None:
                 raise KeyError(f"Memory not found: {memory_id}")
@@ -744,7 +835,9 @@ class MemoryStore:
         *,
         actor: str,
         evidence_ids: list[str],
+        user_id: str = "local-user",
     ) -> MemoryRecord:
+        user_id = _normalise_user_id(user_id)
         if not actor.strip():
             raise MemoryPromotionError("Promotion requires an actor")
         if not evidence_ids:
@@ -753,7 +846,8 @@ class MemoryStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT * FROM memory_records WHERE id = ?", (memory_id,)
+                "SELECT * FROM memory_records WHERE id = ? AND user_id = ?",
+                (memory_id, user_id),
             ).fetchone()
             if row is None:
                 raise KeyError(f"Memory not found: {memory_id}")
@@ -783,14 +877,19 @@ class MemoryStore:
                 }
             )
 
-    def supersede(self, memory_id: str, replacement_id: str) -> MemoryRecord:
+    def supersede(
+        self, memory_id: str, replacement_id: str, *, user_id: str = "local-user"
+    ) -> MemoryRecord:
+        user_id = _normalise_user_id(user_id)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             old_row = connection.execute(
-                "SELECT * FROM memory_records WHERE id = ?", (memory_id,)
+                "SELECT * FROM memory_records WHERE id = ? AND user_id = ?",
+                (memory_id, user_id),
             ).fetchone()
             replacement_row = connection.execute(
-                "SELECT * FROM memory_records WHERE id = ?", (replacement_id,)
+                "SELECT * FROM memory_records WHERE id = ? AND user_id = ?",
+                (replacement_id, user_id),
             ).fetchone()
             if old_row is None:
                 raise KeyError(f"Memory not found: {memory_id}")
@@ -820,13 +919,17 @@ class MemoryStore:
                 }
             )
 
-    def revoke(self, memory_id: str, *, reason: str) -> MemoryRecord:
+    def revoke(
+        self, memory_id: str, *, reason: str, user_id: str = "local-user"
+    ) -> MemoryRecord:
+        user_id = _normalise_user_id(user_id)
         if not reason.strip():
             raise MemoryPromotionError("Revocation requires a reason")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT * FROM memory_records WHERE id = ?", (memory_id,)
+                "SELECT * FROM memory_records WHERE id = ? AND user_id = ?",
+                (memory_id, user_id),
             ).fetchone()
             if row is None:
                 raise KeyError(f"Memory not found: {memory_id}")
@@ -846,14 +949,16 @@ class MemoryStore:
         *,
         scope: dict[str, Any] | None = None,
         limit: int = 20,
+        user_id: str = "local-user",
     ) -> list[MemoryRecord]:
+        user_id = _normalise_user_id(user_id)
         tokens = {token for token in query.lower().split() if token}
         now = _iso(_now())
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM memory_records WHERE status = ? "
+                "SELECT * FROM memory_records WHERE user_id = ? AND status = ? "
                 "AND (expires_at IS NULL OR expires_at > ?) ORDER BY confidence DESC, created_at DESC",
-                (MemoryStatus.ACTIVE.value, now),
+                (user_id, MemoryStatus.ACTIVE.value, now),
             ).fetchall()
         ranked: list[tuple[int, float, MemoryRecord]] = []
         for row in rows:
@@ -871,13 +976,14 @@ class MemoryStore:
 
 def _insert_record(connection: sqlite3.Connection, record: MemoryRecord) -> None:
     connection.execute(
-        "INSERT INTO memory_records (id, kind, content, scope_json, source_project_id, "
+        "INSERT INTO memory_records (id, user_id, kind, content, scope_json, source_project_id, "
         "source_type, source_message_id, source_request_id, source_artifact_ids_json, "
         "evidence_ids_json, verification_ids_json, confidence, "
         "status, created_at, last_verified_at, expires_at, superseded_by_id, approved_by, user_editable) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             record.id,
+            record.user_id,
             record.kind,
             record.content,
             json.dumps(record.scope),
@@ -903,6 +1009,7 @@ def _insert_record(connection: sqlite3.Connection, record: MemoryRecord) -> None
 def _record_from_row(row: sqlite3.Row) -> MemoryRecord:
     return MemoryRecord(
         id=row["id"],
+        user_id=row["user_id"] if "user_id" in row.keys() else "local-user",
         kind=row["kind"],
         content=row["content"],
         scope=json.loads(row["scope_json"]),
@@ -934,12 +1041,14 @@ def _build_feedback(
     correction: str | None,
     remember: bool,
     actor: str,
+    user_id: str = "local-user",
 ) -> GrowthFeedback:
     feedback_id = feedback_id.strip()
     conversation_id = conversation_id.strip()
     message_id = message_id.strip()
     actor = actor.strip()
     request_id = request_id.strip() if request_id else None
+    user_id = _normalise_user_id(user_id)
     correction = _redact_conversation_content(correction.strip()) if correction else None
     if not feedback_id or not conversation_id or not message_id or not actor:
         raise ValueError("feedback requires an id, conversation, message, and actor")
@@ -949,6 +1058,7 @@ def _build_feedback(
         correction = None
     return GrowthFeedback(
         id=feedback_id,
+        user_id=user_id,
         conversation_id=conversation_id,
         request_id=request_id,
         message_id=message_id,
@@ -964,6 +1074,7 @@ def _ensure_same_feedback(existing: GrowthFeedback, incoming: GrowthFeedback) ->
     if any(
         getattr(existing, field) != getattr(incoming, field)
         for field in (
+            "user_id",
             "conversation_id",
             "request_id",
             "message_id",
@@ -981,6 +1092,7 @@ def _ensure_same_feedback(existing: GrowthFeedback, incoming: GrowthFeedback) ->
 def _feedback_from_row(row: sqlite3.Row) -> GrowthFeedback:
     return GrowthFeedback(
         id=row["id"],
+        user_id=row["user_id"] if "user_id" in row.keys() else "local-user",
         conversation_id=row["conversation_id"],
         request_id=row["request_id"],
         message_id=row["message_id"],

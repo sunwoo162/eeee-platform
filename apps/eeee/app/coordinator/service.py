@@ -57,7 +57,7 @@ class Coordinator:
         )
 
     def record_project_outcome(
-        self, outcome_report: ProjectOutcomeReportV1
+        self, outcome_report: ProjectOutcomeReportV1, *, user_id: str = "local-user"
     ) -> list[MemoryRecord]:
         """Ingest ISEOL's independently verified project result into EEEE memory."""
 
@@ -91,13 +91,14 @@ class Coordinator:
             )
             if trust.decision != "PASS":
                 raise ApprovalError(f"ClaimLatch blocked memory promotion: {trust.reason}")
-        return self.memory_pipeline.ingest(outcome_report)
+        return self.memory_pipeline.ingest(outcome_report, user_id=user_id)
 
     def record_verified_project_outcome(
         self,
         outcome_report: ProjectOutcomeReportV1,
         *,
         actor: str = "EEEE Verified Outcome",
+        user_id: str = "local-user",
     ) -> list[MemoryRecord]:
         """Persist and activate only an outcome that passed every gate.
 
@@ -107,7 +108,7 @@ class Coordinator:
         ClaimLatch, so verified patterns become available to the next project.
         """
 
-        records = self.record_project_outcome(outcome_report)
+        records = self.record_project_outcome(outcome_report, user_id=user_id)
         promoted: list[MemoryRecord] = []
         for record in records:
             promoted.append(
@@ -117,15 +118,16 @@ class Coordinator:
                     evidence_ids=list(dict.fromkeys([
                         *record.evidence_ids,
                         *record.verification_ids,
-                    ])),
+                    ])), user_id=user_id,
                 )
             )
         return promoted
 
     def promote_memory(
-        self, memory_id: str, *, actor: str, evidence_ids: list[str]
+        self, memory_id: str, *, actor: str, evidence_ids: list[str],
+        user_id: str = "local-user"
     ) -> MemoryRecord:
-        record = self.memory.get(memory_id)
+        record = self.memory.get(memory_id, user_id=user_id)
         try:
             project = self.store.get_project(record.source_project_id)
         except KeyError:
@@ -140,19 +142,24 @@ class Coordinator:
             )
             if trust.decision != "PASS":
                 raise ApprovalError(f"ClaimLatch blocked memory promotion: {trust.reason}")
-        return self.memory.promote(memory_id, actor=actor, evidence_ids=evidence_ids)
+        return self.memory.promote(
+            memory_id, actor=actor, evidence_ids=evidence_ids, user_id=user_id
+        )
 
     def remember_user_preference(
-        self, key: str, value: str, *, scope: dict[str, object] | None = None
+        self, key: str, value: str, *, scope: dict[str, object] | None = None,
+        user_id: str = "local-user"
     ) -> MemoryRecord:
-        return self.memory.save_user_preference(key, value, scope=scope)
+        return self.memory.save_user_preference(key, value, scope=scope, user_id=user_id)
 
-    def build_project_brief(self, project_id: str, request_id: str) -> ProjectBriefV1:
+    def build_project_brief(
+        self, project_id: str, request_id: str, *, user_id: str = "local-user"
+    ) -> ProjectBriefV1:
         """Retrieve verified memory before ISEOL decomposes the next project."""
 
         project = self.store.get_project(project_id)
         request = self.store.get_request(request_id)
-        memories = self.memory.search(request.raw_text, limit=50)
+        memories = self.memory.search(request.raw_text, user_id=user_id, limit=50)
         memory_ids = [memory.id for memory in memories]
         qa_baseline_ids = [
             memory.id
@@ -172,7 +179,7 @@ class Coordinator:
         ]
         user_preferences = {
             key: record.content
-            for key, record in self.memory.search_user_preferences().items()
+            for key, record in self.memory.search_user_preferences(user_id=user_id).items()
         }
         return ProjectBriefV1(
             schema_version=1,

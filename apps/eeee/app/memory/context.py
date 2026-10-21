@@ -32,17 +32,18 @@ class MemoryContextCompiler:
     """Select relevant active memories without exporting the whole ledger."""
 
     def compile(
-        self, query: str, store: MemoryStore, *, limit: int = 12
+        self, query: str, store: MemoryStore, *, limit: int = 12,
+        user_id: str = "local-user"
     ) -> MemoryContextPacket:
         if limit <= 0:
             return MemoryContextPacket()
         persistent_preferences = [
             record
-            for record in store.search_user_preferences().values()
+            for record in store.search_user_preferences(user_id=user_id).values()
             if not _is_sensitive(record)
         ]
         relevant_records = [
-            record for record in store.search(query, limit=limit)
+            record for record in store.search(query, user_id=user_id, limit=limit)
             if not _is_sensitive(record)
         ]
         records = []

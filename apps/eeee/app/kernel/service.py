@@ -14,7 +14,7 @@ from app.assistant.router import CapabilityRouter
 from app.config import Settings
 from app.contracts import ApprovalState, EventEnvelope, ExecutionEnvelope, ExecutionError, ExecutionStatus, LocalEventBus, SideEffectLevel
 from app.coordinator.service import Coordinator
-from app.kernel.capabilities import CapabilityOutcome, EnvelopeContext, GeneralConversationCapability, LocalPlanningCapability, LocalSecretaryCapability, ProjectExecutionCapability, UserPreferenceCapability
+from app.kernel.capabilities import CapabilityOutcome, EnvelopeContext, GeneralConversationCapability, KnowledgeDocumentsCapability, LocalPlanningCapability, LocalSecretaryCapability, ProjectExecutionCapability, UserPreferenceCapability
 from app.memory.store import MemoryStore
 from app.memory.context import MemoryContextCompiler
 from app.project_runtime.provisioner import ProjectProvisioner
@@ -72,7 +72,9 @@ class KernelService:
                 )
             elif descriptor.id == "personal-secretary":
                 handler = LocalSecretaryCapability(descriptor, store=store)
-            elif descriptor.id in {"knowledge-documents", "presence"}:
+            elif descriptor.id == "knowledge-documents":
+                handler = KnowledgeDocumentsCapability(descriptor, store=store)
+            elif descriptor.id == "presence":
                 handler = LocalPlanningCapability(descriptor)
             else:
                 continue

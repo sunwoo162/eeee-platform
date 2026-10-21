@@ -95,7 +95,7 @@ def test_non_project_and_explicit_capability_requests_do_not_allocate_project(tm
     kernel, store, _ = make_kernel(tmp_path)
     reminder = kernel.route(AssistantRequest(raw_text="내일 오후 3시에 회의 알려줘"), AssistantContext())
     explicit = kernel.route(
-        AssistantRequest(raw_text="프로젝트 문서 정리해줘", requested_capability="knowledge-documents"),
+        AssistantRequest(raw_text="문서 검색해줘: 프로젝트", requested_capability="knowledge-documents"),
         AssistantContext(user_preferences={"language": "ko"}),
     )
 
@@ -104,7 +104,9 @@ def test_non_project_and_explicit_capability_requests_do_not_allocate_project(tm
     assert reminder.output["status"] == "completed"
     assert reminder.output["capabilityStatus"] == "completed"
     assert reminder.output["reminder"]["title"] == "회의"
-    assert explicit.output["context"]["user_preferences"]["language"] == "ko"
+    assert explicit.output["status"] == "completed"
+    assert explicit.output["capabilityStatus"] == "completed"
+    assert explicit.output["documents"] == ()
     assert reminder.project_id is None
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0

@@ -133,7 +133,7 @@ class AssistantService:
                 existing_request_id = request_id
                 if existing_request_id is None and self.conversation_store is not None:
                     existing_request_id = self.conversation_store.find_pending_route(
-                        conversation_id, text
+                        conversation_id, text, user_id=user_id
                     )
                 if existing_request_id is not None:
                     existing_job = self.background_supervisor.find_by_request_id(existing_request_id)
@@ -153,7 +153,9 @@ class AssistantService:
                 project_id = f"project-{uuid4().hex}"
 
                 def run_project() -> dict[str, object]:
-                    self._prepare_background_attempt(conversation_id, text, request_id)
+                    self._prepare_background_attempt(
+                        conversation_id, text, request_id, user_id=user_id
+                    )
                     try:
                         result = self._route_sync(
                             text, workspace, requested_capability=requested_capability,
@@ -169,18 +171,22 @@ class AssistantService:
                             request_id=request_id,
                             status=MessageStatus.FAILED,
                             error_code="assistant_route_failed",
+                            user_id=user_id,
                         )
                         self._record_route_lifecycle(
-                            conversation_id, request_id, "failed", error_code="assistant_route_failed"
+                            conversation_id, request_id, "failed",
+                            error_code="assistant_route_failed", user_id=user_id,
                         )
                         raise
                     self._remember_turn(
                         conversation_id, text, result.message, request_id=request_id,
                         status=self._message_status_for_result(result),
                         provider=getattr(result, "provider", None),
+                        user_id=user_id,
                     )
                     self._record_route_lifecycle(
-                        conversation_id, request_id, self._route_status_for_result(result)
+                        conversation_id, request_id, self._route_status_for_result(result),
+                        user_id=user_id,
                     )
                     return result.model_dump(mode="json")
 
@@ -188,8 +194,11 @@ class AssistantService:
                 self._remember_turn(
                     conversation_id, text, accepted_message, request_id=request_id,
                     status=MessageStatus.PENDING,
+                    user_id=user_id,
                 )
-                self._record_route_lifecycle(conversation_id, request_id, "accepted")
+                self._record_route_lifecycle(
+                    conversation_id, request_id, "accepted", user_id=user_id
+                )
                 try:
                     job_id = self.background_supervisor.submit(
                         request_id,
@@ -215,10 +224,12 @@ class AssistantService:
                         conversation_id, text, failure_message, request_id=request_id,
                         status=MessageStatus.FAILED,
                         error_code="assistant_job_submit_failed",
+                        user_id=user_id,
                     )
                     self._record_route_lifecycle(
                         conversation_id, request_id, "failed",
                         error_code="assistant_job_submit_failed",
+                        user_id=user_id,
                     )
                     raise
                 result = AssistantRouteResult(
@@ -251,9 +262,11 @@ class AssistantService:
             request_id=request_id,
             status=self._message_status_for_result(result),
             provider=getattr(result, "provider", None),
+            user_id=user_id,
         )
         self._record_route_lifecycle(
-            conversation_id, request_id, self._route_status_for_result(result)
+            conversation_id, request_id, self._route_status_for_result(result),
+            user_id=user_id,
         )
         return result
 
@@ -418,14 +431,15 @@ class AssistantService:
         )
 
     def _record_route_lifecycle(
-        self, conversation_id: str, request_id: str | None, status: str, *, error_code: str | None = None
+        self, conversation_id: str, request_id: str | None, status: str, *,
+        error_code: str | None = None, user_id: str = "local-user",
     ) -> None:
         if self.conversation_store is None or request_id is None:
             return
         if error_code is None and status not in {"accepted", "pending", "completed"}:
             error_code = "assistant_route_failed"
         self.conversation_store.record_route_lifecycle(
-            conversation_id, request_id, status, error_code=error_code
+            conversation_id, request_id, status, error_code=error_code, user_id=user_id
         )
 
     def _remember_turn(
@@ -435,10 +449,12 @@ class AssistantService:
         provider: str | None = None,
         model: str | None = None,
         error_code: str | None = None,
+        user_id: str = "local-user",
     ) -> None:
         if self.conversation_store is not None and request_id is not None:
             self.conversation_store.record_route_turn(
                 conversation_id,
+                user_id=user_id,
                 user_content=user_text,
                 assistant_content=assistant_text,
                 request_id=request_id,
@@ -551,7 +567,8 @@ class AssistantService:
 
         def run() -> dict[str, object]:
             self._prepare_background_attempt(
-                resolved_conversation_id, text, resolved_request_id
+                resolved_conversation_id, text, resolved_request_id,
+                user_id=resolved_user_id,
             )
             try:
                 result = self._route_sync(
@@ -573,10 +590,12 @@ class AssistantService:
                     request_id=resolved_request_id,
                     status=MessageStatus.FAILED,
                     error_code="assistant_route_failed",
+                    user_id=resolved_user_id,
                 )
                 self._record_route_lifecycle(
                     resolved_conversation_id, resolved_request_id, "failed",
                     error_code="assistant_route_failed",
+                    user_id=resolved_user_id,
                 )
                 raise
             self._remember_turn(
@@ -586,17 +605,20 @@ class AssistantService:
                 request_id=resolved_request_id,
                 status=self._message_status_for_result(result),
                 provider=getattr(result, "provider", None),
+                user_id=resolved_user_id,
             )
             self._record_route_lifecycle(
                 resolved_conversation_id, resolved_request_id,
                 self._route_status_for_result(result),
+                user_id=resolved_user_id,
             )
             return result.model_dump(mode="json")
 
         return run
 
     def _prepare_background_attempt(
-        self, conversation_id: str, user_text: str, request_id: str | None
+        self, conversation_id: str, user_text: str, request_id: str | None,
+        *, user_id: str = "local-user",
     ) -> None:
         """Re-open canonical state when a failed job is retried.
 
@@ -621,6 +643,9 @@ class AssistantService:
             request_id=request_id,
             status=MessageStatus.PENDING,
             error_code=None,
+            user_id=user_id,
         )
-        self._record_route_lifecycle(conversation_id, request_id, "accepted")
+        self._record_route_lifecycle(
+            conversation_id, request_id, "accepted", user_id=user_id
+        )
 

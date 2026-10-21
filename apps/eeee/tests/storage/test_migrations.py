@@ -66,3 +66,23 @@ def test_legacy_migration_does_not_duplicate_existing_canonical_turn(tmp_path):
     store.init()
 
     assert conversations.message_count("same-chat") == 2
+
+
+def test_conversation_schema_has_user_scope_after_initialization(tmp_path):
+    path = tmp_path / "state.sqlite3"
+
+    store = SQLiteStore(path)
+    store.init()
+
+    with sqlite3.connect(path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(conversations)").fetchall()
+        }
+        versions = {
+            row[0]
+            for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
+        }
+
+    assert "user_id" in columns
+    assert 4 in versions

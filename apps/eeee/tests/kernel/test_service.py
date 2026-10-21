@@ -6,6 +6,7 @@ from app.assistant.models import AssistantContext, AssistantRequest, CapabilityD
 from app.assistant.registry import build_default_registry
 from app.assistant.router import CapabilityRouter
 from app.config import Settings
+from app.conversations.store import ConversationStore
 from app.contracts import ExecutionStatus, LocalEventBus
 from app.coordinator.service import Coordinator
 from app.kernel.service import KernelService
@@ -19,7 +20,7 @@ from app.trust.models import TrustCheck
 
 
 def make_kernel(tmp_path, *, provisioner_type=ProjectProvisioner, coordinator_type=Coordinator,
-                trust_gate=None, general_runtime=None):
+                trust_gate=None, general_runtime=None, conversation_store=None):
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     store = SQLiteStore(settings.data_dir / "state.sqlite3")
     store.init()
@@ -30,8 +31,54 @@ def make_kernel(tmp_path, *, provisioner_type=ProjectProvisioner, coordinator_ty
         coordinator=coordinator, store=store, settings=settings,
         provisioner=provisioner_type(store), event_bus=events, trust_gate=trust_gate,
         general_runtime=general_runtime,
+        conversation_store=conversation_store,
     )
     return kernel, store, events
+
+
+def test_kernel_reads_recent_turns_from_the_canonical_conversation_store(tmp_path):
+    from app.agent.protocol import AgentResult
+
+    class CapturingRuntime:
+        def __init__(self):
+            self.prompt = ""
+
+        def run(self, request):
+            self.prompt = request.prompt
+            return AgentResult(
+                status="completed", summary="정본 기록을 읽었어.", events=[],
+                changed_files=[], test_commands=[], error=None,
+            )
+
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    conversations = ConversationStore(store)
+    conversations.record_route_turn(
+        "canonical-context",
+        user_content="지난번에 정한 이름은 모찌야.",
+        assistant_content="기억해둘게.",
+        request_id="prior-turn",
+    )
+    runtime = CapturingRuntime()
+    coordinator = Coordinator(store)
+    kernel = KernelService(
+        router=CapabilityRouter(build_default_registry()), coordinator=coordinator, store=store,
+        settings=settings, provisioner=ProjectProvisioner(store), general_runtime=runtime,
+        conversation_store=conversations,
+    )
+
+    result = kernel.route(
+        AssistantRequest(
+            raw_text="내 이름이 뭐였지?",
+            context={"conversationId": "canonical-context"},
+        ),
+        AssistantContext(),
+    )
+
+    assert result.status is ExecutionStatus.COMPLETED
+    assert "지난번에 정한 이름은 모찌야." in runtime.prompt
+    assert "기억해둘게." in runtime.prompt
 
 
 def test_empty_general_provider_response_is_blocked_instead_of_completed(tmp_path):

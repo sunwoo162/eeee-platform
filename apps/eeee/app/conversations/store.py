@@ -334,6 +334,24 @@ class ConversationStore:
             ).fetchall()
         return [_message_from_row(row) for row in rows]
 
+    def recent_conversation_turns(
+        self, conversation_id: str, *, limit: int = 12
+    ) -> list[dict[str, str]]:
+        """Return bounded canonical transcript context in provider format."""
+
+        if limit <= 0:
+            return []
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                "SELECT role, content FROM messages WHERE conversation_id = ? "
+                "ORDER BY sequence DESC LIMIT ?",
+                (conversation_id, limit),
+            ).fetchall()
+        return [
+            {"role": str(row["role"]), "content": str(row["content"])}
+            for row in reversed(rows)
+        ]
+
     def get_message(self, message_id: str) -> ConversationMessage:
         with self.store._connect() as connection:
             row = connection.execute(

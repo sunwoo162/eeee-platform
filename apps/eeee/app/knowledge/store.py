@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,9 @@ MAX_SEARCH_RESULTS = 20
 class KnowledgeStore:
     """Durable local documents kept separate from conversational memory."""
 
+    _init_locks: dict[str, threading.Lock] = {}
+    _init_locks_guard = threading.Lock()
+
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.init()
@@ -26,7 +30,6 @@ class KnowledgeStore:
         connection = sqlite3.connect(self.path, timeout=5.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("PRAGMA journal_mode = WAL")
         return connection
 
     @contextmanager
@@ -40,25 +43,33 @@ class KnowledgeStore:
 
     def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS local_documents (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    scope TEXT NOT NULL,
-                    content_hash TEXT NOT NULL,
-                    source_path TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    deleted_at TEXT,
-                    UNIQUE(scope, content_hash)
-                );
-                CREATE INDEX IF NOT EXISTS idx_local_documents_scope_updated
-                    ON local_documents (scope, updated_at DESC);
-                """
-            )
+        lock_key = str(self.path.resolve())
+        with self._init_locks_guard:
+            lock = self._init_locks.setdefault(lock_key, threading.Lock())
+        # Multiple requests can construct a store for the same database at
+        # once.  Serialize schema/WAL setup in-process; SQLite's busy timeout
+        # still handles a writer in another process.
+        with lock:
+            with self._session() as connection:
+                connection.execute("PRAGMA journal_mode = WAL")
+                connection.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS local_documents (
+                        id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        scope TEXT NOT NULL,
+                        content_hash TEXT NOT NULL,
+                        source_path TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        deleted_at TEXT,
+                        UNIQUE(scope, content_hash)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_local_documents_scope_updated
+                        ON local_documents (scope, updated_at DESC);
+                    """
+                )
 
     def save_text(
         self, title: str, content: str, *, scope: str = "global", source_path: str | None = None

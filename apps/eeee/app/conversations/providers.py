@@ -79,7 +79,10 @@ class ChatGptWebConversationProvider:
         if result.status != "completed":
             raise ConversationProviderError(
                 result.error or "ChatGPT Web에 연결하지 못했어.",
-                code=("chatgpt_web_unavailable" if result.status == "unavailable" else "chatgpt_web_failed"),
+                code=(
+                    result.error_code
+                    or ("chatgpt_web_unavailable" if result.status == "unavailable" else "chatgpt_web_failed")
+                ),
             )
         answer = result.summary.strip()
         if not answer:

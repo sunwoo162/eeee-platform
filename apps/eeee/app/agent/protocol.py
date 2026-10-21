@@ -21,6 +21,7 @@ class AgentResult:
     changed_files: list[str]
     test_commands: list[str]
     error: str | None
+    error_code: str | None = None
 
 
 class AgentRuntime(Protocol):

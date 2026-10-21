@@ -135,6 +135,15 @@ class ChatGptWebRuntime:
                     summary="ChatGPT Web bridge unavailable",
                     events=[], changed_files=[], test_commands=[],
                     error=f"{exc}{(': ' + detail) if detail else ''}",
+                    error_code=(
+                        "chatgpt_web_auth_required"
+                        if exc.response.status_code == 401
+                        or any(
+                            marker in detail.lower()
+                            for marker in ("auth", "login", "sign-in", "locator-missing", "composer")
+                        )
+                        else "chatgpt_web_unavailable"
+                    ),
                 )
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
                 if attempt == 0:
@@ -144,25 +153,40 @@ class ChatGptWebRuntime:
                     status="unavailable",
                     summary="ChatGPT Web bridge unavailable",
                     events=[], changed_files=[], test_commands=[], error=str(exc),
+                    error_code=(
+                        "chatgpt_web_timeout"
+                        if isinstance(exc, httpx.ReadTimeout)
+                        else "chatgpt_web_unavailable"
+                    ),
                 )
             except (httpx.HTTPError, ValueError) as exc:
                 return AgentResult(
                     status="unavailable",
                     summary="ChatGPT Web bridge unavailable",
                     events=[], changed_files=[], test_commands=[], error=str(exc),
+                    error_code="chatgpt_web_unavailable",
                 )
 
         if payload is None:
             return self._failed("ChatGPT Web bridge returned no response")
 
         if not isinstance(payload, dict):
-            return self._failed("ChatGPT Web bridge returned an invalid response")
+            return self._failed(
+                "ChatGPT Web bridge returned an invalid response",
+                error_code="chatgpt_web_invalid_response",
+            )
         status = payload.get("status")
         if status != "completed":
-            return self._failed(str(payload.get("error") or "ChatGPT Web request was not completed"))
+            return self._failed(
+                str(payload.get("error") or "ChatGPT Web request was not completed"),
+                error_code="chatgpt_web_request_failed",
+            )
         message = payload.get("message")
         if not isinstance(message, str) or not message.strip():
-            return self._failed("ChatGPT Web bridge returned no assistant message")
+            return self._failed(
+                "ChatGPT Web bridge returned no assistant message",
+                error_code="provider_empty_response",
+            )
         conversation_ref = payload.get("conversationRef")
         if isinstance(conversation_ref, str) and conversation_ref:
             self.conversation_ref = conversation_ref
@@ -217,8 +241,8 @@ class ChatGptWebRuntime:
             return
 
     @staticmethod
-    def _failed(message: str) -> AgentResult:
+    def _failed(message: str, *, error_code: str = "chatgpt_web_failed") -> AgentResult:
         return AgentResult(
             status="failed", summary="ChatGPT Web request failed", events=[],
-            changed_files=[], test_commands=[], error=message,
+            changed_files=[], test_commands=[], error=message, error_code=error_code,
         )

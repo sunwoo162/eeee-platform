@@ -27,3 +27,39 @@ test("mobile client pairs, stores the Desktop token, and resumes event cursors",
     globalThis.fetch = originalFetch;
   }
 });
+
+test("mobile client sends stable conversation/request ids and reads history", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Request[] = [];
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    calls.push(request);
+    if (request.url.endsWith("/api/mobile/pair")) {
+      return new Response(JSON.stringify({ deviceId: "mobile-1", deviceName: "Phone", accessToken: "token-1" }), { status: 200 });
+    }
+    if (request.url.includes("/messages")) {
+      return new Response(JSON.stringify({ conversationId: "chat-1", messageCount: 2, turns: [], nextBeforeId: null }), { status: 200 });
+    }
+    if (request.url.includes("/conversations")) {
+      return new Response(JSON.stringify([{ conversationId: "chat-1", messageCount: 2, preview: "안녕", updatedAt: "2026-10-06T00:00:00Z" }]), { status: 200 });
+    }
+    return new Response(JSON.stringify({ status: "completed" }), { status: 200 });
+  };
+
+  try {
+    const client = new GleaveMobileClient("http://desktop.local/", new MemoryTokenStore());
+    await client.pair("123456", "Phone");
+    await client.assistantRoute("계속해", undefined, { conversationId: "chat-1", requestId: "request-1" });
+    const summaries = await client.conversations("계속");
+    const transcript = await client.conversation("chat-1", 20, 3);
+
+    const routeBody = await calls[1]?.clone().json() as Record<string, unknown>;
+    assert.equal(routeBody.conversationId, "chat-1");
+    assert.equal(routeBody.requestId, "request-1");
+    assert.equal(summaries[0]?.conversationId, "chat-1");
+    assert.equal(transcript.conversationId, "chat-1");
+    assert.match(calls[3]?.url ?? "", /beforeId=3/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

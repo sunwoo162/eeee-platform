@@ -16,6 +16,27 @@ export type MobileEventBatch = {
   events: MobileEvent[];
 };
 
+export type AssistantRouteOptions = {
+  conversationId?: string;
+  requestId?: string;
+  approved?: boolean;
+  approvalRequestId?: string;
+};
+
+export type MobileConversationSummary = {
+  conversationId: string;
+  messageCount: number;
+  preview: string;
+  updatedAt: string;
+};
+
+export type MobileConversationTranscript = {
+  conversationId: string;
+  messageCount: number;
+  turns: Array<Record<string, unknown>>;
+  nextBeforeId: number | null;
+};
+
 export type TokenStore = {
   get(): string | null;
   set(token: string): void;
@@ -52,11 +73,42 @@ export class GleaveMobileClient {
     return this.request<Record<string, unknown>>(`/api/mobile/state${query}`);
   }
 
-  async assistantRoute(text: string, workspace?: string): Promise<Record<string, unknown>> {
+  async assistantRoute(
+    text: string,
+    workspace?: string,
+    options: AssistantRouteOptions = {},
+  ): Promise<Record<string, unknown>> {
     return this.request<Record<string, unknown>>("/api/mobile/assistant/route", {
       method: "POST",
-      body: JSON.stringify({ text, ...(workspace ? { workspace } : {}) }),
+      body: JSON.stringify({
+        text,
+        ...(workspace ? { workspace } : {}),
+        ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.approved !== undefined ? { approved: options.approved } : {}),
+        ...(options.approvalRequestId ? { approvalRequestId: options.approvalRequestId } : {}),
+      }),
     });
+  }
+
+  async conversations(query?: string, limit = 50): Promise<MobileConversationSummary[]> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (query) params.set("query", query);
+    return this.request<MobileConversationSummary[]>(
+      `/api/mobile/assistant/conversations?${params.toString()}`,
+    );
+  }
+
+  async conversation(
+    conversationId: string,
+    limit = 100,
+    beforeId?: number,
+  ): Promise<MobileConversationTranscript> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (beforeId !== undefined) params.set("beforeId", String(beforeId));
+    return this.request<MobileConversationTranscript>(
+      `/api/mobile/assistant/conversations/${encodeURIComponent(conversationId)}/messages?${params.toString()}`,
+    );
   }
 
   async events(cursor = 0): Promise<MobileEventBatch> {

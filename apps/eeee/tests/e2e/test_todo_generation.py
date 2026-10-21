@@ -11,6 +11,9 @@ from app.main import create_app
 class FakeAgentRuntime:
     def run(self, request):
         agent_id = request.prompt.split("agentId=")[1].split()[0]
+        changed_file = request.workspace / "src" / f"{agent_id}.js"
+        changed_file.parent.mkdir(parents=True, exist_ok=True)
+        changed_file.write_text(f"// {agent_id}\n", encoding="utf-8")
         return AgentResult(
             status="completed",
             summary=f"{agent_id} completed",

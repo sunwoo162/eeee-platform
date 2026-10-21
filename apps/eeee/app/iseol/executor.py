@@ -235,11 +235,7 @@ class AgentGraphExecutor:
             prompt=prompt, workspace=self.workspace,
             allowed_actions=list(node.allowed_tools), run_id=f"{envelope.execution_id}:{node.id}",
         ))
-        evidence_ids = [
-            str(event["evidenceId"])
-            for event in result.events
-            if isinstance(event, dict) and isinstance(event.get("evidenceId"), str)
-        ]
+        evidence_ids = _evidence_ids(result.events)
         if result.status != "completed":
             return AgentExecutionRecord(
                 agentId=node.id, taskId=node.task_id, role=node.role, status="failed",
@@ -298,3 +294,19 @@ class AgentGraphExecutor:
             summary="Agent was not started", claimLatchDecision="NOT_RUN", reason=reason,
             startedAt=started, completedAt=datetime.now(timezone.utc),
         )
+
+
+def _evidence_ids(events: list[dict[str, object]]) -> list[str]:
+    """Return only non-empty, unique evidence identifiers in event order."""
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for event in events:
+        value = event.get("evidenceId") if isinstance(event, dict) else None
+        if not isinstance(value, str):
+            continue
+        evidence_id = value.strip()
+        if evidence_id and evidence_id not in seen:
+            seen.add(evidence_id)
+            result.append(evidence_id)
+    return result

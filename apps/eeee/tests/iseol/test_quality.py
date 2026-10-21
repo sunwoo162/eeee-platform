@@ -42,3 +42,33 @@ def test_quality_gate_blocks_a_completed_agent_without_changed_files(tmp_path):
 
     assert report.decision == "BLOCK"
     assert any(check.name == "changed-files" and check.status == "BLOCK" for check in report.checks)
+
+
+def test_quality_gate_blocks_a_reported_changed_file_that_does_not_exist(tmp_path):
+    node = AgentNode(id="backend", taskId="backend", role="backend", title="Backend", goal="api", acceptanceCriteria=[])
+    result = AgentResult("completed", "api done", [{"evidenceId": "ev"}], ["src/missing.py"], ["pytest tests"], None)
+
+    report = QualityGate(tmp_path).evaluate(node, result)
+
+    assert report.decision == "BLOCK"
+    assert any(check.name == "artifact-exists" and check.status == "BLOCK" for check in report.checks)
+
+
+def test_quality_gate_blocks_changed_file_path_outside_workspace(tmp_path):
+    node = AgentNode(id="backend", taskId="backend", role="backend", title="Backend", goal="api", acceptanceCriteria=[])
+    result = AgentResult("completed", "api done", [{"evidenceId": "ev"}], ["../outside.py"], ["pytest tests"], None)
+
+    report = QualityGate(tmp_path).evaluate(node, result)
+
+    assert report.decision == "BLOCK"
+    assert any(check.name == "artifact-path" and check.status == "BLOCK" for check in report.checks)
+
+
+def test_quality_gate_blocks_malformed_changed_file_path(tmp_path):
+    node = AgentNode(id="backend", taskId="backend", role="backend", title="Backend", goal="api", acceptanceCriteria=[])
+    result = AgentResult("completed", "api done", [{"evidenceId": "ev"}], [123], ["pytest tests"], None)
+
+    report = QualityGate(tmp_path).evaluate(node, result)
+
+    assert report.decision == "BLOCK"
+    assert any(check.name == "artifact-path" and check.status == "BLOCK" for check in report.checks)

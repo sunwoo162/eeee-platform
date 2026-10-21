@@ -191,9 +191,33 @@ class QualityGate:
             ))
         existing_files: list[tuple[Path, str]] = []
         for relative in result.changed_files:
-            path = self.workspace / relative
+            if not isinstance(relative, str) or not relative.strip():
+                checks.append(QualityCheck(
+                    name="artifact-path",
+                    status="BLOCK",
+                    message="Reported artifact path must be a non-empty string",
+                ))
+                continue
+            candidate = Path(relative)
+            path = (self.workspace / candidate).resolve()
+            try:
+                path.relative_to(self.workspace.resolve())
+            except ValueError:
+                checks.append(QualityCheck(
+                    name="artifact-path",
+                    status="BLOCK",
+                    message=f"Reported artifact path is outside the workspace: {relative}",
+                ))
+                continue
+            if candidate.is_absolute() or ".." in candidate.parts:
+                checks.append(QualityCheck(
+                    name="artifact-path",
+                    status="BLOCK",
+                    message=f"Reported artifact path is not workspace-relative: {relative}",
+                ))
+                continue
             if not path.is_file():
-                checks.append(QualityCheck(name="artifact-exists", status="WARN", message=f"Artifact not found for inspection: {relative}"))
+                checks.append(QualityCheck(name="artifact-exists", status="BLOCK", message=f"Artifact not found for inspection: {relative}"))
                 continue
             try:
                 text = path.read_text(encoding="utf-8")

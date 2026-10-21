@@ -156,6 +156,27 @@ def test_v1_conversation_list_includes_durable_message_count(tmp_path) -> None:
     assert item["messageCount"] == 1
 
 
+def test_v1_conversations_are_isolated_by_user_header(tmp_path) -> None:
+    client = make_client(tmp_path)
+    user_a = {"X-EEEE-User-Id": "user-a"}
+    user_b = {"X-EEEE-User-Id": "user-b"}
+    conversation = client.post(
+        "/v1/conversations", headers=user_a, json={"title": "사용자 A 기록"}
+    ).json()
+    conversation_id = conversation["id"]
+
+    assert client.get("/v1/conversations", headers=user_a).json()["items"][0]["id"] == conversation_id
+    assert client.get("/v1/conversations", headers=user_b).json()["items"] == []
+    assert client.get(
+        f"/v1/conversations/{conversation_id}/messages", headers=user_b
+    ).status_code == 404
+    assert client.post(
+        f"/v1/conversations/{conversation_id}/turns",
+        headers=user_b,
+        json={"clientMessageId": "cross-user", "content": "침범 시도"},
+    ).status_code == 404
+
+
 def test_v1_runtime_reports_ollama_model_readiness_separately_from_core_health(tmp_path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",

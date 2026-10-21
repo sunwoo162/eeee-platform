@@ -61,7 +61,11 @@ class ConversationService:
         parent_request_id: str | None = None,
         attempt: int = 1,
         user_message_id: str | None = None,
+        user_id: str = "local-user",
     ) -> tuple[AssistantRequest, bool]:
+        # Validate ownership before any idempotency lookup or message write.
+        # The canonical ids remain globally unique, but access is user-scoped.
+        self.store.get_conversation(conversation_id, user_id=user_id)
         existing = self.store.find_request_by_client_message(
             conversation_id, client_message_id
         )

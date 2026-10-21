@@ -6,11 +6,12 @@ import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent.ollama_runtime import OllamaRuntime
+from app.api.routes import _plugin_user_id
 from app.conversations.models import RequestState
 from app.conversations.providers import ConversationProviderSelection
 from app.conversations.service import ConversationService, CoreShuttingDownError
@@ -130,14 +131,21 @@ def build_conversation_router(
         }
 
     @router.post("/conversations", status_code=status.HTTP_201_CREATED)
-    def create_conversation(payload: ConversationCreatePayload) -> dict[str, object]:
-        return _conversation_payload(service.store.create_conversation(payload.title))
+    def create_conversation(
+        payload: ConversationCreatePayload, request: Request
+    ) -> dict[str, object]:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return _conversation_payload(
+            service.store.create_conversation(payload.title, user_id=user_id)
+        )
 
     @router.get("/conversations")
     def list_conversations(
+        request: Request,
         limit: int = Query(default=50, ge=1, le=100),
     ) -> dict[str, object]:
-        conversations = service.store.list_conversations(limit=limit)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        conversations = service.store.list_conversations(limit=limit, user_id=user_id)
         return {
             "items": [
                 {
@@ -152,11 +160,13 @@ def build_conversation_router(
     @router.get("/conversations/{conversation_id}/messages")
     def get_messages(
         conversation_id: str,
+        request: Request,
         after_sequence: int = Query(default=0, alias="afterSequence", ge=0),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> dict[str, object]:
         try:
-            service.store.get_conversation(conversation_id)
+            user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+            service.store.get_conversation(conversation_id, user_id=user_id)
             messages = service.store.get_messages(
                 conversation_id, after_sequence=after_sequence, limit=limit
             )
@@ -168,12 +178,17 @@ def build_conversation_router(
         }
 
     @router.post("/conversations/{conversation_id}/turns")
-    def submit_turn(conversation_id: str, payload: TurnPayload) -> JSONResponse:
+    def submit_turn(
+        conversation_id: str, payload: TurnPayload, request: Request
+    ) -> JSONResponse:
         try:
+            user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+            service.store.get_conversation(conversation_id, user_id=user_id)
             request, created = service.prepare_turn(
                 conversation_id,
                 content=payload.content,
                 client_message_id=payload.client_message_id,
+                user_id=user_id,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -197,11 +212,13 @@ def build_conversation_router(
     @router.get("/requests/{request_id}/events")
     def request_events(
         request_id: str,
+        request: Request,
         after_sequence: int = Query(default=0, alias="afterSequence", ge=0),
         timeout_seconds: float = Query(default=30.0, ge=0.1, le=60.0, alias="timeoutSeconds"),
     ) -> StreamingResponse:
         try:
-            service.store.get_request(request_id)
+            user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+            service.store.get_request_for_user(request_id, user_id=user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -219,8 +236,10 @@ def build_conversation_router(
                 for event in events:
                     cursor = event.sequence
                     yield f"data: {json.dumps(_event_payload(event), ensure_ascii=False)}\n\n"
-                request = service.store.get_request(request_id)
-                if request.state in terminal and not events:
+                current_request = service.store.get_request_for_user(
+                    request_id, user_id=user_id
+                )
+                if current_request.state in terminal and not events:
                     break
                 time.sleep(0.02)
 
@@ -231,16 +250,20 @@ def build_conversation_router(
         )
 
     @router.post("/requests/{request_id}/cancel")
-    def cancel_request(request_id: str) -> TurnResponse:
+    def cancel_request(request_id: str, request: Request) -> TurnResponse:
         try:
+            user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+            service.store.get_request_for_user(request_id, user_id=user_id)
             request = service.cancel_request(request_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return TurnResponse(requestId=request.id, state=request.state.value)
 
     @router.post("/requests/{request_id}/retry", status_code=status.HTTP_202_ACCEPTED)
-    def retry_request(request_id: str) -> TurnResponse:
+    def retry_request(request_id: str, request: Request) -> TurnResponse:
         try:
+            user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+            service.store.get_request_for_user(request_id, user_id=user_id)
             request = service.retry_request(request_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -30,9 +30,17 @@ def _datetime(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
 
+def _normalise_user_id(value: str) -> str:
+    user_id = value.strip()
+    if not user_id:
+        raise ValueError("user_id is required")
+    return user_id
+
+
 def _conversation_from_row(row: sqlite3.Row) -> Conversation:
     return Conversation(
         id=row["id"],
+        user_id=row["user_id"] if "user_id" in row.keys() else "local-user",
         title=row["title"],
         created_at=_datetime(row["created_at"]),
         updated_at=_datetime(row["updated_at"]),
@@ -49,7 +57,7 @@ class ConversationStore:
         self.store = store
 
     def ensure_conversation(
-        self, conversation_id: str, *, title: str = "새 대화"
+        self, conversation_id: str, *, title: str = "새 대화", user_id: str = "local-user"
     ) -> Conversation:
         """Return a stable conversation, creating it for legacy route callers.
 
@@ -60,41 +68,52 @@ class ConversationStore:
         """
 
         conversation_id = conversation_id.strip()
+        user_id = _normalise_user_id(user_id)
         if not conversation_id:
             raise ValueError("conversation_id is required")
         now = _now()
         with self.store._connect() as connection:
             connection.execute(
                 "INSERT OR IGNORE INTO conversations "
-                "(id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, NULL)",
-                (conversation_id, title.strip() or "새 대화", _iso(now), _iso(now)),
+                "(id, user_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, NULL)",
+                (conversation_id, user_id, title.strip() or "새 대화", _iso(now), _iso(now)),
             )
             row = connection.execute(
-                "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+                "SELECT * FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id),
             ).fetchone()
-        assert row is not None
+        if row is None:
+            raise KeyError(f"Conversation not found: {conversation_id}")
         return _conversation_from_row(row)
 
-    def create_conversation(self, title: str = "새 대화") -> Conversation:
+    def create_conversation(
+        self, title: str = "새 대화", *, user_id: str = "local-user"
+    ) -> Conversation:
+        user_id = _normalise_user_id(user_id)
         now = _now()
         conversation = Conversation(
             id=f"conversation-{uuid4().hex}",
+            user_id=user_id,
             title=title.strip() or "새 대화",
             created_at=now,
             updated_at=now,
         )
         with self.store._connect() as connection:
             connection.execute(
-                "INSERT INTO conversations (id, title, created_at, updated_at, archived_at) "
-                "VALUES (?, ?, ?, ?, NULL)",
-                (conversation.id, conversation.title, _iso(now), _iso(now)),
+                "INSERT INTO conversations (id, user_id, title, created_at, updated_at, archived_at) "
+                "VALUES (?, ?, ?, ?, ?, NULL)",
+                (conversation.id, conversation.user_id, conversation.title, _iso(now), _iso(now)),
             )
         return conversation
 
-    def get_conversation(self, conversation_id: str) -> Conversation:
+    def get_conversation(
+        self, conversation_id: str, *, user_id: str = "local-user"
+    ) -> Conversation:
+        user_id = _normalise_user_id(user_id)
         with self.store._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+                "SELECT * FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id),
             ).fetchone()
         if row is None:
             raise KeyError(f"Conversation not found: {conversation_id}")
@@ -104,6 +123,7 @@ class ConversationStore:
         self,
         conversation_id: str,
         *,
+        user_id: str = "local-user",
         user_content: str,
         assistant_content: str,
         request_id: str,
@@ -120,6 +140,7 @@ class ConversationStore:
         """
 
         conversation_id = conversation_id.strip()
+        user_id = _normalise_user_id(user_id)
         request_id = request_id.strip()
         user_content = user_content.strip()
         assistant_content = assistant_content.strip()
@@ -137,14 +158,16 @@ class ConversationStore:
         with self.store._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             conversation = connection.execute(
-                "SELECT id FROM conversations WHERE id = ?", (conversation_id,)
+                "SELECT id, user_id FROM conversations WHERE id = ?", (conversation_id,)
             ).fetchone()
             if conversation is None:
                 connection.execute(
                     "INSERT INTO conversations "
-                    "(id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, NULL)",
-                    (conversation_id, "새 대화", _iso(now), _iso(now)),
+                    "(id, user_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, NULL)",
+                    (conversation_id, user_id, "새 대화", _iso(now), _iso(now)),
                 )
+            elif conversation["user_id"] != user_id:
+                raise KeyError(f"Conversation not found: {conversation_id}")
 
             def find(role: MessageRole) -> sqlite3.Row | None:
                 return connection.execute(
@@ -204,7 +227,9 @@ class ConversationStore:
             )
         return _message_from_row(user_row), _message_from_row(assistant_row)
 
-    def find_pending_route(self, conversation_id: str, user_content: str) -> str | None:
+    def find_pending_route(
+        self, conversation_id: str, user_content: str, *, user_id: str = "local-user"
+    ) -> str | None:
         """Find an unfinished route for the same conversation and user text.
 
         Legacy route callers do not always send a client request id.  During
@@ -214,17 +239,21 @@ class ConversationStore:
         later remains a valid new request.
         """
 
+        user_id = _normalise_user_id(user_id)
         with self.store._connect() as connection:
             row = connection.execute(
                 "SELECT user_message.request_id FROM messages AS user_message "
                 "JOIN messages AS assistant_message ON assistant_message.conversation_id = user_message.conversation_id "
                 "AND assistant_message.request_id = user_message.request_id "
-                "WHERE user_message.conversation_id = ? AND user_message.role = 'user' "
-                "AND user_message.content = ? AND assistant_message.role = 'assistant' "
+                "JOIN conversations AS conversation ON conversation.id = user_message.conversation_id "
+                "WHERE user_message.conversation_id = ? AND conversation.user_id = ? "
+                "AND user_message.role = 'user' AND user_message.content = ? "
+                "AND assistant_message.role = 'assistant' "
                 "AND assistant_message.status IN (?, ?) "
                 "ORDER BY user_message.sequence DESC LIMIT 1",
                 (
                     conversation_id,
+                    user_id,
                     user_content.strip(),
                     MessageStatus.PENDING.value,
                     MessageStatus.STREAMING.value,
@@ -238,6 +267,7 @@ class ConversationStore:
         route_request_id: str,
         status: str,
         *,
+        user_id: str = "local-user",
         error_code: str | None = None,
     ) -> AssistantRequest | None:
         """Project the legacy assistant route into the canonical request ledger.
@@ -249,6 +279,7 @@ class ConversationStore:
 
         conversation_id = conversation_id.strip()
         route_request_id = route_request_id.strip()
+        user_id = _normalise_user_id(user_id)
         if not conversation_id or not route_request_id:
             raise ValueError("conversation_id and route_request_id are required")
         target = {
@@ -266,9 +297,11 @@ class ConversationStore:
         with self.store._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             user = connection.execute(
-                "SELECT id FROM messages WHERE conversation_id = ? "
+                "SELECT messages.id FROM messages "
+                "JOIN conversations ON conversations.id = messages.conversation_id "
+                "WHERE messages.conversation_id = ? AND conversations.user_id = ? "
                 "AND request_id = ? AND role = 'user' ORDER BY sequence LIMIT 1",
-                (conversation_id, route_request_id),
+                (conversation_id, user_id, route_request_id),
             ).fetchone()
             if user is None:
                 return None
@@ -392,6 +425,7 @@ class ConversationStore:
         limit: int = 50,
         before_updated_at: str | None = None,
         before_conversation_id: str | None = None,
+        user_id: str = "local-user",
     ) -> list[dict[str, object]]:
         """List canonical transcript summaries in the legacy history shape."""
 
@@ -411,12 +445,14 @@ class ConversationStore:
             except ValueError as exc:
                 raise ValueError("before_updated_at must be an ISO-8601 timestamp") from exc
         query = query.strip()
+        user_id = _normalise_user_id(user_id)
         pattern = f"%{_escape_like(query)}%"
         filters = [
+            "c.user_id = ?",
             "c.archived_at IS NULL",
             "(? = '' OR c.id LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')",
         ]
-        parameters: list[object] = [query, pattern, pattern]
+        parameters: list[object] = [user_id, query, pattern, pattern]
         if before_updated_at is not None and before_conversation_id is not None:
             filters.append(
                 "(c.updated_at < ? OR (c.updated_at = ? AND c.id < ?))"
@@ -456,6 +492,7 @@ class ConversationStore:
         *,
         limit: int = 100,
         before_sequence: int | None = None,
+        user_id: str = "local-user",
     ) -> dict[str, object]:
         """Return a bounded canonical transcript page for the history client."""
 
@@ -466,7 +503,7 @@ class ConversationStore:
             raise ValueError("limit must be between 1 and 500")
         if before_sequence is not None and before_sequence < 1:
             raise ValueError("before_sequence must be positive")
-        self.get_conversation(conversation_id)
+        self.get_conversation(conversation_id, user_id=user_id)
         with self.store._connect() as connection:
             count = connection.execute(
                 "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
@@ -507,18 +544,22 @@ class ConversationStore:
             "nextBeforeId": turns[0]["id"] if has_older and turns else None,
         }
 
-    def list_conversations(self, *, limit: int = 50) -> list[Conversation]:
+    def list_conversations(
+        self, *, limit: int = 50, user_id: str = "local-user"
+    ) -> list[Conversation]:
         if limit < 1 or limit > 100:
             raise ValueError("limit must be between 1 and 100")
+        user_id = _normalise_user_id(user_id)
         with self.store._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM conversations WHERE archived_at IS NULL "
+                "SELECT * FROM conversations WHERE user_id = ? AND archived_at IS NULL "
                 "ORDER BY updated_at DESC, id DESC LIMIT ?",
-                (limit,),
+                (user_id, limit),
             ).fetchall()
         return [
             Conversation(
                 id=row["id"],
+                user_id=row["user_id"] if "user_id" in row.keys() else "local-user",
                 title=row["title"],
                 created_at=_datetime(row["created_at"]),
                 updated_at=_datetime(row["updated_at"]),
@@ -740,6 +781,21 @@ class ConversationStore:
         with self.store._connect() as connection:
             row = connection.execute(
                 "SELECT * FROM assistant_requests WHERE id = ?", (request_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Assistant request not found: {request_id}")
+        return _request_from_row(row)
+
+    def get_request_for_user(
+        self, request_id: str, *, user_id: str = "local-user"
+    ) -> AssistantRequest:
+        user_id = _normalise_user_id(user_id)
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT assistant_requests.* FROM assistant_requests "
+                "JOIN conversations ON conversations.id = assistant_requests.conversation_id "
+                "WHERE assistant_requests.id = ? AND conversations.user_id = ?",
+                (request_id, user_id),
             ).fetchone()
         if row is None:
             raise KeyError(f"Assistant request not found: {request_id}")

@@ -802,9 +802,11 @@ def build_assistant_router(
         ),
     ) -> list[dict[str, object]]:
         _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
             if conversation_store is not None:
                 return conversation_store.list_transcript_summaries(
+                    user_id=user_id,
                     query=query,
                     limit=limit,
                     before_updated_at=before_updated_at,
@@ -824,10 +826,11 @@ def build_assistant_router(
         before_id: int | None = Query(default=None, alias="beforeId", ge=1),
     ) -> dict[str, object]:
         _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
             if conversation_store is not None:
                 return conversation_store.get_transcript(
-                    conversation_id, limit=limit, before_sequence=before_id
+                    conversation_id, user_id=user_id, limit=limit, before_sequence=before_id
                 )
             return service.coordinator.memory.get_conversation(
                 conversation_id, limit=limit, before_id=before_id

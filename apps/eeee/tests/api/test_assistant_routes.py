@@ -121,6 +121,26 @@ def test_assistant_route_reuses_a_reminder_for_the_same_request_id(tmp_path) -> 
     assert transcript.json()["messageCount"] == 2
 
 
+def test_legacy_assistant_history_is_isolated_by_user_header(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    client = TestClient(create_app(settings))
+    user_a = {"X-EEEE-User-Id": "user-a"}
+    user_b = {"X-EEEE-User-Id": "user-b"}
+
+    response = client.post(
+        "/api/assistant/route",
+        headers=user_a,
+        json={"text": "내일 오후 3시에 팀 회의 알려줘", "conversationId": "scoped-history"},
+    )
+
+    assert response.status_code == 200
+    assert client.get("/api/assistant/conversations", headers=user_a).json()
+    assert client.get("/api/assistant/conversations", headers=user_b).json() == []
+    assert client.get(
+        "/api/assistant/conversations/scoped-history", headers=user_b
+    ).status_code == 404
+
+
 def test_assistant_route_runs_local_document_save_and_search(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     client = TestClient(create_app(settings))

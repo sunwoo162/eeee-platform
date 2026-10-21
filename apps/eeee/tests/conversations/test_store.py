@@ -1,6 +1,7 @@
 from app.conversations.models import MessageRole, MessageStatus, RequestState
 from app.conversations.store import ConversationStore
 from app.storage.sqlite import SQLiteStore
+import pytest
 
 
 def make_store(tmp_path) -> ConversationStore:
@@ -56,6 +57,27 @@ def test_duplicate_client_message_is_idempotent(tmp_path) -> None:
 
     assert second.id == first.id
     assert len(conversations.get_messages(conversation.id)) == 1
+
+
+def test_conversations_are_isolated_by_user_scope(tmp_path) -> None:
+    conversations = make_store(tmp_path)
+    private = conversations.create_conversation("개인 기록", user_id="user-a")
+    conversations.record_route_turn(
+        private.id,
+        user_id="user-a",
+        user_content="사용자 A 질문",
+        assistant_content="사용자 A 답변",
+        request_id="user-a-request",
+    )
+
+    assert [item.id for item in conversations.list_conversations(user_id="user-a")] == [
+        private.id
+    ]
+    assert conversations.list_conversations(user_id="user-b") == []
+    with pytest.raises(KeyError):
+        conversations.get_conversation(private.id, user_id="user-b")
+    with pytest.raises(KeyError):
+        conversations.get_transcript(private.id, user_id="user-b")
 
 
 def test_route_turn_creates_canonical_conversation_and_updates_background_reply(tmp_path) -> None:

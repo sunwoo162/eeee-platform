@@ -232,7 +232,12 @@ class PluginPlatformService:
         except KeyError:
             return "awaiting_authentication"
 
-    def connected_connector_ids(self, user_id: str = "local-user") -> set[str]:
+    def connected_connector_ids(
+        self,
+        user_id: str = "local-user",
+        *,
+        required_permissions: Mapping[str, set[str]] | None = None,
+    ) -> set[str]:
         """Return connected provider IDs without exposing stored credentials."""
 
         connected: set[str] = set()
@@ -240,8 +245,36 @@ class PluginPlatformService:
             if entry.connector not in self.connectors:
                 continue
             if self.status(entry.id, user_id) == "connected":
+                required = set((required_permissions or {}).get(entry.connector, set()))
+                try:
+                    connection = self.connections.get(user_id, entry.id)
+                except KeyError:
+                    continue
+                if not required.issubset(connection.approved_permissions):
+                    continue
                 connected.add(entry.connector)
         return connected
+
+    def invoke_connector_action(
+        self,
+        user_id: str,
+        plugin_id: str,
+        action: str,
+        value: dict[str, object],
+    ) -> dict[str, object]:
+        """Invoke a connected connector for an already trust-gated internal flow."""
+
+        if self.status(plugin_id, user_id) != "connected":
+            raise RuntimeError(f"plugin connector is not connected: {plugin_id}")
+        connection = self.connections.get(user_id, plugin_id)
+        credential_json = self.credentials.get(connection.credential_ref) if connection.credential_ref else None
+        if credential_json is None:
+            raise RuntimeError(f"plugin credential is unavailable: {plugin_id}")
+        connector = self._connector(plugin_id)
+        transient = connector.connect(
+            user_id, _credential_from_json(credential_json), set(connection.approved_permissions)
+        )
+        return connector.invoke(transient, action, value)
 
     def begin_oauth(
         self,

@@ -115,6 +115,16 @@ def test_platform_exposes_connected_connector_ids_without_credentials(tmp_path) 
     assert platform.connected_connector_ids("user-b") == set()
 
 
+def test_platform_invokes_a_connected_connector_without_exposing_credentials(tmp_path) -> None:
+    platform = _platform(tmp_path, FakeConnector())
+    platform.install("notion")
+    platform.connect("user-a", "notion", {"pages.read"}, {"token": "secret"}, None)
+
+    result = platform.invoke_connector_action("user-a", "notion", "get_page", {"pageId": "page-1"})
+
+    assert result == {"status": "completed", "action": "get_page", "value": {"pageId": "page-1"}}
+
+
 def test_platform_isolates_users_and_disconnect_removes_capability(tmp_path) -> None:
     platform = _platform(tmp_path, FakeConnector())
     platform.install("notion")

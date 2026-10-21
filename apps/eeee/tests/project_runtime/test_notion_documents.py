@@ -4,7 +4,7 @@ import json
 
 import httpx
 
-from app.project_runtime.documents import ProjectDocumentService
+from app.project_runtime.documents import PluginPlatformNotionAdapter, ProjectDocumentService
 from app.project_runtime.models import ConnectorBinding, ProjectProfile
 from app.storage.sqlite import SQLiteStore
 from app.trust.models import TrustCheck
@@ -137,3 +137,24 @@ def test_project_document_sync_does_not_call_notion_when_claimlatch_blocks(tmp_p
 
     assert result.status == "blocked"
     assert result.trust.decision == "BLOCKED"
+
+
+def test_plugin_platform_notion_adapter_uses_connected_connector() -> None:
+    class Platform:
+        def connected_connector_ids(self, user_id, *, required_permissions):
+            assert user_id == "local-user"
+            assert required_permissions == {"notion": {"pages.write"}}
+            return {"notion"}
+
+        def invoke_connector_action(self, user_id, plugin_id, action, value):
+            assert (user_id, plugin_id, action) == ("local-user", "notion", "create_project_page")
+            assert value["lines"] == ["Project specification"]
+            return {"id": "page-2", "url": "https://notion.so/page-2"}
+
+    adapter = PluginPlatformNotionAdapter(Platform())
+
+    assert adapter.is_available()
+    page = adapter.create_project_page(_profile(), ["Project specification"])
+
+    assert page.id == "page-2"
+    assert page.url == "https://notion.so/page-2"

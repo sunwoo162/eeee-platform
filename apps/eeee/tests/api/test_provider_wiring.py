@@ -49,7 +49,7 @@ def test_connected_plugin_state_flows_into_project_provisioner(monkeypatch, tmp_
     application.state.plugin_platform.connectors = {"notion": _HealthyNotionConnector()}
     application.state.plugin_platform.install("notion")
     application.state.plugin_platform.connect(
-        "local-user", "notion", {"pages.read"}, {"token": "secret"}, "Workspace"
+        "local-user", "notion", {"pages.read", "pages.write"}, {"token": "secret"}, "Workspace"
     )
 
     assert application.state.api_flow.project_provisioner.configured_connector_ids() == {"notion"}

@@ -49,6 +49,26 @@ def test_assistant_result_exposes_final_quality_fields_after_background_completi
     assert isinstance(payload["missing_extensions"], list)
 
 
+def test_background_route_replaces_accepted_reply_in_canonical_transcript(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    client = TestClient(create_app(settings))
+
+    accepted = client.post(
+        "/api/assistant/route",
+        json={"text": "Todo 앱 만들어줘", "conversationId": "background-canonical"},
+    )
+    payload = wait_for_project_job(client, accepted)
+
+    messages = client.get(
+        "/v1/conversations/background-canonical/messages"
+    ).json()["items"]
+    assert len(messages) == 2
+    assert messages[0]["role"] == "user"
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["content"] == payload["message"]
+    assert messages[1]["status"] == "completed"
+
+
 def test_assistant_route_keeps_non_project_intent_out_of_project_creation(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     client = TestClient(create_app(settings))

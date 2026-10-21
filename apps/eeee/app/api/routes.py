@@ -762,7 +762,10 @@ def build_router(coordinator: Coordinator) -> APIRouter:
 
 
 def build_assistant_router(
-    service: AssistantService, documents: ProjectDocumentService | None = None
+    service: AssistantService,
+    documents: ProjectDocumentService | None = None,
+    *,
+    conversation_store: ConversationStore | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -778,6 +781,39 @@ def build_assistant_router(
                     approval_request_id=payload.approval_request_id,
                     request_id=payload.request_id,
                 ).model_dump()
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/assistant/conversations")
+    def list_assistant_conversations(
+        request: Request,
+        query: str = Query(default="", max_length=500),
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> list[dict[str, object]]:
+        _require_local_desktop(request)
+        try:
+            if conversation_store is not None:
+                return conversation_store.list_transcript_summaries(query=query, limit=limit)
+            return service.coordinator.memory.list_conversations(query=query, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/assistant/conversations/{conversation_id}")
+    def get_assistant_conversation(
+        conversation_id: str,
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=500),
+        before_id: int | None = Query(default=None, alias="beforeId", ge=1),
+    ) -> dict[str, object]:
+        _require_local_desktop(request)
+        try:
+            if conversation_store is not None:
+                return conversation_store.get_transcript(
+                    conversation_id, limit=limit, before_sequence=before_id
+                )
+            return service.coordinator.memory.get_conversation(
+                conversation_id, limit=limit, before_id=before_id
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1179,35 +1215,6 @@ def build_api_router(
     conversation_store: ConversationStore | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
-
-    @router.get("/assistant/conversations")
-    def list_assistant_conversations(
-        request: Request,
-        query: str = Query(default="", max_length=500),
-        limit: int = Query(default=50, ge=1, le=100),
-    ) -> list[dict[str, object]]:
-        """Expose the existing local transcript to the optional UI plugin."""
-
-        _require_local_desktop(request)
-        try:
-            return flow.coordinator.memory.list_conversations(query=query, limit=limit)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @router.get("/assistant/conversations/{conversation_id}")
-    def get_assistant_conversation(
-        conversation_id: str,
-        request: Request,
-        limit: int = Query(default=100, ge=1, le=500),
-        before_id: int | None = Query(default=None, alias="beforeId", ge=1),
-    ) -> dict[str, object]:
-        _require_local_desktop(request)
-        try:
-            return flow.coordinator.memory.get_conversation(
-                conversation_id, limit=limit, before_id=before_id
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/requests", response_model=RequestResponse)
     def create_api_request(payload: RequestPayload) -> RequestResponse:

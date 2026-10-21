@@ -58,6 +58,37 @@ def test_duplicate_client_message_is_idempotent(tmp_path) -> None:
     assert len(conversations.get_messages(conversation.id)) == 1
 
 
+def test_route_turn_creates_canonical_conversation_and_updates_background_reply(tmp_path) -> None:
+    conversations = make_store(tmp_path)
+
+    first_user, first_assistant = conversations.record_route_turn(
+        "desktop-default",
+        user_content="프로젝트를 시작해줘",
+        assistant_content="백그라운드에서 시작했어.",
+        request_id="route-1",
+        assistant_status=MessageStatus.PENDING,
+    )
+    second_user, second_assistant = conversations.record_route_turn(
+        "desktop-default",
+        user_content="프로젝트를 시작해줘",
+        assistant_content="완료 결과와 검증을 확인했어.",
+        request_id="route-1",
+    )
+
+    assert first_user.id == second_user.id
+    assert first_assistant.id == second_assistant.id
+    messages = conversations.get_messages("desktop-default")
+    assert len(messages) == 2
+    assert messages[1].content == "완료 결과와 검증을 확인했어."
+    assert messages[1].status is MessageStatus.COMPLETED
+
+    summaries = conversations.list_transcript_summaries(query="검증")
+    assert summaries[0]["conversationId"] == "desktop-default"
+    transcript = conversations.get_transcript("desktop-default")
+    assert [turn["role"] for turn in transcript["turns"]] == ["user", "assistant"]
+    assert transcript["turns"][1]["messageId"] == second_assistant.id
+
+
 def test_request_events_are_cursor_ordered(tmp_path) -> None:
     conversations = make_store(tmp_path)
     conversation = conversations.create_conversation()

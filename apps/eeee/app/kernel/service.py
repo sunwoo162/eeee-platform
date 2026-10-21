@@ -497,7 +497,10 @@ class KernelService:
 def _approval_fingerprint(request: AssistantRequest) -> str:
     context = {
         key: value for key, value in request.context.items()
-        if key not in {"approved", "approvalRequestId"}
+        # These values identify the transport attempt, not the user-approved
+        # action.  A retry must be allowed to reuse the same approval even
+        # when the route allocates a fresh durable transcript request id.
+        if key not in {"approved", "approvalRequestId", "requestId"}
     }
     payload = {
         "rawText": request.raw_text,

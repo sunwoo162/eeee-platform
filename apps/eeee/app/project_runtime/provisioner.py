@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app.domain.models import Project, RequestBrief
 from app.project_runtime.connectors import PlanningConnector, ProjectConnector, build_default_connectors
-from app.project_runtime.models import ProjectProfile, ProjectProvisioningResult
+from app.project_runtime.models import ConnectorBinding, ProjectProfile, ProjectProvisioningResult
 from app.project_runtime.scaffold import create_todo_scaffold
 from app.project_runtime.web_scaffold import create_web_app_scaffold
 from app.project_runtime.web_runner import WebProjectRunner
@@ -55,6 +55,7 @@ class ProjectProvisioner:
     ) -> ProjectProvisioningResult:
         existing = self._existing_current_profile(project)
         if existing is not None:
+            existing = self._refresh_pending_connectors(existing, user_id)
             self._create_scaffold(project.workspace, project.name, request, intent, existing.template_id)
             execution_plan_path = self._write_execution_plan(
                 project, request, memory_ids, qa_baseline_ids, memory_context, request_id, planning_handoff,
@@ -102,6 +103,37 @@ class ProjectProvisioner:
             intent=intent,
         )
         return _result(profile, execution_plan_path=execution_plan_path)
+
+    def _refresh_pending_connectors(
+        self, profile: ProjectProfile, user_id: str
+    ) -> ProjectProfile:
+        """Re-evaluate incomplete connector plans when a project is resumed.
+
+        A project can be created before a user finishes OAuth setup.  Its
+        profile must not permanently cache that earlier absence of credentials;
+        otherwise reconnecting the plugin would have no effect until a new
+        project was created.
+        """
+        configured = self._configured_connector_ids(user_id)
+        refreshed: list[ConnectorBinding] = []
+        changed = False
+        for binding in profile.connectors:
+            connector = self.connectors.get(binding.connector_id)
+            if (
+                connector is not None
+                and binding.state in {"awaiting_configuration", "planned"}
+                and isinstance(connector, PlanningConnector)
+            ):
+                next_binding = _plan_connector(connector, profile, configured)
+                changed = changed or next_binding != binding
+                refreshed.append(next_binding)
+            else:
+                refreshed.append(binding)
+        if not changed:
+            return profile
+        updated = profile.model_copy(update={"connectors": refreshed})
+        self.store.save_project_profile(updated)
+        return updated
 
     def _configured_connector_ids(self, user_id: str) -> set[str]:
         if self.configured_connector_ids is None:

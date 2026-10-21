@@ -333,6 +333,11 @@ class UserPreferenceCapability:
         })
 
 
+def _request_user_id(request: AssistantRequest) -> str:
+    value = request.context.get("userId", "local-user")
+    return value.strip() if isinstance(value, str) and value.strip() else "local-user"
+
+
 class ProjectExecutionCapability:
     """Allocate one local project, then delegate its request and profile to ISEOL."""
 
@@ -384,6 +389,7 @@ class ProjectExecutionCapability:
                     question.model_dump(mode="json", by_alias=True)
                     for question in intake.questions
                 ],
+                "userId": _request_user_id(request),
             },
             side_effect_level=self.descriptor.side_effect_level,
             requires_approval=self.descriptor.approval_level != "none",
@@ -400,6 +406,7 @@ class ProjectExecutionCapability:
                 "externalActions": plan.inputs.get("externalActions", []),
                 "approved": plan.inputs.get("approved") is True,
                 "clarificationQuestions": plan.inputs.get("clarificationQuestions", []),
+                "userId": str(plan.inputs.get("userId", "local-user")),
             },
         )
         return self.orchestrator.run(request, envelope_context.assistant_context, envelope_context)
@@ -412,6 +419,7 @@ class ProjectExecutionCapability:
     ) -> CapabilityOutcome:
         text = request.raw_text
         intent = ProjectIntent.model_validate(request.context.get("projectIntent"))
+        user_id = _request_user_id(request)
         questions = [
             item for item in request.context.get("clarificationQuestions", [])
             if isinstance(item, dict)
@@ -485,6 +493,7 @@ class ProjectExecutionCapability:
                 request_id=state.request_id,
                 planning_handoff=planning_handoff,
                 intent=intent,
+                user_id=user_id,
             )
             agent_graph = _read_agent_graph(provisioned.execution_plan_path)
             agent_execution_report = None
@@ -675,7 +684,7 @@ class ProjectExecutionCapability:
             document_execution_id = None
             if self.document_service is not None:
                 def sync_document(_document: ExecutionEnvelope) -> CapabilityOutcome:
-                    result = self.document_service.sync(provisioned.profile)
+                    result = self.document_service.sync(provisioned.profile, user_id=user_id)
                     status = (ExecutionStatus.COMPLETED if result.status in {"synced", "unchanged"}
                               else ExecutionStatus.BLOCKED)
                     return CapabilityOutcome(result.model_dump(mode="json", by_alias=True), status)

@@ -30,6 +30,9 @@ class PluginPlatformNotionAdapter:
         self.platform = platform
         self.user_id = user_id
 
+    def for_user(self, user_id: str) -> "PluginPlatformNotionAdapter":
+        return PluginPlatformNotionAdapter(self.platform, user_id=user_id)
+
     def is_available(self) -> bool:
         connected = self.platform.connected_connector_ids(
             self.user_id,
@@ -70,8 +73,9 @@ class ProjectDocumentService:
         self.trust_gate = trust_gate
         self.event_publisher = event_publisher
 
-    def sync(self, profile: ProjectProfile) -> ProjectDocumentSyncResult:
-        if self.notion is None or not _is_available(self.notion):
+    def sync(self, profile: ProjectProfile, *, user_id: str = "local-user") -> ProjectDocumentSyncResult:
+        notion = _adapter_for_user(self.notion, user_id)
+        if notion is None or not _is_available(notion):
             result = ProjectDocumentSyncResult(
                 status="awaiting_configuration",
                 project_id=profile.project_id,
@@ -119,10 +123,10 @@ class ProjectDocumentService:
             return result
 
         if existing is None:
-            page = self.notion.create_project_page(profile, lines)
+            page = notion.create_project_page(profile, lines)
             document = _document_record(profile, page, content_hash)
         else:
-            self.notion.append_revision(existing.external_id, profile.project_revision, lines)
+            notion.append_revision(existing.external_id, profile.project_revision, lines)
             document = existing.model_copy(
                 update={
                     "project_revision": profile.project_revision,
@@ -210,6 +214,13 @@ def _page_ref(value: object) -> NotionPageRef:
 def _is_available(adapter: object) -> bool:
     checker = getattr(adapter, "is_available", None)
     return bool(checker()) if callable(checker) else True
+
+
+def _adapter_for_user(adapter: object | None, user_id: str) -> object | None:
+    if adapter is None:
+        return None
+    factory = getattr(adapter, "for_user", None)
+    return factory(user_id) if callable(factory) else adapter
 
 
 def _document_lines(profile: ProjectProfile) -> list[str]:

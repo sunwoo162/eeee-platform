@@ -52,7 +52,22 @@ def test_connected_plugin_state_flows_into_project_provisioner(monkeypatch, tmp_
         "local-user", "notion", {"pages.read", "pages.write"}, {"token": "secret"}, "Workspace"
     )
 
-    assert application.state.api_flow.project_provisioner.configured_connector_ids() == {"notion"}
+    assert application.state.api_flow.project_provisioner.configured_connector_ids("local-user") == {"notion"}
+
+
+def test_project_provisioner_uses_the_request_user_plugin_connections(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
+    application = create_app(Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces"))
+    application.state.plugin_platform.credentials = MemoryCredentialStore()
+    application.state.plugin_platform.connectors = {"notion": _HealthyNotionConnector()}
+    application.state.plugin_platform.install("notion")
+    application.state.plugin_platform.connect(
+        "user-a", "notion", {"pages.read", "pages.write"}, {"token": "secret"}, "Workspace"
+    )
+
+    assert application.state.api_flow.project_provisioner.configured_connector_ids("user-a") == {"notion"}
+    assert application.state.api_flow.project_provisioner.configured_connector_ids("user-b") == set()
 
 
 def test_unconfigured_project_lane_uses_provider_neutral_runtime(monkeypatch, tmp_path):

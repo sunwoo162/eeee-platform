@@ -62,20 +62,25 @@ def test_provisioning_reads_connected_connector_ids_at_execution_time(tmp_path) 
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.init()
     connected = {"notion"}
-    provisioner = ProjectProvisioner(
-        store,
-        configured_connector_ids=lambda: set(connected),
-    )
+    seen_users: list[str] = []
+
+    def configured_connector_ids(user_id: str) -> set[str]:
+        seen_users.append(user_id)
+        return set(connected)
+
+    provisioner = ProjectProvisioner(store, configured_connector_ids=configured_connector_ids)
 
     result = provisioner.provision(
         project(tmp_path / "workspace"),
         request(),
         memory_ids=[],
         qa_baseline_ids=[],
+        user_id="user-a",
     )
 
     assert result.profile.connector("notion").state == "planned"
     assert "notion" not in result.missing_connectors
+    assert seen_users == ["user-a"]
 
 
 def test_repeated_provisioning_is_idempotent_and_survives_store_reopen(tmp_path) -> None:

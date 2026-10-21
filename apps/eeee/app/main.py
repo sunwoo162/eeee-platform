@@ -206,10 +206,10 @@ def create_app(
     project_provisioner = ProjectProvisioner(
         store,
         connectors=build_default_connectors(configured=configured_connectors),
-        configured_connector_ids=lambda: {
+        configured_connector_ids=lambda user_id="local-user": {
             *configured_connectors,
             *plugin_platform.connected_connector_ids(
-                "local-user", required_permissions={"notion": {"pages.write"}}
+                user_id, required_permissions={"notion": {"pages.write"}}
             ),
         },
         iseol_bridge=IseolPlanBridge(timeout=app_settings.command_timeout_seconds),

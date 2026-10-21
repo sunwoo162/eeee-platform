@@ -891,11 +891,11 @@ def build_assistant_router(
         "/projects/{project_id}/documents/sync",
         response_model=ProjectDocumentSyncResult,
     )
-    def sync_project_document(project_id: str) -> ProjectDocumentSyncResult:
+    def sync_project_document(project_id: str, request: Request) -> ProjectDocumentSyncResult:
         if documents is None:
             raise HTTPException(status_code=503, detail="Project document service is unavailable")
         profile = service.get_project_profile(project_id)
-        return documents.sync(profile)
+        return documents.sync(profile, user_id=_plugin_user_id(request, request.headers.get("X-EEEE-User-Id")))
 
     return router
 

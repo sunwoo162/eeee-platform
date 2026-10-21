@@ -1,3 +1,5 @@
+from threading import Event
+
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -50,4 +52,36 @@ def test_assistant_job_controls_are_local_desktop_only(tmp_path):
         response = client.get("/api/assistant/jobs")
 
     assert response.status_code == 403
+
+
+def test_assistant_jobs_are_isolated_by_user_header(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    application = create_app(settings)
+    release = Event()
+    user_a = {"X-EEEE-User-Id": "user-a"}
+    user_b = {"X-EEEE-User-Id": "user-b"}
+
+    def blocking_operation():
+        release.wait(timeout=3)
+        return {"status": "accepted"}
+
+    try:
+        with TestClient(application) as client:
+            job_id = application.state.assistant_supervisor.submit(
+                "assistant-request-user-scope",
+                blocking_operation,
+                input_data={"userId": "user-a"},
+            )
+
+            assert client.get("/api/assistant/jobs", headers=user_a).json()[0]["jobId"] == job_id
+            assert client.get("/api/assistant/jobs", headers=user_b).json() == []
+            assert client.get(f"/api/assistant/jobs/{job_id}", headers=user_b).status_code == 404
+            assert client.post(
+                f"/api/assistant/jobs/{job_id}/cancel", headers=user_b
+            ).status_code == 404
+            assert client.post(
+                f"/api/assistant/jobs/{job_id}/cancel", headers=user_a
+            ).status_code == 200
+    finally:
+        release.set()
 

@@ -29,8 +29,10 @@ class RecordingSupervisor:
         self.request_id = request_id
         return self.job_id
 
-    def find_by_request_id(self, request_id):
+    def find_by_request_id(self, request_id, *, user_id="local-user"):
         if request_id != getattr(self, "request_id", None):
+            return None
+        if user_id != self.input_data.get("userId", "local-user"):
             return None
         return {
             "jobId": self.job_id,

@@ -187,18 +187,30 @@ class ExecutionStore:
             self._save(connection, claimed)
             return claimed, True
 
-    def list_plugin_routes(self, *, limit: int = 20) -> list[ExecutionEnvelope]:
+    def list_plugin_routes(
+        self, *, limit: int = 20, user_id: str | None = None,
+    ) -> list[ExecutionEnvelope]:
         """Return recent EEEE-routed plugin executions without raw inputs."""
         if limit < 1:
             raise ValueError("limit must be positive")
         with self.store._connect() as connection:
-            rows = connection.execute(
+            query = (
                 "SELECT envelope_json FROM execution_envelopes "
                 "WHERE tool_id = 'eeee.route' AND capability_id LIKE 'plugin:%' "
-                "ORDER BY started_at DESC, created_at DESC, rowid DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return [ExecutionEnvelope.model_validate_json(row["envelope_json"]) for row in rows]
+                "ORDER BY started_at DESC, created_at DESC, rowid DESC"
+            )
+            parameters: tuple[object, ...] = ()
+            if user_id is None:
+                query += " LIMIT ?"
+                parameters = (limit,)
+            rows = connection.execute(query, parameters).fetchall()
+        executions = [ExecutionEnvelope.model_validate_json(row["envelope_json"]) for row in rows]
+        if user_id is not None:
+            executions = [
+                execution for execution in executions
+                if execution.input.get("userId", "local-user") == user_id
+            ]
+        return executions[:limit]
 
     def append_event(self, event: EventEnvelope) -> EventEnvelope:
         with self.store._connect() as connection:

@@ -256,10 +256,12 @@ class SQLiteStore:
                     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS design_packs (
-                    id TEXT PRIMARY KEY, pack_json TEXT NOT NULL, tokens_json TEXT NOT NULL
+                    id TEXT PRIMARY KEY, pack_json TEXT NOT NULL, tokens_json TEXT NOT NULL,
+                    user_id TEXT NOT NULL DEFAULT 'local-user'
                 );
                 CREATE TABLE IF NOT EXISTS visual_verifications (
-                    id TEXT PRIMARY KEY, url TEXT NOT NULL, baseline TEXT NOT NULL, report_json TEXT NOT NULL
+                    id TEXT PRIMARY KEY, url TEXT NOT NULL, baseline TEXT NOT NULL, report_json TEXT NOT NULL,
+                    user_id TEXT NOT NULL DEFAULT 'local-user'
                 );
                 CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, workspace TEXT NOT NULL,
@@ -540,41 +542,48 @@ class SQLiteStore:
         return AgentTask.model_validate_json(row["task_json"])
 
     def save_design_pack(
-        self, pack_id: str, pack: ReferencePack, tokens: dict[str, object]
+        self, pack_id: str, pack: ReferencePack, tokens: dict[str, object],
+        *, user_id: str = "local-user",
     ) -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO design_packs (id, pack_json, tokens_json) VALUES (?, ?, ?) "
+                "INSERT INTO design_packs (id, pack_json, tokens_json, user_id) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET pack_json = excluded.pack_json, "
-                "tokens_json = excluded.tokens_json",
-                (pack_id, pack.model_dump_json(), json.dumps(tokens)),
+                "tokens_json = excluded.tokens_json, user_id = excluded.user_id",
+                (pack_id, pack.model_dump_json(), json.dumps(tokens), user_id),
             )
 
-    def get_design_pack(self, pack_id: str) -> tuple[ReferencePack, dict[str, object]]:
+    def get_design_pack(
+        self, pack_id: str, *, user_id: str = "local-user"
+    ) -> tuple[ReferencePack, dict[str, object]]:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT pack_json, tokens_json FROM design_packs WHERE id = ?", (pack_id,)
+                "SELECT pack_json, tokens_json FROM design_packs "
+                "WHERE id = ? AND user_id = ?", (pack_id, user_id)
             ).fetchone()
         if row is None:
             raise KeyError(f"Design reference pack not found: {pack_id}")
         return ReferencePack.model_validate_json(row["pack_json"]), json.loads(row["tokens_json"])
 
     def save_visual_verification(
-        self, verification_id: str, url: str, baseline: str, report: VisualReport
+        self, verification_id: str, url: str, baseline: str, report: VisualReport,
+        *, user_id: str = "local-user",
     ) -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO visual_verifications (id, url, baseline, report_json) VALUES (?, ?, ?, ?)",
-                (verification_id, url, baseline, report.model_dump_json()),
+                "INSERT INTO visual_verifications "
+                "(id, url, baseline, report_json, user_id) VALUES (?, ?, ?, ?, ?)",
+                (verification_id, url, baseline, report.model_dump_json(), user_id),
             )
 
     def get_visual_verification(
-        self, verification_id: str
+        self, verification_id: str, *, user_id: str = "local-user"
     ) -> tuple[str, str, VisualReport]:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT url, baseline, report_json FROM visual_verifications WHERE id = ?",
-                (verification_id,),
+                "SELECT url, baseline, report_json FROM visual_verifications "
+                "WHERE id = ? AND user_id = ?",
+                (verification_id, user_id),
             ).fetchone()
         if row is None:
             raise KeyError(f"Visual verification not found: {verification_id}")

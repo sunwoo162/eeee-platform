@@ -72,6 +72,31 @@ def test_design_reference_pack_survives_application_restart(tmp_path):
     assert fetched.json() == created
 
 
+def test_design_reference_pack_isolated_by_user_header(tmp_path):
+    client = TestClient(
+        create_app(
+            Settings(
+                data_dir=tmp_path / "data",
+                workspace_root=tmp_path / "workspaces",
+            )
+        )
+    )
+    created = client.post(
+        "/api/design/references",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"urls": ["https://example.test/user-a"], "target_type": "web_app"},
+    )
+
+    assert created.status_code == 200
+    pack_id = created.json()["id"]
+    assert client.get(
+        f"/api/design/references/{pack_id}", headers={"X-EEEE-User-Id": "user-b"}
+    ).status_code == 404
+    assert client.get(
+        f"/api/design/references/{pack_id}", headers={"X-EEEE-User-Id": "user-a"}
+    ).status_code == 200
+
+
 def test_visual_verification_history_survives_application_restart(tmp_path):
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -95,3 +120,24 @@ def test_visual_verification_history_survives_application_restart(tmp_path):
 
     assert fetched.status_code == 200
     assert fetched.json() == payload
+
+
+def test_visual_verification_isolated_by_user_header(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+    )
+    baseline = tmp_path / "baseline.png"
+    baseline.write_bytes(b"baseline")
+    client = TestClient(create_app(settings))
+    created = client.post(
+        "/api/design/verify",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"url": "http://127.0.0.1:65500", "baseline": str(baseline)},
+    )
+
+    assert created.status_code == 200
+    verification_id = created.json()["id"]
+    assert client.get(
+        f"/api/design/verify/{verification_id}", headers={"X-EEEE-User-Id": "user-b"}
+    ).status_code == 404

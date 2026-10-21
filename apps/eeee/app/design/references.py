@@ -115,42 +115,57 @@ class DesignService:
         self.extractor = extractor
         self.visual_verifier = visual_verifier
         self.store = store
-        self._packs: dict[str, tuple[ReferencePack, dict[str, object]]] = {}
-        self._verifications: dict[str, tuple[str, str, VisualReport]] = {}
+        self._packs: dict[str, tuple[str, ReferencePack, dict[str, object]]] = {}
+        self._verifications: dict[str, tuple[str, str, str, VisualReport]] = {}
 
     def create(
-        self, urls: list[str], keywords: list[str], target_type: str
+        self, urls: list[str], keywords: list[str], target_type: str,
+        *, user_id: str = "local-user",
     ) -> tuple[str, ReferencePack, dict[str, object]]:
         pack = self.collector.collect(urls, keywords, target_type)
         tokens = self.extractor.extract(pack)
         pack_id = str(uuid4())
         if self.store is not None:
-            self.store.save_design_pack(pack_id, pack, tokens)
+            self.store.save_design_pack(pack_id, pack, tokens, user_id=user_id)
         else:
-            self._packs[pack_id] = (pack, tokens)
+            self._packs[pack_id] = (user_id, pack, tokens)
         return pack_id, pack, tokens
 
-    def get(self, pack_id: str) -> tuple[ReferencePack, dict[str, object]]:
+    def get(
+        self, pack_id: str, *, user_id: str = "local-user"
+    ) -> tuple[ReferencePack, dict[str, object]]:
         if self.store is not None:
-            return self.store.get_design_pack(pack_id)
+            return self.store.get_design_pack(pack_id, user_id=user_id)
         try:
-            return self._packs[pack_id]
+            owner, pack, tokens = self._packs[pack_id]
         except KeyError as exc:
             raise KeyError(f"Design reference pack not found: {pack_id}") from exc
+        if owner != user_id:
+            raise KeyError(f"Design reference pack not found: {pack_id}")
+        return pack, tokens
 
-    def verify(self, url: str, baseline: str) -> tuple[str, VisualReport]:
+    def verify(
+        self, url: str, baseline: str, *, user_id: str = "local-user"
+    ) -> tuple[str, VisualReport]:
         report = self.visual_verifier.compare(url, Path(baseline))
         verification_id = str(uuid4())
         if self.store is not None:
-            self.store.save_visual_verification(verification_id, url, baseline, report)
+            self.store.save_visual_verification(
+                verification_id, url, baseline, report, user_id=user_id
+            )
         else:
-            self._verifications[verification_id] = (url, baseline, report)
+            self._verifications[verification_id] = (user_id, url, baseline, report)
         return verification_id, report
 
-    def get_verification(self, verification_id: str) -> tuple[str, str, VisualReport]:
+    def get_verification(
+        self, verification_id: str, *, user_id: str = "local-user"
+    ) -> tuple[str, str, VisualReport]:
         if self.store is not None:
-            return self.store.get_visual_verification(verification_id)
+            return self.store.get_visual_verification(verification_id, user_id=user_id)
         try:
-            return self._verifications[verification_id]
+            owner, url, baseline, report = self._verifications[verification_id]
         except KeyError as exc:
             raise KeyError(f"Visual verification not found: {verification_id}") from exc
+        if owner != user_id:
+            raise KeyError(f"Visual verification not found: {verification_id}")
+        return url, baseline, report

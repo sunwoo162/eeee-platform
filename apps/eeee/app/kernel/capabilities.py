@@ -72,6 +72,20 @@ class LocalPlanningCapability:
         )
 
     def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
+        if self.descriptor.id == "presence":
+            return CapabilityOutcome(
+                {
+                    "status": "unsupported",
+                    "capabilityStatus": "unsupported",
+                    "reasonCode": "presence_provider_unavailable",
+                    "message": "현재 바탕화면·모바일 표시 기능이 연결되어 있지 않아 실행할 수 없어.",
+                },
+                ExecutionStatus.BLOCKED,
+                ExecutionError(
+                    code="presence_provider_unavailable",
+                    message="Presence provider is not configured",
+                ),
+            )
         return CapabilityOutcome({
             "status": "selected", "capabilityStatus": "planned",
             "message": f"Selected EEEE capability: {self.descriptor.id}",

@@ -385,7 +385,9 @@ class KernelService:
         project_id = output.get("projectId")
         project_revision = output.get("projectRevision")
         if not isinstance(project_id, str) or not isinstance(project_revision, str):
-            blocked = str(output.get("status", "")).lower() in {"blocked", "failed"}
+            blocked = str(output.get("status", "")).lower() in {
+                "blocked", "failed", "unsupported",
+            }
             return {
                 "decision": "BLOCKED" if blocked else "WARN",
                 "reason": (
@@ -404,7 +406,9 @@ class KernelService:
             claim=str(claim),
             action="assistant.response",
         )
-        blocked = str(output.get("status", "")).lower() in {"blocked", "failed"}
+        blocked = str(output.get("status", "")).lower() in {
+            "blocked", "failed", "unsupported",
+        }
         return {
             "decision": "BLOCKED" if blocked else check.decision,
             "reason": (

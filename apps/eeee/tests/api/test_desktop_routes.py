@@ -2,6 +2,8 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.api.routes import _desktop_events
+from app.mobile.bridge import MobileBridge
 from tests.api._helpers import wait_for_project_job
 
 
@@ -68,12 +70,27 @@ def test_desktop_events_return_durable_cursor_and_redacted_lifecycle_events(tmp_
     assert response.status_code == 200
     payload = response.json()
     assert payload["cursor"] >= 1
+    assert payload["hasGap"] is False
+    assert payload["oldestCursor"] is not None
     kinds = [event["kind"] for event in payload["events"]]
     assert "assistant.route.started" in kinds
     assert "project.created" in kinds
     for event in payload["events"]:
         assert "accessToken" not in event
         assert "pairingCode" not in event
+
+
+def test_desktop_events_preserve_retention_gap_metadata(tmp_path):
+    bridge = MobileBridge(tmp_path / "events.sqlite3", event_limit=2)
+    bridge.init()
+    for kind in ("one", "two", "three", "four"):
+        bridge.publish(kind, {})
+
+    payload = _desktop_events(bridge, 1)
+
+    assert payload["hasGap"] is True
+    assert payload["oldestCursor"] == 3
+    assert [event["cursor"] for event in payload["events"]] == [3, 4]
 
 
 def test_desktop_can_issue_pairing_code_without_returning_a_mobile_token(tmp_path):

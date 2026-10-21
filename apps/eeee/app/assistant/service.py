@@ -11,6 +11,8 @@ from app.assistant.router import CapabilityRouter
 from app.assistant.secretary import PersonalSecretary
 from app.config import Settings
 from app.coordinator.service import Coordinator
+from app.conversations.models import MessageStatus
+from app.conversations.store import ConversationStore
 from app.project_runtime.models import ProjectProfile
 from app.project_runtime.documents import ProjectDocumentService
 from app.project_runtime.provisioner import ProjectProvisioner
@@ -88,6 +90,7 @@ class AssistantService:
         document_service: ProjectDocumentService | None = None,
         kernel: KernelService | None = None, agent_runtime=None,
         background_supervisor: BackgroundExecutionSupervisor | None = None,
+        conversation_store: ConversationStore | None = None,
     ) -> None:
         self.router = router
         self.coordinator = coordinator
@@ -95,6 +98,7 @@ class AssistantService:
         self.settings = settings
         self.provisioner = provisioner
         self.background_supervisor = background_supervisor
+        self.conversation_store = conversation_store
         self.event_publisher = event_publisher
         self.document_service = document_service
         self.secretary = PersonalSecretary()
@@ -110,6 +114,7 @@ class AssistantService:
         conversation_id: str = "desktop-default", approved: bool = False,
         approval_request_id: str | None = None, request_id: str | None = None,
     ) -> AssistantRouteResult:
+        request_id = request_id or f"assistant-request-{uuid4().hex}"
         request = AssistantRequest(
             raw_text=text,
             context={"workspace": workspace, "conversationId": conversation_id, "approved": approved},
@@ -118,7 +123,6 @@ class AssistantService:
         if self.background_supervisor is not None:
             selection = self.router.select(request)
             if selection.status == "selected" and selection.capability_id == "project-execution":
-                request_id = request_id or f"assistant-request-{uuid4().hex}"
                 # Allocate the identity before the worker starts.  The same
                 # value is persisted in the job input so a process restart or
                 # manual retry resumes the original project instead of
@@ -163,7 +167,10 @@ class AssistantService:
                         subject_id=job_id,
                     ),
                 )
-                self._remember_turn(conversation_id, text, result.message, request_id=request_id)
+                self._remember_turn(
+                    conversation_id, text, result.message, request_id=request_id,
+                    status=MessageStatus.PENDING,
+                )
                 return result
         result = self._route_sync(
             text, workspace, requested_capability=requested_capability,
@@ -312,7 +319,16 @@ class AssistantService:
     def _remember_turn(
         self, conversation_id: str, user_text: str, assistant_text: str,
         *, request_id: str | None = None,
+        status: MessageStatus = MessageStatus.COMPLETED,
     ) -> None:
+        if self.conversation_store is not None and request_id is not None:
+            self.conversation_store.record_route_turn(
+                conversation_id,
+                user_content=user_text,
+                assistant_content=assistant_text,
+                request_id=request_id,
+                assistant_status=status,
+            )
         memory_store = getattr(self.coordinator, "memory", None)
         if memory_store is None:
             return

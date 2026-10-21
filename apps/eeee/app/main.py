@@ -391,6 +391,7 @@ def create_app(
         document_service=project_documents,
         kernel=kernel,
         background_supervisor=assistant_supervisor,
+        conversation_store=conversation_store,
     )
     application.state.assistant_service = assistant_service
     assistant_service.resume_background_jobs()
@@ -446,7 +447,13 @@ def create_app(
         )
     )
     application.include_router(build_project_view_router(project_view))
-    application.include_router(build_assistant_router(assistant_service, project_documents))
+    application.include_router(
+        build_assistant_router(
+            assistant_service,
+            project_documents,
+            conversation_store=conversation_store,
+        )
+    )
     application.include_router(build_mobile_router(mobile_bridge, assistant_service, mobile_snapshot))
     application.include_router(
         build_desktop_router(

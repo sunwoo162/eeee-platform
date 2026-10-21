@@ -53,6 +53,17 @@ def test_chat_history_api_lists_opens_searches_and_sends_in_the_same_conversatio
     assert listed.json()[0]["conversationId"] == "desktop-default"
     assert listed.json()[0]["messageCount"] == 2
 
+    canonical = client.get("/v1/conversations")
+    assert canonical.status_code == 200
+    assert canonical.json()["items"][0]["id"] == "desktop-default"
+    assert canonical.json()["items"][0]["messageCount"] == 2
+
+    canonical_messages = client.get("/v1/conversations/desktop-default/messages")
+    assert canonical_messages.status_code == 200
+    assert [item["role"] for item in canonical_messages.json()["items"]] == [
+        "user", "assistant"
+    ]
+
     opened = client.get("/api/assistant/conversations/desktop-default", params={"limit": 10})
     assert opened.status_code == 200
     assert [item["role"] for item in opened.json()["turns"]] == ["user", "assistant"]

@@ -30,9 +30,50 @@ def _datetime(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
 
+def _conversation_from_row(row: sqlite3.Row) -> Conversation:
+    return Conversation(
+        id=row["id"],
+        title=row["title"],
+        created_at=_datetime(row["created_at"]),
+        updated_at=_datetime(row["updated_at"]),
+        archived_at=_datetime(row["archived_at"]),
+    )
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class ConversationStore:
     def __init__(self, store) -> None:
         self.store = store
+
+    def ensure_conversation(
+        self, conversation_id: str, *, title: str = "새 대화"
+    ) -> Conversation:
+        """Return a stable conversation, creating it for legacy route callers.
+
+        The assistant route historically accepted a caller-provided conversation
+        id without first creating a ``/v1`` conversation.  Keeping that id in
+        the canonical store lets the desktop route and the chat-history API
+        observe the same transcript.
+        """
+
+        conversation_id = conversation_id.strip()
+        if not conversation_id:
+            raise ValueError("conversation_id is required")
+        now = _now()
+        with self.store._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO conversations "
+                "(id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, NULL)",
+                (conversation_id, title.strip() or "새 대화", _iso(now), _iso(now)),
+            )
+            row = connection.execute(
+                "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+        assert row is not None
+        return _conversation_from_row(row)
 
     def create_conversation(self, title: str = "새 대화") -> Conversation:
         now = _now()
@@ -57,13 +98,200 @@ class ConversationStore:
             ).fetchone()
         if row is None:
             raise KeyError(f"Conversation not found: {conversation_id}")
-        return Conversation(
-            id=row["id"],
-            title=row["title"],
-            created_at=_datetime(row["created_at"]),
-            updated_at=_datetime(row["updated_at"]),
-            archived_at=_datetime(row["archived_at"]),
-        )
+        return _conversation_from_row(row)
+
+    def record_route_turn(
+        self,
+        conversation_id: str,
+        *,
+        user_content: str,
+        assistant_content: str,
+        request_id: str,
+        assistant_status: MessageStatus = MessageStatus.COMPLETED,
+        provider: str | None = None,
+        model: str | None = None,
+        error_code: str | None = None,
+    ) -> tuple[ConversationMessage, ConversationMessage]:
+        """Write one assistant-route turn to the canonical transcript.
+
+        A route may first persist an accepted/background response and later
+        replace only the assistant message with the verified result.  The
+        request id is therefore the idempotency key for both messages.
+        """
+
+        conversation_id = conversation_id.strip()
+        request_id = request_id.strip()
+        user_content = user_content.strip()
+        assistant_content = assistant_content.strip()
+        if not conversation_id or not request_id:
+            raise ValueError("conversation_id and request_id are required")
+        if not user_content or not assistant_content:
+            raise ValueError("route turn content must not be empty")
+        now = _now()
+        terminal = {
+            MessageStatus.COMPLETED,
+            MessageStatus.FAILED,
+            MessageStatus.CANCELLED,
+            MessageStatus.INTERRUPTED,
+        }
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            conversation = connection.execute(
+                "SELECT id FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+            if conversation is None:
+                connection.execute(
+                    "INSERT INTO conversations "
+                    "(id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, NULL)",
+                    (conversation_id, "새 대화", _iso(now), _iso(now)),
+                )
+
+            def find(role: MessageRole) -> sqlite3.Row | None:
+                return connection.execute(
+                    "SELECT * FROM messages WHERE conversation_id = ? "
+                    "AND request_id = ? AND role = ? ORDER BY sequence ASC LIMIT 1",
+                    (conversation_id, request_id, role.value),
+                ).fetchone()
+
+            def insert(role: MessageRole, content: str, status: MessageStatus) -> sqlite3.Row:
+                sequence = connection.execute(
+                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM messages WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()[0]
+                message_id = f"message-{uuid4().hex}"
+                completed_at = _iso(now) if status in terminal else None
+                client_message_id = (
+                    f"route:{request_id}:user" if role is MessageRole.USER else None
+                )
+                connection.execute(
+                    "INSERT INTO messages (id, conversation_id, sequence, role, content, status, "
+                    "client_message_id, request_id, provider, model, error_code, created_at, completed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        message_id, conversation_id, sequence, role.value, content, status.value,
+                        client_message_id, request_id, provider, model, error_code,
+                        _iso(now), completed_at,
+                    ),
+                )
+                return connection.execute(
+                    "SELECT * FROM messages WHERE id = ?", (message_id,)
+                ).fetchone()
+
+            user_row = find(MessageRole.USER)
+            if user_row is None:
+                user_row = insert(MessageRole.USER, user_content, MessageStatus.COMPLETED)
+            elif user_row["content"] != user_content:
+                raise ValueError("request_id was reused with different user content")
+
+            assistant_row = find(MessageRole.ASSISTANT)
+            if assistant_row is None:
+                assistant_row = insert(MessageRole.ASSISTANT, assistant_content, assistant_status)
+            else:
+                connection.execute(
+                    "UPDATE messages SET content = ?, status = ?, provider = ?, model = ?, "
+                    "error_code = ?, completed_at = ? WHERE id = ?",
+                    (
+                        assistant_content, assistant_status.value, provider, model, error_code,
+                        _iso(now) if assistant_status in terminal else None, assistant_row["id"],
+                    ),
+                )
+                assistant_row = connection.execute(
+                    "SELECT * FROM messages WHERE id = ?", (assistant_row["id"],)
+                ).fetchone()
+            connection.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                (_iso(now), conversation_id),
+            )
+        return _message_from_row(user_row), _message_from_row(assistant_row)
+
+    def list_transcript_summaries(
+        self, *, query: str = "", limit: int = 50
+    ) -> list[dict[str, object]]:
+        """List canonical transcript summaries in the legacy history shape."""
+
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        query = query.strip()
+        pattern = f"%{_escape_like(query)}%"
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                "SELECT c.id, COUNT(m.id) AS message_count, "
+                "MAX(m.sequence) AS latest_sequence, MAX(c.updated_at) AS updated_at "
+                "FROM conversations c JOIN messages m ON m.conversation_id = c.id "
+                "WHERE c.archived_at IS NULL AND "
+                "(? = '' OR c.id LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\') "
+                "GROUP BY c.id ORDER BY updated_at DESC, c.id DESC LIMIT ?",
+                (query, pattern, pattern, limit),
+            ).fetchall()
+            summaries: list[dict[str, object]] = []
+            for row in rows:
+                latest = connection.execute(
+                    "SELECT content FROM messages WHERE conversation_id = ? "
+                    "ORDER BY sequence DESC LIMIT 1", (row["id"],)
+                ).fetchone()
+                if latest is None:
+                    continue
+                summaries.append({
+                    "conversationId": str(row["id"]),
+                    "messageCount": int(row["message_count"]),
+                    "preview": str(latest["content"]),
+                    "updatedAt": str(row["updated_at"]),
+                })
+            return summaries
+
+    def get_transcript(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 100,
+        before_sequence: int | None = None,
+    ) -> dict[str, object]:
+        """Return a bounded canonical transcript page for the history client."""
+
+        conversation_id = conversation_id.strip()
+        if not conversation_id:
+            raise ValueError("conversation_id is required")
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        if before_sequence is not None and before_sequence < 1:
+            raise ValueError("before_sequence must be positive")
+        self.get_conversation(conversation_id)
+        with self.store._connect() as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()[0]
+            if before_sequence is None:
+                rows = connection.execute(
+                    "SELECT * FROM messages WHERE conversation_id = ? "
+                    "ORDER BY sequence DESC LIMIT ?", (conversation_id, limit + 1)
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM messages WHERE conversation_id = ? AND sequence < ? "
+                    "ORDER BY sequence DESC LIMIT ?",
+                    (conversation_id, before_sequence, limit + 1),
+                ).fetchall()
+        has_older = len(rows) > limit
+        page = list(reversed(rows[:limit]))
+        turns = [
+            {
+                "id": int(row["sequence"]),
+                "messageId": str(row["id"]),
+                "role": str(row["role"]),
+                "content": str(row["content"]),
+                "status": str(row["status"]),
+                "requestId": row["request_id"],
+                "createdAt": str(row["created_at"]),
+            }
+            for row in page
+        ]
+        return {
+            "conversationId": conversation_id,
+            "messageCount": int(count),
+            "turns": turns,
+            "nextBeforeId": turns[0]["id"] if has_older and turns else None,
+        }
 
     def list_conversations(self, *, limit: int = 50) -> list[Conversation]:
         if limit < 1 or limit > 100:

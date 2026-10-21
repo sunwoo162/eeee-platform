@@ -241,6 +241,7 @@ class AssistantRequestPayload(BaseModel):
     conversation_id: str = Field(default="desktop-default", alias="conversationId", min_length=1, max_length=160)
     approved: bool = False
     approval_request_id: str | None = Field(default=None, alias="approvalRequestId", min_length=1, max_length=160)
+    request_id: str | None = Field(default=None, alias="requestId", min_length=1, max_length=200)
 
     model_config = {"populate_by_name": True}
 
@@ -775,6 +776,7 @@ def build_assistant_router(
                     conversation_id=payload.conversation_id,
                     approved=payload.approved,
                     approval_request_id=payload.approval_request_id,
+                    request_id=payload.request_id,
                 ).model_dump()
             )
         except ValueError as exc:
@@ -884,6 +886,7 @@ def build_mobile_router(
                 conversation_id=payload.conversation_id,
                 approved=payload.approved,
                 approval_request_id=payload.approval_request_id,
+                request_id=payload.request_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

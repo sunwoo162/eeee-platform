@@ -111,7 +111,8 @@ def test_assistant_service_does_not_create_project_for_a_reminder(tmp_path) -> N
     assert result.selection.capability_id == "personal-secretary"
     assert result.project_id is None
     assert result.project_profile is None
-    assert result.status == "selected"
+    assert result.status == "completed"
+    assert "회의" in result.message
     assert result.response_verification.profile_version == "claimlatch-v0.2.0"
     assert result.response_verification.decision == "WARN"
     assert "project identity" in result.response_verification.reason.lower()

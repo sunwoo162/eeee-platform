@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from app.assistant.models import AssistantContext, AssistantRequest, CapabilityDescriptor, CapabilityPlan
 from app.assistant.secretary import PersonalSecretary, SecretaryContext
+from app.assistant.reminders import ReminderStore, parse_reminder
 from app.agent.protocol import AgentRequest, AgentRuntime
 from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
 from app.config import Settings
@@ -74,6 +75,56 @@ class LocalPlanningCapability:
             "message": f"Selected EEEE capability: {self.descriptor.id}",
             "plan": plan.model_dump(mode="json"),
             "context": envelope_context.assistant_context.model_dump(mode="json"),
+        })
+
+
+class LocalSecretaryCapability:
+    """Execute the local-first secretary lane without requiring a plugin."""
+
+    def __init__(self, descriptor, *, store: SQLiteStore) -> None:
+        self.descriptor = descriptor
+        self.reminders = ReminderStore(store.path)
+
+    def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
+        return CapabilityPlan(
+            capability_id=self.descriptor.id,
+            summary=request.raw_text,
+            inputs={"text": request.raw_text, "conversationId": context.conversation_id},
+            side_effect_level=self.descriptor.side_effect_level,
+            requires_approval=False,
+        )
+
+    def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
+        text = str(plan.inputs.get("text", "")).strip()
+        conversation_id = str(plan.inputs.get("conversationId", "desktop-default"))
+        if any(marker in text for marker in ("보여줘", "보여", "확인", "목록", "뭐가", "뭐 있어")):
+            reminders = [item.as_dict() for item in self.reminders.list(conversation_id)]
+            message = (
+                "등록된 일정이 없어."
+                if not reminders
+                else "\n".join(f"- {item['title']} ({item['dueAt']})" for item in reminders)
+            )
+            return CapabilityOutcome({
+                "status": "completed", "capabilityStatus": "completed",
+                "message": message, "reminders": reminders,
+            })
+        draft = parse_reminder(text)
+        if draft is None:
+            return CapabilityOutcome(
+                {
+                    "status": "blocked", "capabilityStatus": "blocked",
+                    "message": "언제 할 일정인지 시간까지 말해줘. 예: 내일 오후 3시에 팀 회의 알려줘",
+                },
+                ExecutionStatus.BLOCKED,
+                ExecutionError(code="reminder_time_required", message="Reminder time is required"),
+            )
+        reminder = self.reminders.create(
+            conversation_id, draft, request_id=envelope_context.envelope.request_id,
+        )
+        return CapabilityOutcome({
+            "status": "completed", "capabilityStatus": "completed",
+            "message": f"{reminder.title} 일정을 {reminder.due_at.strftime('%m월 %d일 %H:%M')}로 저장했어.",
+            "reminder": reminder.as_dict(),
         })
 
 

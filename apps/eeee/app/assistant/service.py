@@ -56,6 +56,8 @@ class AssistantRouteResult(BaseModel):
     plugin_id: str | None = None
     plugin_execution_id: str | None = None
     plugin_output: dict[str, object] | None = Field(default=None, alias="pluginOutput")
+    reminder: dict[str, str] | None = None
+    reminders: list[dict[str, str]] = Field(default_factory=list)
     approval_required: bool = Field(default=False, alias="approvalRequired")
     approval_capability_id: str | None = Field(default=None, alias="approvalCapabilityId")
     approval_plugin_id: str | None = Field(default=None, alias="approvalPluginId")
@@ -102,7 +104,7 @@ class AssistantService:
     def route(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
         conversation_id: str = "desktop-default", approved: bool = False,
-        approval_request_id: str | None = None,
+        approval_request_id: str | None = None, request_id: str | None = None,
     ) -> AssistantRouteResult:
         request = AssistantRequest(
             raw_text=text,
@@ -112,7 +114,7 @@ class AssistantService:
         if self.background_supervisor is not None:
             selection = self.router.select(request)
             if selection.status == "selected" and selection.capability_id == "project-execution":
-                request_id = f"assistant-request-{uuid4().hex}"
+                request_id = request_id or f"assistant-request-{uuid4().hex}"
                 # Allocate the identity before the worker starts.  The same
                 # value is persisted in the job input so a process restart or
                 # manual retry resumes the original project instead of
@@ -123,7 +125,7 @@ class AssistantService:
                     lambda: self._route_sync(
                         text, workspace, requested_capability=requested_capability,
                         conversation_id=conversation_id, approved=approved, resume_project_id=project_id,
-                        approval_request_id=approval_request_id,
+                        approval_request_id=approval_request_id, request_id=request_id,
                     ).model_dump(mode="json"),
                     input_data={
                         "text": text,
@@ -132,6 +134,7 @@ class AssistantService:
                         "conversationId": conversation_id,
                         "approved": approved,
                         "approvalRequestId": approval_request_id,
+                        "requestId": request_id,
                         "projectId": project_id,
                     },
                 )
@@ -153,7 +156,7 @@ class AssistantService:
         result = self._route_sync(
             text, workspace, requested_capability=requested_capability,
             conversation_id=conversation_id, approved=approved,
-            approval_request_id=approval_request_id,
+            approval_request_id=approval_request_id, request_id=request_id,
         )
         self._remember_turn(conversation_id, text, result.message)
         return result
@@ -162,7 +165,7 @@ class AssistantService:
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
         conversation_id: str = "desktop-default", approved: bool = False,
         approval_request_id: str | None = None,
-        resume_project_id: str | None = None,
+        resume_project_id: str | None = None, request_id: str | None = None,
     ) -> AssistantRouteResult:
         implicit_preference = extract_implicit_preference(text)
         if implicit_preference is not None:
@@ -184,6 +187,7 @@ class AssistantService:
                     "workspace": workspace,
                     "conversationId": conversation_id,
                     "approved": approved,
+                    **({"requestId": request_id} if request_id else {}),
                     **({"approvalRequestId": approval_request_id} if approval_request_id else {}),
                     **({"resumeProjectId": resume_project_id} if resume_project_id else {}),
                 },
@@ -278,6 +282,8 @@ class AssistantService:
             plugin_id=output.get("pluginId"),
             plugin_execution_id=output.get("pluginExecutionId"),
             plugin_output=output.get("pluginOutput") if isinstance(output.get("pluginOutput"), dict) else None,
+            reminder=output.get("reminder") if isinstance(output.get("reminder"), dict) else None,
+            reminders=output.get("reminders", []) if isinstance(output.get("reminders", []), list) else [],
             approval_required=output.get("approvalRequired") is True,
             approval_capability_id=output.get("approvalCapabilityId"),
             approval_plugin_id=output.get("approvalPluginId"),

@@ -35,6 +35,8 @@ def test_mobile_controls_desktop_owned_assistant_and_receives_live_events(tmp_pa
 
     events = client.get("/api/mobile/events", headers=headers)
     assert events.status_code == 200
+    assert events.json()["hasGap"] is False
+    assert events.json()["oldestCursor"] is not None
     kinds = [event["kind"] for event in events.json()["events"]]
     assert "assistant.route.started" in kinds
     assert kinds[-1] == "assistant.route.completed"

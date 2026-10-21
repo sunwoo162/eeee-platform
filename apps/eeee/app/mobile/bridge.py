@@ -162,6 +162,14 @@ class MobileBridge:
         with self._lock:
             try:
                 with self._connect() as connection:
+                    bounds = connection.execute(
+                        "SELECT MIN(cursor) AS oldest_cursor FROM mobile_events"
+                    ).fetchone()
+                    oldest_cursor = (
+                        int(bounds["oldest_cursor"])
+                        if bounds is not None and bounds["oldest_cursor"] is not None
+                        else None
+                    )
                     rows = connection.execute(
                         "SELECT cursor, kind, payload_json, created_at FROM mobile_events "
                         "WHERE cursor > ? ORDER BY cursor ASC LIMIT ?",
@@ -178,9 +186,12 @@ class MobileBridge:
                 ]
             except sqlite3.OperationalError:
                 events = [event for event in self._events if event["cursor"] > cursor]
+                oldest_cursor = int(self._events[0]["cursor"]) if self._events else None
             return {
                 "cursor": self._cursor,
                 "events": events,
+                "hasGap": cursor > 0 and oldest_cursor is not None and oldest_cursor > cursor + 1,
+                "oldestCursor": oldest_cursor,
             }
 
     def status(self) -> dict[str, Any]:

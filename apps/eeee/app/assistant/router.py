@@ -127,7 +127,7 @@ class CapabilityRouter:
 
         candidates.sort(key=lambda item: (-item.score, item.capability_id))
         hint = self._optional_plugin_hint(normalized)
-        if hint is not None and not any(
+        if hint is not None and _is_plugin_action_request(normalized) and not any(
             candidate.capability_id.startswith(f"plugin:{hint[0]}:") for candidate in candidates
         ):
             plugin_id, plugin_name, permissions = hint
@@ -231,16 +231,53 @@ def _is_informational_capability_question(normalized: str) -> bool:
     question_markers = (
         "할 수 있어", "할수 있어", "어느 정도", "어느정도", "가능해", "가능하",
         "뭐 할 수", "무엇을 할 수", "어떤 걸 할 수", "어떤 작업", "도와줄 수",
-        "지원해", "뭐가 가능", "can you", "what can you", "how capable",
-        "what do you support", "are you able",
+        "지원해", "뭐가 가능", "뭐야", "뭐가", "무엇", "어떤", "무슨", "어떻게",
+        "만들 수 있어", "만들수 있어", "저장되어", "저장돼",
+        "방법", "설명해", "에 대해", "기능", "연결되어", "연결돼",
+        "연동되어", "연동돼", "설치되어", "설치돼", "can you", "what can you",
+        "how capable", "what do you support", "are you able",
     )
     if not any(marker in normalized for marker in question_markers):
         return False
-    action_markers = (
-        "만들어", "만들어줘", "구현", "생성", "작성", "개발해줘", "해줘",
-        "build", "create", "implement", "develop", "generate",
+    return not _is_action_request(normalized)
+
+
+def _is_action_request(normalized: str) -> bool:
+    """Recognize imperative requests without treating explanatory wording as an action."""
+    action_endings = (
+        "해줘", "해 줘", "해주세요", "해 주세요", "해", "줘", "주세요",
     )
-    return not any(marker in normalized for marker in action_markers)
+    action_verbs = (
+        "만들어", "만들", "구현", "생성", "작성", "개발", "보내", "전송",
+        "읽어", "읽", "찾아", "찾", "검색", "조회", "확인", "가져", "다운로드",
+        "업로드", "연결", "설치", "동기화", "저장", "정리", "요약", "추가",
+        "등록", "수정", "삭제", "열어", "보여", "예약", "취소", "build",
+        "create", "implement", "develop", "generate", "send", "read", "find",
+        "search", "show", "get", "install", "connect", "save", "update", "delete",
+    )
+    return any(
+        normalized.endswith(verb + ending)
+        or f" {verb}{ending}" in normalized
+        for verb in action_verbs
+        for ending in action_endings
+    )
+
+
+def _is_plugin_action_request(normalized: str) -> bool:
+    """Only turn a plugin hint into an installation request for an actual operation."""
+    return (
+        _is_action_request(normalized)
+        or any(normalized.endswith(ending) for ending in ("해줘", "해 줘", "해주세요", "해 주세요", "줘", "주세요"))
+        or any(
+            marker in normalized
+            for marker in (
+                "보내", "전송", "읽", "찾", "검색", "조회", "확인", "가져", "다운로드",
+                "업로드", "연결", "설치", "동기화", "저장", "정리", "요약", "검색",
+                "send", "read", "find", "search", "list", "show", "get", "install",
+                "connect", "save", "update", "delete",
+            )
+        )
+    )
 
 
 def _is_explicit_knowledge_command(normalized: str) -> bool:

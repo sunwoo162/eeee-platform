@@ -52,6 +52,61 @@ def test_natural_language_question_with_request_suffix_stays_conversation() -> N
     assert result.capability_id == "general-conversation"
 
 
+def test_broad_capability_words_do_not_route_about_questions_to_execution() -> None:
+    questions = (
+        "앱이 뭐야?",
+        "앱을 만들 수 있어?",
+        "기억 기능은 어떻게 써?",
+        "내 기억에 뭐가 저장되어 있어?",
+        "문서가 어떻게 동작하는지 알려줘",
+        "프로젝트를 만들면 어떤 과정을 거쳐?",
+    )
+
+    for text in questions:
+        result = router().select(AssistantRequest(raw_text=text))
+
+        assert result.status == "selected"
+        assert result.capability_id == "general-conversation"
+        assert "informational capability question" in result.reasons
+
+
+def test_plugin_name_in_about_or_status_question_does_not_require_installation() -> None:
+    questions = (
+        "Gmail이 연결되어 있어?",
+        "노션은 어떤 기능을 지원해?",
+        "피그마에 대해 알려줘",
+    )
+
+    for text in questions:
+        result = router().select(AssistantRequest(raw_text=text))
+
+        assert result.status == "selected"
+        assert result.capability_id == "general-conversation"
+        assert result.required_plugin_id is None
+
+
+def test_how_to_question_with_plugin_name_does_not_trigger_plugin_execution() -> None:
+    result = router().select(
+        AssistantRequest(raw_text="Gmail에서 메일 보내는 방법 알려줘")
+    )
+
+    assert result.status == "selected"
+    assert result.capability_id == "general-conversation"
+
+
+def test_action_request_with_plugin_name_still_requires_the_plugin() -> None:
+    requests = (
+        ("Gmail에서 메일 보내줘", "gmail"),
+        ("피그마로 디자인해줘", "figma"),
+    )
+
+    for text, plugin_id in requests:
+        result = router().select(AssistantRequest(raw_text=text))
+
+        assert result.status == "plugin_required"
+        assert result.required_plugin_id == plugin_id
+
+
 def test_capability_question_about_development_stays_with_eeee() -> None:
     result = router().select(AssistantRequest(raw_text="너 개발 어느 정도 할 수 있어?"))
 

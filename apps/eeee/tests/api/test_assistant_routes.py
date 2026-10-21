@@ -62,6 +62,23 @@ def test_assistant_route_keeps_non_project_intent_out_of_project_creation(tmp_pa
     assert payload["project_profile"] is None
 
 
+def test_assistant_route_reports_unavailable_presence_without_claiming_success(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/api/assistant/route",
+        json={"text": "바탕화면 위젯으로 보여줘", "conversationId": "presence-api"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "unsupported"
+    assert payload["response_verification"]["decision"] == "BLOCKED"
+    assert payload["message"]
+    assert "완료" not in payload["message"]
+
+
 def test_assistant_route_reuses_a_reminder_for_the_same_request_id(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     client = TestClient(create_app(settings))

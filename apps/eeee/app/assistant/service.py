@@ -25,7 +25,7 @@ class AssistantRouteResult(BaseModel):
 
     status: Literal[
         "selected", "needs_clarification", "ready", "awaiting_configuration",
-        "completed", "blocked", "plugin_required", "accepted",
+        "completed", "blocked", "unsupported", "plugin_required", "accepted",
     ]
     selection: CapabilitySelection
     message: str = Field(min_length=1)

@@ -113,6 +113,29 @@ def test_non_project_and_explicit_capability_requests_do_not_allocate_project(tm
         assert connection.execute("SELECT COUNT(*) FROM execution_envelopes").fetchone()[0] == 2
 
 
+def test_presence_request_is_blocked_as_unsupported_until_a_presence_provider_exists(tmp_path):
+    kernel, store, _ = make_kernel(tmp_path)
+
+    result = kernel.route(
+        AssistantRequest(raw_text="바탕화면 위젯으로 보여줘"), AssistantContext()
+    )
+
+    assert result.capability_id == "presence"
+    assert result.status is ExecutionStatus.BLOCKED
+    assert result.output["status"] == "unsupported"
+    assert result.output["capabilityStatus"] == "unsupported"
+    assert result.output["reasonCode"] == "presence_provider_unavailable"
+    assert result.output["responseVerification"]["decision"] == "BLOCKED"
+    assert "완료" not in result.output["message"]
+    assert "planned" not in result.output
+    assert "selected" not in result.output
+    assert result.error is not None
+    assert result.error.code == "presence_provider_unavailable"
+    assert result.error.message == "Presence provider is not configured"
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+
+
 def test_general_conversation_is_handled_by_eeee_without_project_allocation(tmp_path):
     kernel, store, _ = make_kernel(tmp_path)
 

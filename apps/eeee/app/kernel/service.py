@@ -483,8 +483,11 @@ class KernelService:
             return None
         if not isinstance(project_id, str) or not isinstance(revision, str):
             return "Project context requires projectId and projectRevision together"
+        user_id = request.context.get("userId", "local-user")
+        if not isinstance(user_id, str) or not user_id.strip():
+            user_id = "local-user"
         try:
-            current = self.store.get_project(project_id)
+            current = self.store.get_project(project_id, user_id=user_id)
         except KeyError:
             return "Project context is unavailable"
         return None if current.revision == revision else "stale project revision in assistant context"

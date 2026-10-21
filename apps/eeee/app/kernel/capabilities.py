@@ -449,7 +449,7 @@ class ProjectExecutionCapability:
             existing_context = self.store.get_latest_request_context_for_project(project.id)
             if existing_context is not None:
                 request_id, _workspace = existing_context
-                state = self.coordinator.get_state(project.id)
+                state = self.coordinator.get_state(project.id, user_id=user_id)
                 if state.request_id != request_id:
                     raise RuntimeError("Resumed project request state is inconsistent")
             else:
@@ -529,8 +529,9 @@ class ProjectExecutionCapability:
                             "receiptId": None,
                             "claimLatchReportId": None,
                         },
+                        user_id=user_id,
                     )
-                    profile = self.store.get_project_profile(project.id)
+                    profile = self.store.get_project_profile(project.id, user_id=user_id)
                     return CapabilityOutcome(
                         {
                             "status": "blocked",
@@ -685,6 +686,7 @@ class ProjectExecutionCapability:
                     qa_report,
                     claim_latch,
                     execution_plan=execution_plan,
+                    user_id=user_id,
                 )
             document_execution_id = None
             if self.document_service is not None:
@@ -707,7 +709,7 @@ class ProjectExecutionCapability:
                          "documentExecutionId": document.execution_id},
                         ExecutionStatus.FAILED, document.error,
                     )
-            profile = self.store.get_project_profile(project.id)
+            profile = self.store.get_project_profile(project.id, user_id=user_id)
             missing = sorted(binding.connector_id for binding in profile.connectors
                              if binding.state in {"awaiting_configuration", "planned"})
             quality_status = (
@@ -887,6 +889,7 @@ def _write_final_quality_report(
     claim_latch: dict[str, Any],
     *,
     execution_plan: ProjectExecutionPlan | None = None,
+    user_id: str = "local-user",
 ):
     plan = execution_plan or _quality_plan(
         Path(plan_path) if plan_path else None,
@@ -899,7 +902,7 @@ def _write_final_quality_report(
     report = ProjectQualityEvaluator().evaluate(
         Path(workspace), intent, plan, qa_report, claim_latch,
     )
-    profile = store.get_project_profile(project_id)
+    profile = store.get_project_profile(project_id, user_id=user_id)
     store.save_project_profile(profile.model_copy(update={
         "quality_report_path": str(Path(workspace) / "FINAL-QUALITY-REPORT.json"),
     }))

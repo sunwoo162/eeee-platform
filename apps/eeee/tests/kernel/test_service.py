@@ -81,6 +81,26 @@ def test_kernel_reads_recent_turns_from_the_canonical_conversation_store(tmp_pat
     assert "기억해둘게." in runtime.prompt
 
 
+def test_kernel_rejects_project_context_owned_by_another_user(tmp_path):
+    kernel, store, _events = make_kernel(tmp_path)
+    store.create_project(
+        "project-user-a", "User A project", str(tmp_path / "user-a"), user_id="user-a"
+    )
+
+    reason = kernel._context_identity_error(
+        AssistantRequest(
+            raw_text="프로젝트 상태 확인",
+            context={
+                "projectId": "project-user-a",
+                "projectRevision": "initial",
+                "userId": "user-b",
+            },
+        )
+    )
+
+    assert reason == "Project context is unavailable"
+
+
 def test_empty_general_provider_response_is_blocked_instead_of_completed(tmp_path):
     from app.agent.protocol import AgentResult
 

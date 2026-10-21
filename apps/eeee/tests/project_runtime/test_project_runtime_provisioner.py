@@ -58,6 +58,26 @@ def test_provisioning_creates_one_profile_and_truthful_connector_plans(tmp_path)
     assert result.missing_connectors == ["github", "google-calendar", "notion"]
 
 
+def test_provisioning_reads_connected_connector_ids_at_execution_time(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    connected = {"notion"}
+    provisioner = ProjectProvisioner(
+        store,
+        configured_connector_ids=lambda: set(connected),
+    )
+
+    result = provisioner.provision(
+        project(tmp_path / "workspace"),
+        request(),
+        memory_ids=[],
+        qa_baseline_ids=[],
+    )
+
+    assert result.profile.connector("notion").state == "planned"
+    assert "notion" not in result.missing_connectors
+
+
 def test_repeated_provisioning_is_idempotent_and_survives_store_reopen(tmp_path) -> None:
     database = tmp_path / "state.sqlite3"
     store = SQLiteStore(database)

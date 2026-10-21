@@ -106,6 +106,15 @@ def test_platform_hides_optional_capability_until_install_connect_and_health(tmp
     assert "secret" not in connected.model_dump_json()
 
 
+def test_platform_exposes_connected_connector_ids_without_credentials(tmp_path) -> None:
+    platform = _platform(tmp_path, FakeConnector())
+    platform.install("notion")
+    platform.connect("user-a", "notion", {"pages.read"}, {"token": "secret"}, None)
+
+    assert platform.connected_connector_ids("user-a") == {"notion"}
+    assert platform.connected_connector_ids("user-b") == set()
+
+
 def test_platform_isolates_users_and_disconnect_removes_capability(tmp_path) -> None:
     platform = _platform(tmp_path, FakeConnector())
     platform.install("notion")

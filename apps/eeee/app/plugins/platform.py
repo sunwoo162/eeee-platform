@@ -232,6 +232,17 @@ class PluginPlatformService:
         except KeyError:
             return "awaiting_authentication"
 
+    def connected_connector_ids(self, user_id: str = "local-user") -> set[str]:
+        """Return connected provider IDs without exposing stored credentials."""
+
+        connected: set[str] = set()
+        for entry in self.catalog_source.list():
+            if entry.connector not in self.connectors:
+                continue
+            if self.status(entry.id, user_id) == "connected":
+                connected.add(entry.connector)
+        return connected
+
     def begin_oauth(
         self,
         user_id: str,

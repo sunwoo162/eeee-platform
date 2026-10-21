@@ -153,6 +153,8 @@ class ConversationService:
                         content="",
                         status=MessageStatus.STREAMING,
                         request_id=request.id,
+                        provider=_active_provider_name(self.provider),
+                        model=_active_provider_model(self.provider),
                     )
                     yield self.store.append_event(
                         request.id, "message.started", {"messageId": assistant.id}
@@ -165,6 +167,8 @@ class ConversationService:
                     assistant.id,
                     content=collected,
                     status=MessageStatus.STREAMING,
+                    provider=_active_provider_name(self.provider),
+                    model=_active_provider_model(self.provider),
                 )
                 yield self.store.append_event(
                     request.id,
@@ -183,6 +187,8 @@ class ConversationService:
                     content="",
                     status=MessageStatus.STREAMING,
                     request_id=request.id,
+                    provider=_active_provider_name(self.provider),
+                    model=_active_provider_model(self.provider),
                 )
                 yield self.store.append_event(
                     request.id, "message.started", {"messageId": assistant.id}
@@ -196,6 +202,8 @@ class ConversationService:
                 assistant.id,
                 content=collected,
                 status=MessageStatus.COMPLETED,
+                provider=_active_provider_name(self.provider),
+                model=_active_provider_model(self.provider),
             )
             request = self.store.transition_request(request.id, RequestState.COMPLETED)
             yield self.store.append_event(
@@ -213,6 +221,8 @@ class ConversationService:
                     content="",
                     status=MessageStatus.CANCELLED if cancelled else MessageStatus.FAILED,
                     request_id=request.id,
+                    provider=_active_provider_name(self.provider),
+                    model=_active_provider_model(self.provider),
                     error_code=error_code,
                 )
             else:
@@ -220,6 +230,8 @@ class ConversationService:
                     assistant.id,
                     content=collected,
                     status=MessageStatus.CANCELLED if cancelled else MessageStatus.FAILED,
+                    provider=_active_provider_name(self.provider),
+                    model=_active_provider_model(self.provider),
                     error_code=error_code,
                 )
             current = self.store.get_request(request.id)
@@ -291,3 +303,17 @@ class CoreShuttingDownError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("EEEE Core is shutting down")
+
+
+def _active_provider_name(provider: ConversationProvider) -> str | None:
+    value = getattr(provider, "active_provider_name", None)
+    if not isinstance(value, str) or not value.strip():
+        value = getattr(provider, "provider_name", None)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _active_provider_model(provider: ConversationProvider) -> str | None:
+    value = getattr(provider, "active_model", None)
+    if not isinstance(value, str) or not value.strip():
+        value = getattr(provider, "model", None)
+    return value.strip() if isinstance(value, str) and value.strip() else None

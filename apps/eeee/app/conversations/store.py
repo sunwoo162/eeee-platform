@@ -644,6 +644,8 @@ class ConversationStore:
         *,
         content: str,
         status: MessageStatus,
+        provider: str | None = None,
+        model: str | None = None,
         error_code: str | None = None,
     ) -> ConversationMessage:
         now = _now()
@@ -655,10 +657,10 @@ class ConversationStore:
         }
         with self.store._connect() as connection:
             connection.execute(
-                "UPDATE messages SET content = ?, status = ?, error_code = ?, completed_at = ? "
+                "UPDATE messages SET content = ?, status = ?, provider = ?, model = ?, error_code = ?, completed_at = ? "
                 "WHERE id = ?",
                 (
-                    content, status.value, error_code,
+                    content, status.value, provider, model, error_code,
                     _iso(now) if status in terminal else None,
                     message_id,
                 ),

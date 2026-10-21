@@ -38,3 +38,16 @@ def test_assistant_jobs_can_be_listed_and_completed_job_cannot_be_cancelled(tmp_
     assert response.status_code == 409
     assert "completed" in response.json()["detail"]
 
+
+def test_assistant_job_controls_are_local_desktop_only(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    application = create_app(settings)
+    with TestClient(
+        application,
+        base_url="http://desktop.example",
+        client=("203.0.113.10", 1234),
+    ) as client:
+        response = client.get("/api/assistant/jobs")
+
+    assert response.status_code == 403
+

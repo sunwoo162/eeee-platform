@@ -528,7 +528,6 @@ class PluginPlatformService:
         fingerprint = _plugin_approval_fingerprint(user_id, capability_id, action, audit_input)
         approval_request_id = value.get("approvalRequestId") or context.get("approvalRequestId")
         approved = False
-        direct_approval = False
         envelope: ExecutionEnvelope | None = None
         if requires_approval and approval_envelope is not None:
             if not (
@@ -566,7 +565,6 @@ class PluginPlatformService:
                 if not claimed:
                     return envelope
                 approved = True
-                direct_approval = True
             elif valid_candidate:
                 return candidate
             else:
@@ -596,29 +594,49 @@ class PluginPlatformService:
                 requiredApproval=requires_approval,
                 approvalState=ApprovalState.APPROVED if approved else ApprovalState.NOT_REQUIRED,
             )
-        connection = self.connections.get(user_id, plugin_id)
-        credential = self.credentials.get(connection.credential_ref) if connection.credential_ref else None
-        if credential is None:
-            return _blocked_envelope(capability_id, "plugin credential is unavailable", error_code="credential_unavailable")
+        if approval_envelope is not None:
+            envelope = envelope.model_copy(update={
+                "input": {**dict(envelope.input), "parentExecutionId": approval_envelope.execution_id},
+            })
+        self.executions.save(envelope)
         try:
+            connection = self.connections.get(user_id, plugin_id)
+            credential = self.credentials.get(connection.credential_ref) if connection.credential_ref else None
+            if credential is None:
+                message = "plugin credential is unavailable"
+                blocked = envelope.transition(
+                    ExecutionStatus.BLOCKED,
+                    output={"status": "blocked", "message": message},
+                    error=ExecutionError(code="credential_unavailable", message=message),
+                )
+                self.executions.save(blocked)
+                return blocked
             connector = self._connector(plugin_id)
-            transient = connector.connect(user_id, _credential_from_json(credential), set(connection.approved_permissions))
-            output = _redact_value(connector.invoke(transient, action, audit_input))
-            if not isinstance(output, dict):
-                output = {"result": output}
             running = envelope if envelope.status is ExecutionStatus.RUNNING else envelope.transition(
                 ExecutionStatus.RUNNING,
                 approval_state=ApprovalState.APPROVED if requires_approval else ApprovalState.NOT_REQUIRED,
             )
+            self.executions.save(running)
+            envelope = running
+            transient = connector.connect(user_id, _credential_from_json(credential), set(connection.approved_permissions))
+            output = _redact_value(connector.invoke(transient, action, audit_input))
+            if not isinstance(output, dict):
+                output = {"result": output}
             completed = running.transition(ExecutionStatus.COMPLETED, output=output)
-            if direct_approval:
-                self.executions.save(completed)
+            self.executions.save(completed)
             return completed
-        except Exception:
-            return _blocked_envelope(
-                capability_id, "plugin provider failed while running the action",
-                error_code="plugin_provider_failed",
+        except Exception as exc:
+            message = "plugin provider failed while running the action"
+            error = ExecutionError(code="plugin_provider_failed", message=message)
+            current = envelope
+            failed = envelope.transition(
+                ExecutionStatus.FAILED if current.status is ExecutionStatus.RUNNING else ExecutionStatus.BLOCKED,
+                error=error,
+                output={"status": "failed", "message": message},
             )
+            self.executions.save(failed)
+            logger.warning("Plugin action failed for %s: %s", plugin_id, type(exc).__name__)
+            return failed
 
     def _connector(self, plugin_id: str) -> PluginConnector:
         try:

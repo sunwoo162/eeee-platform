@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.contracts import ApprovalState, ExecutionEnvelope, ExecutionStatus, SideEffectLevel
 from app.plugins.connectors import ConnectorConnection, ConnectorHealth
 from app.plugins.credentials import MemoryCredentialStore
 from app.plugins.platform import PluginPlatformService
@@ -256,6 +257,41 @@ def test_connected_first_party_provider_projects_action_capabilities_and_invokes
     assert result.output["action"] == "mail.list"
 
 
+def test_approved_kernel_plugin_invocation_persists_a_child_execution(tmp_path) -> None:
+    connector = GenericFakeConnector()
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    platform = PluginPlatformService(
+        store, credentials=MemoryCredentialStore(), connectors={"gmail": connector}
+    )
+    platform.install("gmail")
+    platform.connect(
+        "user-a", "gmail", {"mail.read", "mail.send"},
+        {"access_token": "secret"}, "Work",
+    )
+    parent = ExecutionEnvelope(
+        executionId="parent-execution",
+        requestId="parent-request",
+        capabilityId="plugin:gmail:mail.send",
+        toolId="eeee.route",
+        actor="EEEE",
+        sideEffectLevel=SideEffectLevel.EXTERNAL,
+        requiredApproval=True,
+        approvalState=ApprovalState.APPROVED,
+    ).transition(ExecutionStatus.RUNNING, approval_state=ApprovalState.APPROVED)
+
+    result = platform.invoke(
+        "user-a", "plugin:gmail:mail.send",
+        {"text": "s25011@gsm.hs.kr 에 test라는 메일 보내"},
+        approval_envelope=parent,
+    )
+
+    assert result.status == ExecutionStatus.COMPLETED
+    persisted = platform.executions.get(result.execution_id)
+    assert persisted.status == ExecutionStatus.COMPLETED
+    assert persisted.input["parentExecutionId"] == parent.execution_id
+
+
 def test_platform_cannot_override_a_capability_with_another_action(tmp_path) -> None:
     connector = GenericFakeConnector()
     store = SQLiteStore(tmp_path / "state.sqlite3")
@@ -365,9 +401,11 @@ def test_platform_replaces_connector_exception_details_with_stable_error(tmp_pat
 
     result = platform.invoke("user-a", "plugin:gmail:mail.list", {"query": "unread"})
 
-    assert result.status.value == "blocked"
+    assert result.status.value == "failed"
     assert result.error.code == "plugin_provider_failed"
     assert "super-secret" not in result.model_dump_json()
+    persisted = platform.executions.get(result.execution_id)
+    assert persisted.status == ExecutionStatus.FAILED
 
 
 def test_platform_returns_blocked_envelope_for_incomplete_natural_language_send(tmp_path) -> None:

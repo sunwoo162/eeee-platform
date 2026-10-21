@@ -801,6 +801,20 @@ class ConversationStore:
             raise KeyError(f"Assistant request not found: {request_id}")
         return _request_from_row(row)
 
+    def get_conversation_for_request(self, request_id: str) -> Conversation:
+        """Resolve the owning conversation for internal request execution."""
+
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT conversations.* FROM conversations "
+                "JOIN assistant_requests ON assistant_requests.conversation_id = conversations.id "
+                "WHERE assistant_requests.id = ?",
+                (request_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Assistant request not found: {request_id}")
+        return _conversation_from_row(row)
+
     def transition_request(
         self, request_id: str, target: RequestState, *, error_code: str | None = None
     ) -> AssistantRequest:

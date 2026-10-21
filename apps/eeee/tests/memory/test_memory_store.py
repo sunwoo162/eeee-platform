@@ -62,6 +62,16 @@ def test_user_preference_is_persistent_and_latest_value_replaces_previous(memory
     assert store.search_user_preferences()["language"].content == "English"
 
 
+def test_memory_records_are_isolated_by_user_scope(memory_store):
+    store, _ = memory_store
+    store.save_user_preference("language", "한국어", user_id="user-a")
+    store.save_user_preference("language", "English", user_id="user-b")
+
+    assert store.search_user_preferences(user_id="user-a")["language"].content == "한국어"
+    assert store.search_user_preferences(user_id="user-b")["language"].content == "English"
+    assert store.search("한국어", user_id="user-b") == []
+
+
 def test_candidate_requires_evidence_to_become_active(memory_store: tuple[MemoryStore, Path]) -> None:
     store, _ = memory_store
     saved = store.save_candidate(_candidate())

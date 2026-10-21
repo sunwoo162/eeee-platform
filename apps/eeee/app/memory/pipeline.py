@@ -25,13 +25,18 @@ class OutcomeMemoryPipeline:
         self.compiler = compiler or MemoryCompiler()
         self.store.init()
 
-    def ingest(self, report: ProjectOutcomeReportV1) -> list[MemoryRecord]:
+    def ingest(
+        self, report: ProjectOutcomeReportV1, *, user_id: str = "local-user"
+    ) -> list[MemoryRecord]:
         failures = list(_gate_failures(report))
         if failures:
             raise MemoryIngestError("Cannot ingest project outcome into memory: " + "; ".join(failures))
 
         candidates = self.compiler.compile(report)
-        return [self.store.save_candidate(candidate) for candidate in candidates]
+        return [
+            self.store.save_candidate(candidate.model_copy(update={"user_id": user_id}))
+            for candidate in candidates
+        ]
 
 
 def _gate_failures(report: ProjectOutcomeReportV1) -> Iterable[str]:

@@ -32,6 +32,7 @@ class GrowthService:
         remember: bool = False,
         actor: str = "user",
         request_id: str | None = None,
+        user_id: str = "local-user",
     ) -> GrowthFeedback:
         if remember and (not isinstance(correction, str) or not correction.strip()):
             raise GrowthFeedbackError(
@@ -40,6 +41,7 @@ class GrowthService:
         self._validate_source(
             conversation_id=conversation_id,
             message_id=message_id,
+            user_id=user_id,
         )
         try:
             if remember:
@@ -51,6 +53,7 @@ class GrowthService:
                     rating=rating,
                     correction=correction or "",
                     actor=actor,
+                    user_id=user_id,
                 )
             return self.memory.save_feedback(
                 feedback_id=client_feedback_id,
@@ -61,6 +64,7 @@ class GrowthService:
                 correction=correction,
                 remember=False,
                 actor=actor,
+                user_id=user_id,
             )
         except GrowthFeedbackError:
             raise
@@ -71,17 +75,21 @@ class GrowthService:
         if feedback.memory_id is None:
             return None
         try:
-            return self.memory.get(feedback.memory_id)
+            return self.memory.get(feedback.memory_id, user_id=feedback.user_id)
         except KeyError as exc:
             raise GrowthFeedbackError(
                 f"Feedback {feedback.id} points to missing memory {feedback.memory_id}"
             ) from exc
 
-    def _validate_source(self, *, conversation_id: str, message_id: str) -> None:
+    def _validate_source(
+        self, *, conversation_id: str, message_id: str, user_id: str = "local-user"
+    ) -> None:
         if self.conversation_store is None:
             return
         try:
-            conversation = self.conversation_store.get_conversation(conversation_id)
+            conversation = self.conversation_store.get_conversation(
+                conversation_id, user_id=user_id
+            )
             message = self.conversation_store.get_message(message_id)
         except KeyError as exc:
             raise GrowthFeedbackError("feedback source conversation or message was not found") from exc

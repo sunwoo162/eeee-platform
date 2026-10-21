@@ -304,12 +304,14 @@ class AssistantService:
                 implicit_preference.key,
                 implicit_preference.value,
                 scope={"source": "automatic_learning"},
+                user_id=user_id,
             )
         for key, value in self.secretary.rememberable_facts(text):
             self.coordinator.remember_user_preference(
                 key,
                 value,
                 scope={"source": "automatic_learning"},
+                user_id=user_id,
             )
         envelope = self.kernel.route(
             AssistantRequest(

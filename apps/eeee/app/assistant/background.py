@@ -75,6 +75,17 @@ class BackgroundExecutionSupervisor:
             "leaseExpiresAt": row["lease_expires_at"],
         }
 
+    def find_by_request_id(self, request_id: str) -> dict[str, object] | None:
+        """Return the durable job for a request, if one already exists."""
+
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT job_id FROM assistant_jobs WHERE request_id = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (request_id,),
+            ).fetchone()
+        return self.get(str(row["job_id"])) if row is not None else None
+
     def list_jobs(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
         if limit < 1 or limit > 500:
             raise ValueError("limit must be between 1 and 500")

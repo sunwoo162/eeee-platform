@@ -204,6 +204,34 @@ class ConversationStore:
             )
         return _message_from_row(user_row), _message_from_row(assistant_row)
 
+    def find_pending_route(self, conversation_id: str, user_content: str) -> str | None:
+        """Find an unfinished route for the same conversation and user text.
+
+        Legacy route callers do not always send a client request id.  During
+        that window, a network retry or a double click must attach to the
+        existing background request instead of creating a second project.
+        Completed turns are intentionally excluded so asking the same thing
+        later remains a valid new request.
+        """
+
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT user_message.request_id FROM messages AS user_message "
+                "JOIN messages AS assistant_message ON assistant_message.conversation_id = user_message.conversation_id "
+                "AND assistant_message.request_id = user_message.request_id "
+                "WHERE user_message.conversation_id = ? AND user_message.role = 'user' "
+                "AND user_message.content = ? AND assistant_message.role = 'assistant' "
+                "AND assistant_message.status IN (?, ?) "
+                "ORDER BY user_message.sequence DESC LIMIT 1",
+                (
+                    conversation_id,
+                    user_content.strip(),
+                    MessageStatus.PENDING.value,
+                    MessageStatus.STREAMING.value,
+                ),
+            ).fetchone()
+        return str(row["request_id"]) if row is not None and row["request_id"] else None
+
     def list_transcript_summaries(
         self, *, query: str = "", limit: int = 50
     ) -> list[dict[str, object]]:

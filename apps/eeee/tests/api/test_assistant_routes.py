@@ -166,6 +166,35 @@ def test_assistant_route_runs_local_document_save_and_search(tmp_path) -> None:
     assert found.json()["sources"][0]["contentHash"]
 
 
+def test_assistant_route_does_not_cross_user_documents_with_same_conversation_id(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    client = TestClient(create_app(settings))
+    user_a = {"X-EEEE-User-Id": "user-a"}
+    user_b = {"X-EEEE-User-Id": "user-b"}
+
+    saved = client.post(
+        "/api/assistant/route",
+        headers=user_a,
+        json={
+            "text": "문서 저장해줘: A 전용 문서\nA 사용자만 볼 수 있는 내용",
+            "conversationId": "same-conversation",
+        },
+    )
+    found = client.post(
+        "/api/assistant/route",
+        headers=user_b,
+        json={
+            "text": "문서 검색해줘: A 사용자",
+            "conversationId": "same-conversation",
+        },
+    )
+
+    assert saved.status_code == 200
+    # The canonical conversation itself is user-owned, so another user cannot
+    # even attach a request to the same conversation ID.
+    assert found.status_code == 404
+
+
 def test_assistant_route_returns_clarification_for_ambiguous_intent(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     client = TestClient(create_app(settings))

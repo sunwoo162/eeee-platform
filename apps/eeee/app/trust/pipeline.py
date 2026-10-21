@@ -324,7 +324,7 @@ def _qa_failure(qa_report: Mapping[str, object] | None, envelope: ExecutionEnvel
             str(item.get("status", "")).lower() not in {"passed", "skipped"}
             and not (
                 item.get("name") == "browser:ui-e2e"
-                and str(item.get("status", "")).lower() == "not_run"
+                and str(item.get("status", "")).lower() in {"not_run", "not_applicable"}
             )
         )
         for item in checks

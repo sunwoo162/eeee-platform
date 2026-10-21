@@ -49,11 +49,15 @@ def _pipeline(tmp_path, decision="PASS", *, current_revision="rev-1") -> TrustPi
     )
 
 
-def _qa(*, status="PASS", independent=True, project_id="project-1", revision="rev-1"):
+def _qa(*, status="PASS", independent=True, project_id="project-1", revision="rev-1", browser_status=None):
+    checks = [{"status": "passed"}]
+    if browser_status is not None:
+        checks.append({"name": "browser:ui-e2e", "status": browser_status, "evidenceId": "browser-evidence"})
     return {
         "id": "qa-report-1", "status": status, "independent": independent,
         "projectId": project_id, "projectRevision": revision,
-        "evidenceIds": ["evidence-1"], "checks": [{"status": "passed"}],
+        "evidenceIds": ["evidence-1", "browser-evidence"] if browser_status else ["evidence-1"],
+        "checks": checks,
     }
 
 
@@ -112,6 +116,17 @@ def test_non_pass_claimlatch_and_failed_qa_block_release(tmp_path):
 
     assert result.decision == "BLOCKED"
     assert "PASS" in result.reason
+
+
+def test_not_applicable_browser_check_can_pass_release_gate(tmp_path):
+    pipeline = _pipeline(tmp_path)
+
+    result = pipeline.release_gate(
+        _envelope(),
+        _qa(browser_status="not_applicable"),
+    )
+
+    assert result.decision == "PASS"
 
 
 def test_mismatched_identity_and_missing_evidence_block_memory_promotion(tmp_path):

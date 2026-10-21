@@ -84,6 +84,51 @@ def test_web_runner_writes_qa_and_release_manifest_only_after_claimlatch_pass(tm
     assert result.git_commit and len(result.git_commit) == 40
 
 
+def test_web_runner_does_not_release_when_browser_e2e_was_not_run(tmp_path):
+    root = tmp_path / "web-project"
+    create_web_app_scaffold(root, "Todo Web")
+
+    class NotRunBrowserUIE2ERunner:
+        def run(self, *, url, workspace, template_id):
+            return {
+                "name": "browser:ui-e2e",
+                "status": "not_run",
+                "evidenceId": "evidence-browser-not-run",
+                "path": str(workspace),
+                "detail": "browser runtime is not installed",
+            }
+
+    runner = WebProjectRunner(browser_ui_runner=NotRunBrowserUIE2ERunner())
+    prepared = runner.prepare(
+        project_id="project-web",
+        project_revision="rev-1",
+        workspace=root,
+    )
+
+    assert prepared.qa_report["status"] == "WARN"
+    assert prepared.qa_report["browserVerification"] == "NOT_RUN"
+    prepared_with_criteria = runner.prepare(
+        project_id="project-web",
+        project_revision="rev-2",
+        workspace=root,
+        acceptance_criteria=["핵심 화면이 실행됨"],
+    )
+    trace = prepared_with_criteria.qa_report["requirementTraceability"][0]
+    assert trace["status"] == "partial"
+    assert "evidence-browser-not-run" not in trace["evidenceIds"]
+    result = runner.finalize(
+        project_id="project-web",
+        project_revision="rev-1",
+        workspace=root,
+        prepared=prepared,
+        claim_latch={"decision": "PASS", "receiptId": "receipt-1"},
+    )
+
+    assert result.status == "BLOCKED"
+    assert "browser" in result.reason.lower()
+    assert not (root / "RELEASE_MANIFEST.json").exists()
+
+
 def test_web_runner_checks_frontend_contract_and_database_survives_restart(tmp_path):
     root = tmp_path / "web-project"
     create_web_app_scaffold(root, "Todo Web")
@@ -158,8 +203,9 @@ def test_web_runner_validates_meal_template_without_claiming_browser_pass(tmp_pa
 
     checks = {item["name"]: item for item in prepared.qa_report["checks"]}
     assert checks["template:meal_planner"]["status"] == "passed"
-    assert checks["browser:ui-e2e"]["status"] == "not_run"
-    assert prepared.qa_report["browserVerification"] == "NOT_RUN"
+    assert checks["browser:ui-e2e"]["status"] == "not_applicable"
+    assert prepared.qa_report["browserVerification"] == "NOT_APPLICABLE"
+    assert prepared.qa_report["status"] == "PASS"
 
 
 def test_web_runner_generic_template_does_not_require_todo_contract(tmp_path):
@@ -182,7 +228,17 @@ def test_web_runner_records_acceptance_criteria_against_qa_evidence(tmp_path):
     root = tmp_path / "generic-project"
     create_web_app_scaffold(root, "카페 홈페이지")
 
-    prepared = WebProjectRunner().prepare(
+    class PassingBrowserUIE2ERunner:
+        def run(self, *, url, workspace, template_id):
+            return {
+                "name": "browser:ui-e2e",
+                "status": "passed",
+                "evidenceId": "evidence-browser-ui-pass",
+                "path": str(workspace),
+                "detail": "browser verification passed",
+            }
+
+    prepared = WebProjectRunner(browser_ui_runner=PassingBrowserUIE2ERunner()).prepare(
         project_id="project-generic",
         project_revision="rev-1",
         workspace=root,
@@ -330,6 +386,19 @@ def test_browser_ui_e2e_runner_reports_not_run_when_local_runtime_is_missing(tmp
     assert result["status"] == "not_run"
     assert "playwright-core" in result["detail"]
     assert "Chrome" in result["detail"]
+
+
+def test_browser_ui_e2e_marks_unsupported_template_not_applicable(tmp_path):
+    runner = BrowserUIE2ERunner(
+        playwright_core=tmp_path / "missing-playwright-core",
+        chrome_executable=tmp_path / "missing-chrome.exe",
+        node_executable=tmp_path / "missing-node.exe",
+    )
+
+    result = runner.run(url="http://127.0.0.1:8787", workspace=tmp_path, template_id="meal_planner")
+
+    assert result["status"] == "not_applicable"
+    assert "todo browser contract" in result["detail"]
 
 
 

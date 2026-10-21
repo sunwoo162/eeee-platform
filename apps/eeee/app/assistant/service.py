@@ -73,6 +73,7 @@ class AssistantRouteResult(BaseModel):
     # Expose the selected lane so the Desktop can show/debug the real route
     # instead of making the user guess whether a turn reached Web/GPT.
     provider: str | None = None
+    request_id: str | None = Field(default=None, alias="requestId")
 
 
 class AssistantService:
@@ -160,31 +161,58 @@ class AssistantService:
                             request_id=request_id,
                             status=MessageStatus.FAILED,
                         )
+                        self._record_route_lifecycle(
+                            conversation_id, request_id, "failed", error_code="assistant_route_failed"
+                        )
                         raise
                     self._remember_turn(
                         conversation_id, text, result.message, request_id=request_id,
                         status=self._message_status_for_result(result),
                     )
+                    self._record_route_lifecycle(
+                        conversation_id, request_id, self._route_status_for_result(result)
+                    )
                     return result.model_dump(mode="json")
 
-                job_id = self.background_supervisor.submit(
-                    request_id,
-                    run_project,
-                    input_data={
-                        "text": text,
-                        "workspace": workspace,
-                        "requestedCapability": requested_capability,
-                        "conversationId": conversation_id,
-                        "approved": approved,
-                        "approvalRequestId": approval_request_id,
-                        "requestId": request_id,
-                        "projectId": project_id,
-                    },
+                accepted_message = "프로젝트 작업을 백그라운드에서 시작했어. 진행 상황에서 확인할 수 있어."
+                self._remember_turn(
+                    conversation_id, text, accepted_message, request_id=request_id,
+                    status=MessageStatus.PENDING,
                 )
+                self._record_route_lifecycle(conversation_id, request_id, "accepted")
+                try:
+                    job_id = self.background_supervisor.submit(
+                        request_id,
+                        run_project,
+                        input_data={
+                            "text": text,
+                            "workspace": workspace,
+                            "requestedCapability": requested_capability,
+                            "conversationId": conversation_id,
+                            "approved": approved,
+                            "approvalRequestId": approval_request_id,
+                            "requestId": request_id,
+                            "projectId": project_id,
+                        },
+                    )
+                except Exception as exc:
+                    failure_message = (
+                        f"백그라운드 작업을 시작하지 못했어: "
+                        f"{str(exc).strip() or type(exc).__name__}"
+                    )
+                    self._remember_turn(
+                        conversation_id, text, failure_message, request_id=request_id,
+                        status=MessageStatus.FAILED,
+                    )
+                    self._record_route_lifecycle(
+                        conversation_id, request_id, "failed",
+                        error_code="assistant_job_submit_failed",
+                    )
+                    raise
                 result = AssistantRouteResult(
                     status="accepted",
                     selection=selection,
-                    message="프로젝트 작업을 백그라운드에서 시작했어. 진행 상황에서 확인할 수 있어.",
+                    message=accepted_message,
                     project_id=project_id,
                     job_id=job_id,
                     response_verification=ResponseVerification(
@@ -193,10 +221,6 @@ class AssistantService:
                         profile_version=self.settings.claim_latch_profile_version,
                         subject_id=job_id,
                     ),
-                )
-                self._remember_turn(
-                    conversation_id, text, result.message, request_id=request_id,
-                    status=MessageStatus.PENDING,
                 )
                 return result
         request_id = request_id or f"assistant-request-{uuid4().hex}"
@@ -212,6 +236,9 @@ class AssistantService:
             request_id=request_id,
             status=self._message_status_for_result(result),
         )
+        self._record_route_lifecycle(
+            conversation_id, request_id, self._route_status_for_result(result)
+        )
         return result
 
     def _accepted_background_result(
@@ -226,6 +253,7 @@ class AssistantService:
             message="이미 같은 프로젝트 작업을 백그라운드에서 진행 중이야.",
             project_id=project_id if isinstance(project_id, str) else None,
             job_id=str(job.get("jobId")) if job.get("jobId") else None,
+            request_id=request_id,
             response_verification=ResponseVerification(
                 decision="WARN",
                 reason="A duplicate request was attached to the existing background job",
@@ -367,7 +395,19 @@ class AssistantService:
             approval_side_effect_level=output.get("approvalSideEffectLevel"),
             approval_request_id=output.get("approvalRequestId"),
             provider=provider,
+            request_id=request_id,
             response_verification=response_verification,
+        )
+
+    def _record_route_lifecycle(
+        self, conversation_id: str, request_id: str | None, status: str, *, error_code: str | None = None
+    ) -> None:
+        if self.conversation_store is None or request_id is None:
+            return
+        if error_code is None and status not in {"accepted", "pending", "completed"}:
+            error_code = "assistant_route_failed"
+        self.conversation_store.record_route_lifecycle(
+            conversation_id, request_id, status, error_code=error_code
         )
 
     def _remember_turn(
@@ -410,17 +450,23 @@ class AssistantService:
         is still a failed request, not a completed one.
         """
 
-        route_status = getattr(result, "status", None)
-        if not isinstance(route_status, str):
-            dump = getattr(result, "model_dump", None)
-            payload = dump(mode="json") if callable(dump) else {}
-            route_status = payload.get("status") if isinstance(payload, dict) else None
+        route_status = AssistantService._route_status_for_result(result)
 
         if route_status == "accepted":
             return MessageStatus.PENDING
         if route_status == "completed":
             return MessageStatus.COMPLETED
         return MessageStatus.FAILED
+
+    @staticmethod
+    def _route_status_for_result(result: AssistantRouteResult | object) -> str:
+        route_status = getattr(result, "status", None)
+        if isinstance(route_status, str):
+            return route_status
+        dump = getattr(result, "model_dump", None)
+        payload = dump(mode="json") if callable(dump) else {}
+        value = payload.get("status") if isinstance(payload, dict) else None
+        return value if isinstance(value, str) else "completed"
 
     def get_project_profile(self, project_id: str) -> ProjectProfile:
         return self.store.get_project_profile(project_id)
@@ -497,6 +543,10 @@ class AssistantService:
                     request_id=resolved_request_id,
                     status=MessageStatus.FAILED,
                 )
+                self._record_route_lifecycle(
+                    resolved_conversation_id, resolved_request_id, "failed",
+                    error_code="assistant_route_failed",
+                )
                 raise
             self._remember_turn(
                 resolved_conversation_id,
@@ -504,6 +554,10 @@ class AssistantService:
                 result.message,
                 request_id=resolved_request_id,
                 status=self._message_status_for_result(result),
+            )
+            self._record_route_lifecycle(
+                resolved_conversation_id, resolved_request_id,
+                self._route_status_for_result(result),
             )
             return result.model_dump(mode="json")
 

@@ -230,7 +230,11 @@ class WebWithBuiltinFallbackProvider:
                 yield from self.web.stream(messages, cancel_event=cancel_event)
                 return
             except ConversationProviderError:
-                pass
+                # The bounded builtin lane is a safe fallback for greetings
+                # and acknowledgements only. Complex requests must retain the
+                # real Web GPT failure so the UI can explain what to fix.
+                if not ProviderPolicy.is_builtin_eligible(_last_user_message(messages)):
+                    raise
         self.active_provider_name = "builtin"
         self.active_model = getattr(self.builtin, "model", "bounded-runtime")
         yield from self.builtin.stream(messages, cancel_event=cancel_event)

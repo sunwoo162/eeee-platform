@@ -206,6 +206,33 @@ def test_unready_web_can_use_builtin_for_supported_basic_turns() -> None:
     assert list(selection.provider.stream([{"role": "user", "content": "안녕"}]))[0].startswith("안녕!")
 
 
+def test_web_failure_on_complex_request_preserves_the_web_error() -> None:
+    from app.conversations.providers import BuiltinConversationProvider
+
+    web = FakeWebRuntime(
+        AgentResult(
+            status="failed",
+            summary="",
+            events=[],
+            changed_files=[],
+            test_commands=[],
+            error="브라우저 응답 시간이 초과됐어.",
+            error_code="chatgpt_web_timeout",
+        )
+    )
+    selection = build_conversation_provider(
+        "chatgpt_web",
+        ollama=None,
+        web=web,
+        builtin=BuiltinConversationProvider(),
+    )
+
+    with pytest.raises(ConversationProviderError) as error:
+        list(selection.provider.stream([{"role": "user", "content": "프로젝트 만들어줘"}]))
+
+    assert error.value.code == "chatgpt_web_timeout"
+
+
 @pytest.mark.parametrize(
     "prompt",
     [

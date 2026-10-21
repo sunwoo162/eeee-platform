@@ -66,7 +66,7 @@ def test_background_route_replaces_accepted_reply_in_canonical_transcript(tmp_pa
     assert messages[0]["role"] == "user"
     assert messages[1]["role"] == "assistant"
     assert messages[1]["content"] == payload["message"]
-    assert messages[1]["status"] == "completed"
+    assert messages[1]["status"] == "failed"
 
 
 def test_assistant_route_keeps_non_project_intent_out_of_project_creation(tmp_path) -> None:
@@ -179,12 +179,17 @@ def test_assistant_route_uses_builtin_fallback_when_web_is_unavailable(tmp_path)
     assert payload["status"] == "completed"
     assert payload["provider"] == "builtin"
     assert "안녕" in payload["message"]
-    assert application.state.coordinator.memory.recent_conversation_turns(
-        "builtin-fallback"
-    ) == [
+    transcript = application.state.conversation_store.get_transcript("builtin-fallback")
+    assert [
+        {"role": turn["role"], "content": turn["content"]}
+        for turn in transcript["turns"]
+    ] == [
         {"role": "user", "content": "안녕"},
         {"role": "assistant", "content": payload["message"]},
     ]
+    assert application.state.coordinator.memory.recent_conversation_turns(
+        "builtin-fallback"
+    ) == []
 
 
 def test_assistant_route_keeps_complex_request_blocked_without_provider(tmp_path) -> None:

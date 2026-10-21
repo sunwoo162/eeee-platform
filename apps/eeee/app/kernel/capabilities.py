@@ -437,12 +437,13 @@ class ProjectExecutionCapability:
             )
         project_id = str(request.context["projectId"])
         try:
-            project = self.store.get_project(project_id)
+            project = self.store.get_project(project_id, user_id=_request_user_id(request))
             if Path(project.workspace).resolve() != Path(str(request.context["workspace"])).resolve():
                 raise ValueError("Resumed project workspace does not match the accepted request")
         except KeyError:
             project = self.coordinator.create_project(
                 project_id, brief.goal[:80], request.context["workspace"],
+                user_id=_request_user_id(request),
             )
         try:
             existing_context = self.store.get_latest_request_context_for_project(project.id)

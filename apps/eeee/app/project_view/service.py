@@ -35,7 +35,7 @@ class ProjectViewService:
         self.activity = activity or ActivityLedger(store)
 
     @contextmanager
-    def _read(self, project_id: str, revision: str | None):
+    def _read(self, project_id: str, revision: str | None, user_id: str | None = None):
         # One SQLite read snapshot covers identity, tasks, receipts and cursor.
         # A concurrent update cannot mix two revisions in one response.
         with closing(self.store._connect()) as connection, connection:
@@ -43,12 +43,16 @@ class ProjectViewService:
             project = connection.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
             if project is None:
                 raise KeyError(f"Project not found: {project_id}")
+            if user_id is not None and project["user_id"] != user_id:
+                raise KeyError(f"Project not found: {project_id}")
             if revision is not None and revision != project["revision"]:
                 raise StaleProjectRevision(f"stale project revision for {project_id}: {revision}")
             yield connection, project
 
-    def get_snapshot(self, project_id: str, revision: str | None = None) -> ProjectMapSnapshot:
-        with self._read(project_id, revision) as (connection, project):
+    def get_snapshot(
+        self, project_id: str, revision: str | None = None, *, user_id: str | None = None
+    ) -> ProjectMapSnapshot:
+        with self._read(project_id, revision, user_id) as (connection, project):
             revision = project["revision"]
             state_row = connection.execute("SELECT state_json FROM harness_states WHERE project_id = ?", (project_id,)).fetchone()
             state = ProjectState.model_validate_json(state_row[0]) if state_row else None
@@ -216,10 +220,13 @@ class ProjectViewService:
                 return graph, report if isinstance(report, Mapping) else {}
         return {}, {}
 
-    def get_events(self, project_id: str, *, cursor: int = 0, revision: str | None = None) -> ProjectMapEvents:
+    def get_events(
+        self, project_id: str, *, cursor: int = 0, revision: str | None = None,
+        user_id: str | None = None,
+    ) -> ProjectMapEvents:
         if cursor < 0:
             raise ValueError("cursor must be nonnegative")
-        with self._read(project_id, revision) as (connection, project):
+        with self._read(project_id, revision, user_id) as (connection, project):
             revision = project["revision"]
             events = [EventEnvelope.model_validate_json(row[0]) for row in connection.execute(
                 "SELECT event_json FROM execution_events WHERE project_id = ? AND project_revision = ? "
@@ -228,17 +235,22 @@ class ProjectViewService:
             return ProjectMapEvents(project_id=project_id, project_revision=revision,
                 cursor=max(cursor, self._cursor(connection, project_id, revision)), events=events)
 
-    def get_activity(self, project_id: str, *, cursor: int = 0, revision: str | None = None):
-        project = self.store.get_project(project_id)
+    def get_activity(
+        self, project_id: str, *, cursor: int = 0, revision: str | None = None,
+        user_id: str | None = None,
+    ):
+        project = self.store.get_project(project_id, user_id=user_id)
         current = revision or project.revision
         if current != project.revision:
             raise StaleProjectRevision(f"stale project revision for {project_id}: {current}")
         return self.activity.list(project_id, current, cursor)
 
-    def get_quality(self, project_id: str, revision: str | None = None) -> dict[str, object]:
+    def get_quality(
+        self, project_id: str, revision: str | None = None, *, user_id: str | None = None
+    ) -> dict[str, object]:
         """Return the durable final report, or an explicit awaiting state."""
 
-        with self._read(project_id, revision) as (_connection, project):
+        with self._read(project_id, revision, user_id) as (_connection, project):
             current_revision = str(project["revision"])
             root = Path(str(project["workspace"])).resolve()
             report_path = root / "FINAL-QUALITY-REPORT.json"
@@ -267,10 +279,12 @@ class ProjectViewService:
                 }
             return report.model_dump(mode="json", by_alias=True)
 
-    def get_execution_plan(self, project_id: str, revision: str | None = None) -> dict[str, object]:
+    def get_execution_plan(
+        self, project_id: str, revision: str | None = None, *, user_id: str | None = None
+    ) -> dict[str, object]:
         """Expose safe plan progress without raw prompts or agent instructions."""
 
-        with self._read(project_id, revision) as (_connection, project):
+        with self._read(project_id, revision, user_id) as (_connection, project):
             current_revision = str(project["revision"])
             path = Path(str(project["workspace"])).resolve() / "execution-plan.json"
             if not path.is_file():

@@ -251,6 +251,22 @@ def test_explicit_user_preference_is_saved_and_reused_on_next_request(tmp_path):
     assert next_request.output["reminder"]["title"] == "회의"
 
 
+def test_explicit_user_preference_is_saved_under_request_user(tmp_path):
+    kernel, _store, _events = make_kernel(tmp_path)
+
+    remembered = kernel.route(
+        AssistantRequest(
+            raw_text="앞으로 한국어로 답해줘",
+            context={"userId": "user-a"},
+        ),
+        AssistantContext(),
+    )
+
+    assert remembered.output["status"] == "completed"
+    assert kernel.memory.search_user_preferences(user_id="user-a")
+    assert kernel.memory.search_user_preferences(user_id="user-b") == {}
+
+
 def test_ambiguous_request_is_auditable_and_requires_clarification(tmp_path):
     kernel, store, _ = make_kernel(tmp_path)
     result = kernel.route(AssistantRequest(raw_text="이거 해줘"), AssistantContext())

@@ -6,7 +6,6 @@ import re
 import sqlite3
 from pathlib import Path
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -45,7 +44,9 @@ _QUERY_INTENT = (
     "있는지", "언제인지", "몇 시인지", "몇시인지", "가능한지", "어디인지", "뭐야",
     "시간 알려줘", "언제 알려줘",
 )
-_KOREA_TZ = ZoneInfo("Asia/Seoul")
+# Korea has no daylight-saving transition. A fixed offset keeps the packaged
+# desktop and CI runners independent of an optional system tzdata package.
+_KOREA_TZ = timezone(timedelta(hours=9), name="Asia/Seoul")
 
 
 def parse_reminder(text: str, *, now: datetime | None = None) -> ReminderDraft | None:

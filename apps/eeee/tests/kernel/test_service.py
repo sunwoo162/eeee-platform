@@ -19,7 +19,7 @@ from app.trust.models import TrustCheck
 
 
 def make_kernel(tmp_path, *, provisioner_type=ProjectProvisioner, coordinator_type=Coordinator,
-                trust_gate=None):
+                trust_gate=None, general_runtime=None):
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     store = SQLiteStore(settings.data_dir / "state.sqlite3")
     store.init()
@@ -29,8 +29,30 @@ def make_kernel(tmp_path, *, provisioner_type=ProjectProvisioner, coordinator_ty
         router=CapabilityRouter(build_default_registry()),
         coordinator=coordinator, store=store, settings=settings,
         provisioner=provisioner_type(store), event_bus=events, trust_gate=trust_gate,
+        general_runtime=general_runtime,
     )
     return kernel, store, events
+
+
+def test_empty_general_provider_response_is_blocked_instead_of_completed(tmp_path):
+    from app.agent.protocol import AgentResult
+
+    class EmptyRuntime:
+        def run(self, _request):
+            return AgentResult(
+                status="completed", summary="   ", events=[], changed_files=[],
+                test_commands=[], error=None,
+            )
+
+    kernel, _store, _events = make_kernel(tmp_path, general_runtime=EmptyRuntime())
+
+    result = kernel.route(AssistantRequest(raw_text="안녕"), AssistantContext())
+
+    assert result.status is ExecutionStatus.BLOCKED
+    assert result.output["status"] == "blocked"
+    assert result.output["runtimeStatus"] == "completed"
+    assert result.error is not None
+    assert result.error.code == "assistant_empty_response"
 
 
 def test_project_request_persists_parent_and_fixed_project_child_with_lifecycle(tmp_path):

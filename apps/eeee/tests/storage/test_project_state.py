@@ -47,3 +47,22 @@ def test_project_task_report_and_ordered_events_survive_store_reopen(tmp_path):
         {"action": "started", "sequence": 1},
         {"action": "verified", "sequence": 2},
     ]
+
+
+def test_project_owner_is_persisted_and_enforced_after_reopen(tmp_path):
+    database = tmp_path / "project-owner.sqlite3"
+    store = SQLiteStore(database)
+    store.init()
+    store.create_project(
+        "owned-project", "Owned", str(tmp_path / "workspace"), user_id="user-a"
+    )
+
+    reopened = SQLiteStore(database)
+    reopened.init()
+    assert reopened.get_project("owned-project", user_id="user-a").user_id == "user-a"
+    try:
+        reopened.get_project("owned-project", user_id="user-b")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("a project must not be readable by another user")

@@ -200,12 +200,13 @@ class Coordinator:
         )
 
     def create_project(
-        self, project_id: str, name: str, workspace: str, revision: str = "initial"
+        self, project_id: str, name: str, workspace: str, revision: str = "initial",
+        *, user_id: str = "local-user",
     ) -> Project:
-        return self.store.create_project(project_id, name, workspace, revision)
+        return self.store.create_project(project_id, name, workspace, revision, user_id=user_id)
 
-    def create_request(self, project_id: str, text: str) -> PetViewModel:
-        project = self.store.get_project(project_id)
+    def create_request(self, project_id: str, text: str, *, user_id: str | None = None) -> PetViewModel:
+        project = self.store.get_project(project_id, user_id=user_id)
         brief = parse_request(text)
         request_id = self.store.save_request(brief)
         task = self.store.create_task(project.id, request_id, project.revision)
@@ -215,8 +216,8 @@ class Coordinator:
         )
         return self.get_state(project_id)
 
-    def get_state(self, project_id: str) -> PetViewModel:
-        project = self.store.get_project(project_id)
+    def get_state(self, project_id: str, *, user_id: str | None = None) -> PetViewModel:
+        project = self.store.get_project(project_id, user_id=user_id)
         if project.active_task_id is None:
             return PetViewModel(
                 state=PetState.idle,
@@ -244,9 +245,9 @@ class Coordinator:
         )
 
     def approve_selection(
-        self, project_id: str, request_id: str, selected: list[str]
+        self, project_id: str, request_id: str, selected: list[str], *, user_id: str | None = None
     ) -> PetViewModel:
-        project = self.store.get_project(project_id)
+        project = self.store.get_project(project_id, user_id=user_id)
         task = self._active_task(project)
         if task.request_id != request_id:
             raise ApprovalError("Request does not belong to the active project task")
@@ -295,8 +296,10 @@ class Coordinator:
         )
         return self.get_state(project_id)
 
-    def advance_task(self, project_id: str, task_id: str) -> PetViewModel:
-        project = self.store.get_project(project_id)
+    def advance_task(
+        self, project_id: str, task_id: str, *, user_id: str | None = None
+    ) -> PetViewModel:
+        project = self.store.get_project(project_id, user_id=user_id)
         task = self.store.get_task(task_id)
         if task.project_id != project_id or project.active_task_id != task_id:
             raise ApprovalError("Task does not belong to the active project")
@@ -441,12 +444,12 @@ class Coordinator:
         raise ApprovalError("Task requires retry before it can continue")
 
     def run_until_checkpoint(
-        self, project_id: str, task_id: str, max_steps: int = 10
+        self, project_id: str, task_id: str, max_steps: int = 10, *, user_id: str | None = None
     ) -> PetViewModel:
         if max_steps < 1:
             raise ValueError("max_steps must be positive")
         for _ in range(max_steps):
-            state = self.get_state(project_id)
+            state = self.get_state(project_id, user_id=user_id)
             if state.task_id != task_id:
                 raise ApprovalError("Task does not belong to the active project")
             if state.state not in {PetState.researching, PetState.working, PetState.verifying}:
@@ -454,8 +457,10 @@ class Coordinator:
             self.advance_task(project_id, task_id)
         return self.get_state(project_id)
 
-    def retry_task(self, project_id: str, task_id: str) -> PetViewModel:
-        project = self.store.get_project(project_id)
+    def retry_task(
+        self, project_id: str, task_id: str, *, user_id: str | None = None
+    ) -> PetViewModel:
+        project = self.store.get_project(project_id, user_id=user_id)
         task = self.store.get_task(task_id)
         if task.project_id != project_id or project.active_task_id != task_id:
             raise ApprovalError("Task does not belong to the active project")

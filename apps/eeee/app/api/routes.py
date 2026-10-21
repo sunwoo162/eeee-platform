@@ -61,41 +61,70 @@ def build_project_view_router(service: ProjectViewService) -> APIRouter:
     router = APIRouter(prefix="/api/projects")
 
     @router.get("/{project_id}/map", response_model=ProjectMapSnapshot)
-    def project_map(project_id: str, revision: str | None = Query(default=None, min_length=1)):
+    def project_map(
+        project_id: str, request: Request,
+        revision: str | None = Query(default=None, min_length=1),
+    ):
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
-            return service.get_snapshot(project_id, revision)
+            return service.get_snapshot(project_id, revision, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except StaleProjectRevision as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/{project_id}/map/events", response_model=ProjectMapEvents)
-    def project_map_events(project_id: str, cursor: int = Query(default=0, ge=0),
-                           revision: str | None = Query(default=None, min_length=1)):
+    def project_map_events(
+        project_id: str, request: Request, cursor: int = Query(default=0, ge=0),
+        revision: str | None = Query(default=None, min_length=1),
+    ):
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
-            return service.get_events(project_id, cursor=cursor, revision=revision)
+            return service.get_events(project_id, cursor=cursor, revision=revision, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except StaleProjectRevision as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/{project_id}/activity", response_model=ActivityPage)
-    def project_activity(project_id: str, cursor: int = Query(default=0, ge=0),
-                          revision: str | None = Query(default=None, min_length=1)):
+    def project_activity(
+        project_id: str, request: Request, cursor: int = Query(default=0, ge=0),
+        revision: str | None = Query(default=None, min_length=1),
+    ):
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
-            return service.get_activity(project_id, cursor=cursor, revision=revision)
+            return service.get_activity(project_id, cursor=cursor, revision=revision, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except StaleProjectRevision as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/{project_id}/quality")
-    def project_quality(project_id: str, revision: str | None = Query(default=None, min_length=1)):
+    def project_quality(
+        project_id: str, request: Request,
+        revision: str | None = Query(default=None, min_length=1),
+    ):
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
-            return service.get_quality(project_id, revision)
+            return service.get_quality(project_id, revision, user_id=user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except StaleProjectRevision as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/{project_id}/execution-plan")
-    def project_execution_plan(project_id: str, revision: str | None = Query(default=None, min_length=1)):
+    def project_execution_plan(
+        project_id: str, request: Request,
+        revision: str | None = Query(default=None, min_length=1),
+    ):
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
-            return service.get_execution_plan(project_id, revision)
+            return service.get_execution_plan(project_id, revision, user_id=user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except StaleProjectRevision as exc:
@@ -715,45 +744,64 @@ def build_router(coordinator: Coordinator) -> APIRouter:
     router = APIRouter()
 
     @router.post("/projects/{project_id}/requests", response_model=PetViewModel)
-    def create_request(project_id: str, payload: RequestPayload) -> PetViewModel:
-        return coordinator.create_request(project_id, payload.text)
+    def create_request(
+        project_id: str, payload: RequestPayload, request: Request
+    ) -> PetViewModel:
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return coordinator.create_request(project_id, payload.text, user_id=user_id)
 
     @router.get("/projects/{project_id}/state", response_model=PetViewModel)
-    def get_state(project_id: str) -> PetViewModel:
-        return coordinator.get_state(project_id)
+    def get_state(project_id: str, request: Request) -> PetViewModel:
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return coordinator.get_state(project_id, user_id=user_id)
 
     @router.post(
         "/projects/{project_id}/decisions/{request_id}/approve",
         response_model=PetViewModel,
     )
     def approve_selection(
-        project_id: str, request_id: str, payload: ApprovalPayload
+        project_id: str, request_id: str, payload: ApprovalPayload, request: Request
     ) -> PetViewModel:
-        return coordinator.approve_selection(project_id, request_id, payload.selected)
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return coordinator.approve_selection(
+            project_id, request_id, payload.selected, user_id=user_id
+        )
 
     @router.post(
         "/projects/{project_id}/tasks/{task_id}/advance",
         response_model=PetViewModel,
     )
-    def advance_task(project_id: str, task_id: str) -> PetViewModel:
-        return coordinator.advance_task(project_id, task_id)
+    def advance_task(project_id: str, task_id: str, request: Request) -> PetViewModel:
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return coordinator.advance_task(project_id, task_id, user_id=user_id)
 
     @router.post(
         "/projects/{project_id}/tasks/{task_id}/run",
         response_model=PetViewModel,
     )
-    def run_task(project_id: str, task_id: str) -> PetViewModel:
-        return coordinator.run_until_checkpoint(project_id, task_id)
+    def run_task(project_id: str, task_id: str, request: Request) -> PetViewModel:
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return coordinator.run_until_checkpoint(project_id, task_id, user_id=user_id)
 
     @router.post(
         "/projects/{project_id}/tasks/{task_id}/retry",
         response_model=PetViewModel,
     )
-    def retry_task(project_id: str, task_id: str) -> PetViewModel:
-        return coordinator.retry_task(project_id, task_id)
+    def retry_task(project_id: str, task_id: str, request: Request) -> PetViewModel:
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return coordinator.retry_task(project_id, task_id, user_id=user_id)
 
     @router.get("/projects/{project_id}/reports/{report_id}")
-    def get_report(project_id: str, report_id: str) -> dict[str, object]:
+    def get_report(project_id: str, report_id: str, request: Request) -> dict[str, object]:
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        coordinator.store.get_project(project_id, user_id=user_id)
         report = coordinator.store.get_report(report_id)
         if report.project_id != project_id:
             raise KeyError(f"Report not found: {report_id}")
@@ -839,8 +887,13 @@ def build_assistant_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/projects/{project_id}/profile", response_model=ProjectProfile)
-    def get_project_profile(project_id: str) -> ProjectProfile:
-        return service.get_project_profile(project_id)
+    def get_project_profile(project_id: str, request: Request) -> ProjectProfile:
+        _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        try:
+            return service.get_project_profile(project_id, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.get("/assistant/jobs/{job_id}")
     def get_assistant_job(job_id: str, request: Request) -> dict[str, object]:
@@ -905,8 +958,12 @@ def build_assistant_router(
     def sync_project_document(project_id: str, request: Request) -> ProjectDocumentSyncResult:
         if documents is None:
             raise HTTPException(status_code=503, detail="Project document service is unavailable")
-        profile = service.get_project_profile(project_id)
-        return documents.sync(profile, user_id=_plugin_user_id(request, request.headers.get("X-EEEE-User-Id")))
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        try:
+            profile = service.get_project_profile(project_id, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return documents.sync(profile, user_id=user_id)
 
     return router
 
@@ -1202,12 +1259,15 @@ def build_desktop_router(
             "verification": {"claimLatch": trust_gate.health_payload()},
         }
         if project_id is not None:
-            snapshot["projectProfile"] = store.get_project_profile(project_id).model_dump(
-                mode="json", by_alias=True
-            )
-            snapshot["projectState"] = coordinator.get_state(project_id).model_dump(
-                mode="json"
-            )
+            try:
+                snapshot["projectProfile"] = store.get_project_profile(
+                    project_id, user_id=user_id
+                ).model_dump(mode="json", by_alias=True)
+                snapshot["projectState"] = coordinator.get_state(
+                    project_id, user_id=user_id
+                ).model_dump(mode="json")
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
             project_state = snapshot["projectState"]
             snapshot["state"] = project_state["state"]
             snapshot["message"] = project_state["message"]

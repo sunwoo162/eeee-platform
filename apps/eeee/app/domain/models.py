@@ -85,6 +85,7 @@ class Project(BaseModel):
     revision: str
     state: PetState
     active_task_id: str | None
+    user_id: str = "local-user"
 
 
 class TaskRecord(BaseModel):

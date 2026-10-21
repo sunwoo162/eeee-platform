@@ -512,8 +512,10 @@ class AssistantService:
         value = payload.get("status") if isinstance(payload, dict) else None
         return value if isinstance(value, str) else "completed"
 
-    def get_project_profile(self, project_id: str) -> ProjectProfile:
-        return self.store.get_project_profile(project_id)
+    def get_project_profile(
+        self, project_id: str, *, user_id: str = "local-user"
+    ) -> ProjectProfile:
+        return self.store.get_project_profile(project_id, user_id=user_id)
 
     def get_background_job(self, job_id: str, *, user_id: str = "local-user") -> dict[str, object]:
         if self.background_supervisor is None:

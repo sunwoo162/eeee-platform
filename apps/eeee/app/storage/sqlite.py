@@ -48,6 +48,7 @@ def _project_from_row(row: sqlite3.Row) -> Project:
         revision=row["revision"],
         state=PetState(row["state"]),
         active_task_id=row["active_task_id"],
+        user_id=row["user_id"] if "user_id" in row.keys() else "local-user",
     )
 
 
@@ -262,7 +263,8 @@ class SQLiteStore:
                 );
                 CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, workspace TEXT NOT NULL,
-                    revision TEXT NOT NULL, state TEXT NOT NULL, active_task_id TEXT
+                    revision TEXT NOT NULL, state TEXT NOT NULL, active_task_id TEXT,
+                    user_id TEXT NOT NULL DEFAULT 'local-user'
                 );
                 CREATE TABLE IF NOT EXISTS project_profiles (
                     project_id TEXT PRIMARY KEY, project_revision TEXT NOT NULL,
@@ -360,6 +362,13 @@ class SQLiteStore:
             assistant_job_columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(assistant_jobs)").fetchall()
             }
+            project_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(projects)").fetchall()
+            }
+            if "user_id" not in project_columns:
+                connection.execute(
+                    "ALTER TABLE projects ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local-user'"
+                )
             if "input_json" not in assistant_job_columns:
                 connection.execute("ALTER TABLE assistant_jobs ADD COLUMN input_json TEXT NOT NULL DEFAULT '{}'")
             if "lease_owner" not in assistant_job_columns:
@@ -373,6 +382,7 @@ class SQLiteStore:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_runs_request_id ON runs (request_id)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs (status)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs (created_at)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects (user_id)")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_execution_envelopes_project_revision "
                 "ON execution_envelopes (project_id, project_revision, started_at)"
@@ -593,8 +603,10 @@ class SQLiteStore:
         return [CandidateScore.model_validate_json(row["candidate_json"]) for row in rows]
 
     def create_project(
-        self, project_id: str, name: str, workspace: str, revision: str = "initial"
+        self, project_id: str, name: str, workspace: str, revision: str = "initial",
+        *, user_id: str = "local-user",
     ) -> Project:
+        user_id = user_id.strip() or "local-user"
         project = Project(
             id=project_id,
             name=name,
@@ -602,23 +614,30 @@ class SQLiteStore:
             revision=revision,
             state=PetState.idle,
             active_task_id=None,
+            user_id=user_id,
         )
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO projects (id, name, workspace, revision, state, active_task_id) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (project.id, project.name, project.workspace, project.revision, project.state.value, None),
+                "INSERT INTO projects (id, name, workspace, revision, state, active_task_id, user_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    project.id, project.name, project.workspace, project.revision,
+                    project.state.value, None, project.user_id,
+                ),
             )
         return project
 
-    def get_project(self, project_id: str) -> Project:
+    def get_project(self, project_id: str, *, user_id: str | None = None) -> Project:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT * FROM projects WHERE id = ?", (project_id,)
             ).fetchone()
         if row is None:
             raise KeyError(f"Project not found: {project_id}")
-        return _project_from_row(row)
+        project = _project_from_row(row)
+        if user_id is not None and project.user_id != user_id:
+            raise KeyError(f"Project not found: {project_id}")
+        return project
 
     def save_project_profile(self, profile: ProjectProfile) -> None:
         with self._connect() as connection:
@@ -629,7 +648,11 @@ class SQLiteStore:
                 (profile.project_id, profile.project_revision, profile.model_dump_json()),
             )
 
-    def get_project_profile(self, project_id: str) -> ProjectProfile:
+    def get_project_profile(
+        self, project_id: str, *, user_id: str | None = None,
+    ) -> ProjectProfile:
+        if user_id is not None:
+            self.get_project(project_id, user_id=user_id)
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT profile_json FROM project_profiles WHERE project_id = ?", (project_id,)

@@ -40,6 +40,19 @@ def test_project_map_routes_reject_unknown_and_stale_project(client, suffix):
     assert client.get(f"/api/projects/map-project/{suffix}?revision=old").status_code == 409
 
 
+def test_project_map_routes_are_scoped_to_the_project_owner(client):
+    client.app.state.coordinator.store.create_project(
+        "user-a-project", "User A", ".", user_id="user-a"
+    )
+
+    assert client.get(
+        "/api/projects/user-a-project/map", headers={"X-EEEE-User-Id": "user-b"}
+    ).status_code == 404
+    assert client.get(
+        "/api/projects/user-a-project/map", headers={"X-EEEE-User-Id": "user-a"}
+    ).status_code == 200
+
+
 def test_events_route_uses_durable_cursor_and_validates_cursor(client):
     executions = client.app.state.execution_store
     item = ExecutionEnvelope(execution_id="ex", request_id="r", project_id="map-project",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import sqlite3
 
 from app.assistant.registry import build_default_registry
 from app.assistant.reminders import ReminderDraft, ReminderStore
@@ -98,4 +99,56 @@ def test_reminder_store_is_idempotent_for_a_request_id(tmp_path) -> None:
 
     assert retry.id == first.id
     assert [item.id for item in store.list("conversation-1")] == [first.id]
+
+
+def test_local_secretary_does_not_share_reminders_between_users(tmp_path) -> None:
+    service = _service(tmp_path)
+
+    service.route(
+        "내일 오후 3시에 팀 회의 알려줘",
+        conversation_id="shared-conversation-id",
+        user_id="user-a",
+    )
+
+    other_user = service.route(
+        "일정 보여줘",
+        conversation_id="shared-conversation-id",
+        user_id="user-b",
+    )
+
+    assert other_user.reminders == []
+    assert "등록된 일정이 없어" in other_user.message
+
+
+def test_reminder_store_migrates_legacy_rows_to_local_user(tmp_path) -> None:
+    path = tmp_path / "data" / "state.sqlite3"
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE assistant_reminders ("
+            "id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, "
+            "request_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL, "
+            "due_at TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO assistant_reminders VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy-reminder", "legacy-conversation", "legacy-request",
+                "기존 일정", "2026-10-23T15:00:00+09:00", "scheduled",
+                "2026-10-22T00:00:00+00:00",
+            ),
+        )
+
+    store = ReminderStore(path)
+    reminders = store.list("legacy-conversation")
+
+    assert [item.id for item in reminders] == ["legacy-reminder"]
+    assert reminders[0].user_id == "local-user"
+    with sqlite3.connect(path) as connection:
+        index_columns = connection.execute(
+            "PRAGMA index_info(idx_assistant_reminders_due)"
+        ).fetchall()
+    assert [column[2] for column in index_columns] == [
+        "user_id", "conversation_id", "status", "due_at",
+    ]
 

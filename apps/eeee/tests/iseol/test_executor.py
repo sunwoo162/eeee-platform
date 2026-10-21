@@ -19,6 +19,10 @@ class RecordingRuntime:
         self.prompts.append(request.prompt)
         if agent_id == self.fail_agent and self.calls.count(agent_id) == 1:
             return AgentResult("failed", f"{agent_id} failed", [], [], [], "failed")
+        changed_file = request.workspace / "src" / f"{agent_id}.py"
+        changed_file.parent.mkdir(parents=True, exist_ok=True)
+        if not changed_file.exists():
+            changed_file.write_text(f"# {agent_id}\n", encoding="utf-8")
         return AgentResult(
             "completed", f"{agent_id} completed", [{"evidenceId": f"evidence-{agent_id}"}],
             [f"src/{agent_id}.py"], [f"pytest tests/{agent_id}"], None,
@@ -142,6 +146,30 @@ def test_executor_blocks_before_claimlatch_when_quality_gate_finds_secret(tmp_pa
     assert "secret" in frontend.reason.lower()
     assert "frontend" not in trust.calls
     assert report.by_id("test").status == "blocked"
+
+
+def test_executor_blocks_empty_evidence_ids_before_claimlatch(tmp_path):
+    class EmptyEvidenceRuntime(RecordingRuntime):
+        def run(self, request):
+            result = super().run(request)
+            return result.__class__(
+                result.status, result.summary, [{"evidenceId": ""}],
+                result.changed_files, result.test_commands, result.error,
+            )
+
+    runtime = EmptyEvidenceRuntime()
+    trust = PassingTrust()
+    graph = AgentTeamFactory.default_graph("Todo 앱").model_copy(update={
+        "agents": AgentTeamFactory.default_graph("Todo 앱").agents[:1],
+    })
+    report = AgentGraphExecutor(runtime=runtime, trust_pipeline=trust, workspace=Path(tmp_path)).execute(
+        graph, _envelope()
+    )
+
+    record = report.by_id("requirements")
+    assert record.status == "blocked"
+    assert "evidence is missing" in record.acceptance_gaps
+    assert trust.calls == []
 
 
 def test_executor_resumes_from_checkpoint_without_rerunning_verified_agents(tmp_path):

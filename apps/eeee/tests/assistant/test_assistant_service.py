@@ -3,6 +3,7 @@ from pathlib import Path
 from app.assistant.registry import build_default_registry
 from app.assistant.router import CapabilityRouter
 from app.assistant.service import AssistantService
+from app.contracts import ExecutionEnvelope, ExecutionStatus
 from app.config import Settings
 from app.coordinator.service import Coordinator
 from app.project_runtime.provisioner import ProjectProvisioner
@@ -10,6 +11,58 @@ from app.storage.sqlite import SQLiteStore
 from app.runtime.store import ExecutionStore
 from app.agent.protocol import AgentResult
 from app.memory.models import MemoryCandidate
+
+
+def test_assistant_service_never_reports_completed_when_response_verification_is_blocked(tmp_path) -> None:
+    class FakeKernel:
+        def route(self, _request, _context):
+            envelope = ExecutionEnvelope(
+                executionId="verification-blocked-execution",
+                requestId="verification-blocked-request",
+                capabilityId="general-conversation",
+                toolId="eeee.route",
+                actor="EEEE",
+            )
+            running = envelope.transition(ExecutionStatus.RUNNING)
+            return running.transition(
+                ExecutionStatus.COMPLETED,
+                output={
+                    "status": "completed",
+                    "selection": {
+                        "status": "selected",
+                        "capability_id": "general-conversation",
+                        "candidates": [],
+                        "reasons": [],
+                    },
+                    "qualityStatus": "PASS",
+                    "message": "잘못된 완료",
+                    "responseVerification": {
+                        "decision": "BLOCKED",
+                        "reason": "검증 증거가 없어.",
+                        "profile_version": "claimlatch-v0.2.0",
+                        "subject_id": "verification-blocked-execution",
+                    },
+                },
+            )
+
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()),
+        coordinator=coordinator,
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+        kernel=FakeKernel(),
+    )
+
+    result = service.route("안녕")
+
+    assert result.status == "blocked"
+    assert result.message == "검증 증거가 없어."
+    assert result.response_verification.decision == "BLOCKED"
 
 
 def test_assistant_service_creates_one_project_runtime_for_project_intent(tmp_path) -> None:

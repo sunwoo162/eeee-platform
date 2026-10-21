@@ -313,10 +313,38 @@ class ConversationStore:
                     RequestState.COMPLETED, RequestState.FAILED,
                     RequestState.CANCELLED, RequestState.INTERRUPTED,
                 }:
-                    result = connection.execute(
-                        "SELECT * FROM assistant_requests WHERE id = ?", (route_request_id,)
-                    ).fetchone()
-                    return _request_from_row(result)
+                    if target == RequestState.EXECUTING and status in {"accepted", "pending"}:
+                        attempt = int(row["attempt"] or 1) + 1
+                        connection.execute(
+                            "UPDATE assistant_requests SET state = ?, attempt = ?, "
+                            "error_code = NULL, updated_at = ?, completed_at = NULL, "
+                            "interrupted_at = NULL WHERE id = ?",
+                            (
+                                RequestState.EXECUTING.value,
+                                attempt,
+                                _iso(now),
+                                route_request_id,
+                            ),
+                        )
+                        self._append_event_in_connection(
+                            connection,
+                            route_request_id,
+                            "request.retry",
+                            {"requestId": route_request_id, "attempt": attempt},
+                            now,
+                        )
+                        self._append_event_in_connection(
+                            connection,
+                            route_request_id,
+                            "request.executing",
+                            {"status": RequestState.EXECUTING.value, "attempt": attempt},
+                            now,
+                        )
+                    else:
+                        result = connection.execute(
+                            "SELECT * FROM assistant_requests WHERE id = ?", (route_request_id,)
+                        ).fetchone()
+                        return _request_from_row(result)
             if target != RequestState.EXECUTING:
                 completed_at = _iso(now)
                 final_error = error_code if target == RequestState.FAILED else None

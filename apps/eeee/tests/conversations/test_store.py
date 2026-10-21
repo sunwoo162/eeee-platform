@@ -89,6 +89,32 @@ def test_route_turn_creates_canonical_conversation_and_updates_background_reply(
     assert transcript["turns"][1]["messageId"] == second_assistant.id
 
 
+def test_route_lifecycle_reopens_a_failed_request_for_a_new_attempt(tmp_path) -> None:
+    conversations = make_store(tmp_path)
+    conversations.record_route_turn(
+        "desktop-default",
+        user_content="프로젝트를 다시 실행해줘",
+        assistant_content="실패했어.",
+        request_id="route-retry-1",
+        assistant_status=MessageStatus.FAILED,
+        error_code="assistant_route_failed",
+    )
+
+    conversations.record_route_lifecycle(
+        "desktop-default", "route-retry-1", "failed", error_code="assistant_route_failed"
+    )
+    retried = conversations.record_route_lifecycle(
+        "desktop-default", "route-retry-1", "accepted"
+    )
+
+    assert retried is not None
+    assert retried.state is RequestState.EXECUTING
+    assert retried.attempt == 2
+    events = conversations.events_after("route-retry-1")
+    assert events[-2].event_type == "request.retry"
+    assert events[-1].event_type == "request.executing"
+
+
 def test_request_events_are_cursor_ordered(tmp_path) -> None:
     conversations = make_store(tmp_path)
     conversation = conversations.create_conversation()

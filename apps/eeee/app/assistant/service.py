@@ -147,6 +147,7 @@ class AssistantService:
                 project_id = f"project-{uuid4().hex}"
 
                 def run_project() -> dict[str, object]:
+                    self._prepare_background_attempt(conversation_id, text, request_id)
                     try:
                         result = self._route_sync(
                             text, workspace, requested_capability=requested_capability,
@@ -536,6 +537,9 @@ class AssistantService:
         resolved_request_id = request_id if isinstance(request_id, str) else None
 
         def run() -> dict[str, object]:
+            self._prepare_background_attempt(
+                resolved_conversation_id, text, resolved_request_id
+            )
             try:
                 result = self._route_sync(
                     text,
@@ -576,4 +580,33 @@ class AssistantService:
             return result.model_dump(mode="json")
 
         return run
+
+    def _prepare_background_attempt(
+        self, conversation_id: str, user_text: str, request_id: str | None
+    ) -> None:
+        """Re-open canonical state when a failed job is retried.
+
+        The supervisor reuses the durable job and request id on retry.  A
+        terminal canonical request therefore needs an explicit new attempt
+        before the worker can publish a successful result; otherwise the job
+        and transcript can disagree permanently.
+        """
+
+        if self.conversation_store is None or request_id is None:
+            return
+        try:
+            request = self.conversation_store.get_request(request_id)
+        except KeyError:
+            return
+        if request.state.value not in {"failed", "cancelled", "interrupted"}:
+            return
+        self._remember_turn(
+            conversation_id,
+            user_text,
+            "백그라운드 작업을 다시 시도하고 있어.",
+            request_id=request_id,
+            status=MessageStatus.PENDING,
+            error_code=None,
+        )
+        self._record_route_lifecycle(conversation_id, request_id, "accepted")
 

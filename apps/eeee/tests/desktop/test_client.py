@@ -235,6 +235,10 @@ def test_client_can_launch_chat_history_and_use_core_conversation_boundary(monke
 
     assert client.get_plugin_launch_info("eeee-chat-history")["pluginId"] == "eeee-chat-history"
     assert client.get_conversations() == []
+    assert client.get_conversations(
+        before_updated_at="2026-10-06T00:00:00+00:00",
+        before_conversation_id="conversation-1",
+    ) == []
     assert client.get_conversation("desktop-default")["conversationId"] == "desktop-default"
     assert client.send_conversation_message("다음", conversation_id="desktop-default")["status"] == "completed"
 
@@ -248,6 +252,19 @@ def test_client_can_launch_chat_history_and_use_core_conversation_boundary(monke
             "GET",
             "http://127.0.0.1:8123/api/assistant/conversations",
             {"timeout": 5.0, "params": {"query": "", "limit": 50}},
+        ),
+        (
+            "GET",
+            "http://127.0.0.1:8123/api/assistant/conversations",
+            {
+                "timeout": 5.0,
+                "params": {
+                    "query": "",
+                    "limit": 50,
+                    "beforeUpdatedAt": "2026-10-06T00:00:00+00:00",
+                    "beforeConversationId": "conversation-1",
+                },
+            },
         ),
         (
             "GET",

@@ -52,13 +52,15 @@ test("mobile client sends stable conversation/request ids and reads history", as
     const client = new GleaveMobileClient("http://desktop.local/", new MemoryTokenStore());
     await client.pair("123456", "Phone");
     await client.assistantRoute("계속해", undefined, { conversationId: "chat-1", requestId: "request-1" });
-    const summaries = await client.conversations("계속");
+    const summaries = await client.conversations("계속", 20, "2026-10-06T00:00:00Z", "chat-1");
     const transcript = await client.conversation("chat-1", 20, 3);
 
     const routeBody = await calls[1]?.clone().json() as Record<string, unknown>;
     assert.equal(routeBody.conversationId, "chat-1");
     assert.equal(routeBody.requestId, "request-1");
     assert.equal(summaries[0]?.conversationId, "chat-1");
+    assert.match(calls[2]?.url ?? "", /beforeUpdatedAt=2026-10-06T00%3A00%3A00Z/);
+    assert.match(calls[2]?.url ?? "", /beforeConversationId=chat-1/);
     assert.equal(transcript.conversationId, "chat-1");
     assert.match(calls[3]?.url ?? "", /beforeId=3/);
   } finally {

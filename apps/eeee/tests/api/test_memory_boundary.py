@@ -72,6 +72,28 @@ def test_chat_history_api_lists_opens_searches_and_sends_in_the_same_conversatio
     assert searched.status_code == 200
     assert [item["conversationId"] for item in searched.json()] == ["desktop-default"]
 
+    paged = client.get(
+        "/api/assistant/conversations",
+        params={
+            "query": "첫 명령",
+            "beforeUpdatedAt": searched.json()[0]["updatedAt"],
+            "beforeConversationId": searched.json()[0]["conversationId"],
+        },
+    )
+    assert paged.status_code == 200
+    assert paged.json() == []
+    assert client.get(
+        "/api/assistant/conversations",
+        params={"beforeUpdatedAt": searched.json()[0]["updatedAt"]},
+    ).status_code == 400
+    assert client.get(
+        "/api/assistant/conversations",
+        params={
+            "beforeUpdatedAt": "not-a-timestamp",
+            "beforeConversationId": "desktop-default",
+        },
+    ).status_code == 400
+
     second = client.post(
         "/api/assistant/route",
         json={"conversationId": "desktop-default", "text": "두 번째 명령"},

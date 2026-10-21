@@ -794,11 +794,22 @@ def build_assistant_router(
         request: Request,
         query: str = Query(default="", max_length=500),
         limit: int = Query(default=50, ge=1, le=100),
+        before_updated_at: str | None = Query(default=None, alias="beforeUpdatedAt", max_length=80),
+        before_conversation_id: str | None = Query(
+            default=None, alias="beforeConversationId", max_length=200
+        ),
     ) -> list[dict[str, object]]:
         _require_local_desktop(request)
         try:
             if conversation_store is not None:
-                return conversation_store.list_transcript_summaries(query=query, limit=limit)
+                return conversation_store.list_transcript_summaries(
+                    query=query,
+                    limit=limit,
+                    before_updated_at=before_updated_at,
+                    before_conversation_id=before_conversation_id,
+                )
+            if before_updated_at is not None or before_conversation_id is not None:
+                raise ValueError("conversation pagination requires the canonical store")
             return service.coordinator.memory.list_conversations(query=query, limit=limit)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -927,13 +938,22 @@ def build_mobile_router(
     def list_mobile_assistant_conversations(
         query: str = Query(default="", max_length=500),
         limit: int = Query(default=50, ge=1, le=100),
+        before_updated_at: str | None = Query(default=None, alias="beforeUpdatedAt", max_length=80),
+        before_conversation_id: str | None = Query(
+            default=None, alias="beforeConversationId", max_length=200
+        ),
         bridge_token: str | None = Header(default=None, alias="X-Gleave-Bridge-Token"),
     ) -> list[dict[str, object]]:
         _authorize_mobile(bridge, bridge_token)
         if canonical_conversations is None:
             raise HTTPException(status_code=503, detail="Canonical conversation store is unavailable")
         try:
-            return canonical_conversations.list_transcript_summaries(query=query, limit=limit)
+            return canonical_conversations.list_transcript_summaries(
+                query=query,
+                limit=limit,
+                before_updated_at=before_updated_at,
+                before_conversation_id=before_conversation_id,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

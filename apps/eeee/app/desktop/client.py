@@ -150,11 +150,26 @@ class PetApiClient:
             raise ValueError("conversation_id must be a non-empty path segment")
         return f"/api/assistant/conversations/{conversation_id}"
 
-    def get_conversations(self, *, query: str = "", limit: int = 50) -> list[dict[str, object]]:
+    def get_conversations(
+        self,
+        *,
+        query: str = "",
+        limit: int = 50,
+        before_updated_at: str | None = None,
+        before_conversation_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        if (before_updated_at is None) != (before_conversation_id is None):
+            raise ValueError(
+                "before_updated_at and before_conversation_id must be provided together"
+            )
+        params: dict[str, object] = {"query": query, "limit": limit}
+        if before_updated_at is not None and before_conversation_id is not None:
+            params["beforeUpdatedAt"] = before_updated_at
+            params["beforeConversationId"] = before_conversation_id
         result = self._request(
             "GET",
             "/api/assistant/conversations",
-            params={"query": query, "limit": limit},
+            params=params,
         )
         if not isinstance(result, list):
             raise ApiError("Conversation list response was not a list")

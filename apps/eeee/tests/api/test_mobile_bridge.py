@@ -108,6 +108,16 @@ def test_mobile_can_read_authenticated_canonical_conversation_history(tmp_path) 
     assert any(
         item["conversationId"] == conversation_id for item in conversations.json()
     )
+    page = client.get(
+        "/api/mobile/assistant/conversations",
+        headers=headers,
+        params={
+            "beforeUpdatedAt": conversations.json()[0]["updatedAt"],
+            "beforeConversationId": conversations.json()[0]["conversationId"],
+        },
+    )
+    assert page.status_code == 200
+    assert page.json() == []
 
     messages = client.get(
         f"/api/mobile/assistant/conversations/{conversation_id}/messages",

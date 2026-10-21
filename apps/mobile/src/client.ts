@@ -95,9 +95,21 @@ export class GleaveMobileClient {
     });
   }
 
-  async conversations(query?: string, limit = 50): Promise<MobileConversationSummary[]> {
+  async conversations(
+    query?: string,
+    limit = 50,
+    beforeUpdatedAt?: string,
+    beforeConversationId?: string,
+  ): Promise<MobileConversationSummary[]> {
+    if ((beforeUpdatedAt === undefined) !== (beforeConversationId === undefined)) {
+      throw new Error("beforeUpdatedAt and beforeConversationId must be provided together");
+    }
     const params = new URLSearchParams({ limit: String(limit) });
     if (query) params.set("query", query);
+    if (beforeUpdatedAt !== undefined && beforeConversationId !== undefined) {
+      params.set("beforeUpdatedAt", beforeUpdatedAt);
+      params.set("beforeConversationId", beforeConversationId);
+    }
     return this.request<MobileConversationSummary[]>(
       `/api/mobile/assistant/conversations?${params.toString()}`,
     );

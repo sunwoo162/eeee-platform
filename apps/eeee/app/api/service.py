@@ -22,6 +22,8 @@ from app.workspace.artifacts import WorkspaceArtifactWriter
 from app.project_runtime.provisioner import ProjectProvisioner
 from app.contracts import ExecutionEnvelope, ExecutionStatus
 from app.trust.pipeline import TrustPipeline
+from app.conversations.models import MessageStatus
+from app.conversations.store import ConversationStore
 
 
 class ApiFlowService:
@@ -45,6 +47,7 @@ class ApiFlowService:
         trust_gate: TrustGate | None = None,
         trust_pipeline: TrustPipeline | None = None,
         event_publisher: Callable[[str, dict[str, object]], object] | None = None,
+        conversation_store: ConversationStore | None = None,
     ) -> None:
         self.coordinator = coordinator
         self.store = store
@@ -61,8 +64,15 @@ class ApiFlowService:
             self.trust_gate, audit_store=store.claimlatch_audits
         )
         self.event_publisher = event_publisher
+        self.conversation_store = conversation_store
 
-    def create_request(self, text: str, workspace: str | None) -> tuple[str, RequestBrief, str]:
+    def create_request(
+        self,
+        text: str,
+        workspace: str | None,
+        *,
+        conversation_id: str = "desktop-default",
+    ) -> tuple[str, RequestBrief, str]:
         # `/api/requests` is the legacy project workbench endpoint. The new
         # `/api/assistant/route` endpoint is the canonical intent-aware entrypoint;
         # this compatibility path keeps accepting arbitrary project descriptions.
@@ -75,7 +85,9 @@ class ApiFlowService:
         if state.request_id is None:
             raise RuntimeError("Created request did not produce a request ID")
         request_id = state.request_id
-        self.store.save_request_context(request_id, project_id, str(workspace_path))
+        self.store.save_request_context(
+            request_id, project_id, str(workspace_path), conversation_id
+        )
         project_brief = self.coordinator.build_project_brief(project_id, request_id)
         self.project_provisioner.provision(
             self.store.get_project(project_id),
@@ -84,6 +96,13 @@ class ApiFlowService:
             qa_baseline_ids=project_brief.qa_baseline_ids,
         )
         run = self.store.create_run(request_id, str(workspace_path))
+        self._record_legacy_request(
+            request_id,
+            conversation_id,
+            text,
+            "프로젝트 요청을 접수했어. 조사와 승인 후 실행할 수 있어.",
+            MessageStatus.PENDING,
+        )
         return request_id, self.store.get_request(request_id), run.id
 
     def research(self, request_id: str) -> tuple[list[CandidateScore], WorkPlan]:
@@ -245,12 +264,33 @@ class ApiFlowService:
                 "run.execution.completed",
                 {"runId": run.id, "requestId": run.request_id, "status": result.status},
             )
+            self._record_legacy_request(
+                run.request_id,
+                self.store.get_request_conversation_id(run.request_id),
+                self.store.get_request(run.request_id).raw_text,
+                result.summary,
+                MessageStatus.COMPLETED
+                if result.status == "completed"
+                else MessageStatus.FAILED,
+                error_code=result.error,
+            )
             return completed if completed is not None else self.store.get_run(run_id)
         except Exception:
             try:
                 self.store.complete_run_execution(
                     run.id, owner_token, claim.generation, "failed", [], [],
                     "Run execution failed while persisting its result", self._clock,
+                )
+            except Exception:
+                pass
+            try:
+                self._record_legacy_request(
+                    run.request_id,
+                    self.store.get_request_conversation_id(run.request_id),
+                    self.store.get_request(run.request_id).raw_text,
+                    "프로젝트 실행 결과를 저장하지 못했어.",
+                    MessageStatus.FAILED,
+                    error_code="legacy_run_persistence_failed",
                 )
             except Exception:
                 pass
@@ -348,7 +388,45 @@ class ApiFlowService:
         decision = self.store.get_decision(run.request_id)
         if decision is None or not decision.approved:
             raise ApprovalError("Run retry requires an approved decision")
-        return self.store.reset_run_for_retry(run.id)
+        retried = self.store.reset_run_for_retry(run.id)
+        self._record_legacy_request(
+            run.request_id,
+            self.store.get_request_conversation_id(run.request_id),
+            self.store.get_request(run.request_id).raw_text,
+            "프로젝트 실행을 다시 준비하고 있어.",
+            MessageStatus.PENDING,
+            error_code=None,
+        )
+        return retried
+
+    def _record_legacy_request(
+        self,
+        request_id: str,
+        conversation_id: str,
+        user_text: str,
+        assistant_text: str,
+        status: MessageStatus,
+        *,
+        error_code: str | None = None,
+    ) -> None:
+        if self.conversation_store is None:
+            return
+        self.conversation_store.record_route_turn(
+            conversation_id,
+            user_content=user_text,
+            assistant_content=assistant_text,
+            request_id=request_id,
+            assistant_status=status,
+            error_code=error_code,
+        )
+        self.conversation_store.record_route_lifecycle(
+            conversation_id,
+            request_id,
+            "completed" if status is MessageStatus.COMPLETED else "failed"
+            if status is MessageStatus.FAILED
+            else "accepted",
+            error_code=error_code,
+        )
 
     def _resolve_workspace(self, requested: str | None, project_id: str) -> Path:
         root = self.settings.workspace_root.resolve()

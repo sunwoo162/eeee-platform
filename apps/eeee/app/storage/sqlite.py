@@ -245,7 +245,8 @@ class SQLiteStore:
                     run_id TEXT PRIMARY KEY, owner_token TEXT, generation INTEGER NOT NULL, expires_at TEXT
                 );
                 CREATE TABLE IF NOT EXISTS request_contexts (
-                    request_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, workspace TEXT NOT NULL
+                    request_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, workspace TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL DEFAULT 'desktop-default'
                 );
                 CREATE TABLE IF NOT EXISTS harness_states (
                     project_id TEXT PRIMARY KEY, state_json TEXT NOT NULL
@@ -393,6 +394,14 @@ class SQLiteStore:
                 "ON plugin_connections (user_id, plugin_id)"
             )
             apply_migrations(connection)
+            request_context_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(request_contexts)")
+            }
+            if "conversation_id" not in request_context_columns:
+                connection.execute(
+                    "ALTER TABLE request_contexts ADD COLUMN conversation_id TEXT NOT NULL "
+                    "DEFAULT 'desktop-default'"
+                )
         # EEEE memory intentionally shares the durable state database so a
         # restart cannot separate project state from the evidence-backed memory.
         MemoryStore(self.path).init()
@@ -418,11 +427,18 @@ class SQLiteStore:
             raise KeyError(f"Request not found: {request_id}")
         return RequestBrief.model_validate_json(row["brief_json"])
 
-    def save_request_context(self, request_id: str, project_id: str, workspace: str) -> None:
+    def save_request_context(
+        self,
+        request_id: str,
+        project_id: str,
+        workspace: str,
+        conversation_id: str = "desktop-default",
+    ) -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO request_contexts (request_id, project_id, workspace) VALUES (?, ?, ?)",
-                (request_id, project_id, workspace),
+                "INSERT INTO request_contexts "
+                "(request_id, project_id, workspace, conversation_id) VALUES (?, ?, ?, ?)",
+                (request_id, project_id, workspace, conversation_id.strip() or "desktop-default"),
             )
 
     def get_request_context(self, request_id: str) -> tuple[str, str]:
@@ -434,6 +450,16 @@ class SQLiteStore:
         if row is None:
             raise KeyError(f"Request context not found: {request_id}")
         return row["project_id"], row["workspace"]
+
+    def get_request_conversation_id(self, request_id: str) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT conversation_id FROM request_contexts WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Request context not found: {request_id}")
+        return str(row["conversation_id"] or "desktop-default")
 
     def get_latest_request_context_for_project(self, project_id: str) -> tuple[str, str] | None:
         """Return the durable request identity already allocated to a project.

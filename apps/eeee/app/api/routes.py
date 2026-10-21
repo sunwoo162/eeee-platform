@@ -115,6 +115,7 @@ def _normalise_run_timestamp(value: datetime | None) -> str | None:
 class RequestPayload(BaseModel):
     text: str = Field(min_length=1)
     workspace: str | None = None
+    conversation_id: str = Field(default="desktop-default", alias="conversationId")
 
 
 class ApprovalPayload(BaseModel):
@@ -1258,7 +1259,11 @@ def build_api_router(
     @router.post("/requests", response_model=RequestResponse)
     def create_api_request(payload: RequestPayload) -> RequestResponse:
         try:
-            request_id, brief, run_id = flow.create_request(payload.text, payload.workspace)
+            request_id, brief, run_id = flow.create_request(
+                payload.text,
+                payload.workspace,
+                conversation_id=payload.conversation_id,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return RequestResponse(request_id=request_id, brief=brief, run_id=run_id)

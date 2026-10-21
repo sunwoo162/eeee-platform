@@ -359,6 +359,7 @@ def create_app(
         trust_gate=trust_gate,
         trust_pipeline=coordinator.trust_pipeline,
         event_publisher=mobile_bridge.publish,
+        conversation_store=conversation_store,
     )
     application.state.api_flow = api_flow
     event_bus = LocalEventBus()

@@ -26,6 +26,15 @@ body { margin: 0; background: radial-gradient(circle at top right, #223b3e, #101
 .eeee-plugin-item { display: grid; grid-template-columns: minmax(8rem, 1fr) auto minmax(6rem, auto); align-items: center; gap: .7rem; padding: .75rem; border: 1px solid #46506c; border-radius: 10px; background: rgba(12, 15, 23, .28); }
 .eeee-plugin-details { display: grid; gap: .2rem; min-width: 0; }
 .eeee-plugin-description { color: #aab7c0; font-size: .78rem; overflow-wrap: anywhere; }
+.plugin-permissions { grid-column: 1 / -1; margin: .35rem 0 0; padding: .55rem .65rem .6rem; border: 1px solid #35434d; border-radius: 8px; }
+.plugin-permissions legend { color: #d9e4e8; font-size: .76rem; padding: 0 .25rem; }
+.plugin-permission-list { display: grid; gap: .45rem; }
+.plugin-permission { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: .45rem; color: #d9e4e8; font-size: .76rem; }
+.plugin-permission input { margin-top: .15rem; }
+.plugin-permission-copy { overflow-wrap: anywhere; }
+.plugin-permission-effect { font-size: .7rem; white-space: nowrap; }
+.plugin-permission-effect-none { color: #71e6c2; }
+.plugin-permission-effect-external { color: #f5ce72; }
 .plugin-setup-message { color: #f5ce72; font-size: .74rem; overflow-wrap: anywhere; }
 .plugin-handoff-message { font-size: .74rem; overflow-wrap: anywhere; }
 .plugin-handoff-success { color: #71e6c2; }

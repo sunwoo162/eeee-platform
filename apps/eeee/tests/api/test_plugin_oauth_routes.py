@@ -156,6 +156,23 @@ def test_oauth_start_maps_permission_and_connector_failures_to_actionable_status
     assert unavailable.status_code == 409
 
 
+def test_oauth_start_rejects_notion_write_without_read_dependency(tmp_path) -> None:
+    client = TestClient(_application(tmp_path))
+    assert client.post("/api/plugins/notion/install").status_code == 200
+
+    response = client.post(
+        "/api/plugins/notion/oauth/start",
+        headers={"X-EEEE-User-Id": "user-a"},
+        json={"approvedPermissions": ["pages.write"]},
+    )
+
+    assert response.status_code == 403
+    assert "pages.read" in response.json()["detail"]
+    assert client.get(
+        "/api/plugins/notion/connection", headers={"X-EEEE-User-Id": "user-a"}
+    ).json()["status"] == "awaiting_authentication"
+
+
 def test_oauth_cancel_returns_friendly_page_and_terminal_status(tmp_path) -> None:
     client = TestClient(_application(tmp_path))
     assert client.post("/api/plugins/notion/install").status_code == 200

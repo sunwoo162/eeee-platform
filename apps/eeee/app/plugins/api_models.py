@@ -38,6 +38,7 @@ class PluginCatalogView(BaseModel):
     permissions: list[str]
     credential_fields: list[CredentialField] = Field(default_factory=list, alias="credentialFields")
     permission_details: list[PermissionDetail] = Field(default_factory=list, alias="permissionDetails")
+    approved_permissions: list[str] = Field(default_factory=list, alias="approvedPermissions")
     install_source: str = Field(alias="installSource")
     default_installed: bool = Field(alias="defaultInstalled")
     status: str

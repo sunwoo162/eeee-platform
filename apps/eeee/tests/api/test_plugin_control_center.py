@@ -24,6 +24,9 @@ def test_web_control_center_has_plugin_status_surface(tmp_path) -> None:
     assert "setupMessage" in script
     assert "/oauth/start" in script
     assert "approvedPermissions" in script
+    assert "permissionDetails" in script
+    assert "createElement(\"input\")" in script
+    assert "sideEffect" in script
     assert "/launch" in script
     assert "textContent" in script
     assert "innerHTML" not in script

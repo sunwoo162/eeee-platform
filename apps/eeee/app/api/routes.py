@@ -349,6 +349,7 @@ def build_plugin_router(
                 description=entry.description, authMode=entry.auth_mode,
                 permissions=entry.permissions, credentialFields=entry.credential_fields,
                 permissionDetails=entry.permission_details,
+                approvedPermissions=_platform_permissions(platform, entry.id, principal),
                 installSource=entry.install_source,
                 defaultInstalled=entry.default_installed, status=status,
                 setupStatus=setup_status, setupMessage=setup_message,
@@ -1110,9 +1111,11 @@ def _require_local_desktop(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Desktop control is local-only")
 
 
-def _platform_permissions(platform: PluginPlatformService, plugin_id: str) -> list[str]:
+def _platform_permissions(
+    platform: PluginPlatformService, plugin_id: str, user_id: str = "local-user"
+) -> list[str]:
     try:
-        return platform.get_connection("local-user", plugin_id).approved_permissions
+        return platform.get_connection(user_id, plugin_id).approved_permissions
     except KeyError:
         return []
 

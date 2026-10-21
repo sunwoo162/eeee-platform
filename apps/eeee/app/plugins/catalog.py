@@ -24,7 +24,17 @@ class PermissionDetail(BaseModel):
     label: str = Field(min_length=1)
     description: str = Field(min_length=1)
     effect: Literal["none", "external"] = "none"
-    default_approved: bool = Field(default=False, alias="defaultApproved")
+    default_approved: bool | None = Field(default=None, alias="defaultApproved")
+    requires: list[str] = Field(default_factory=list)
+
+    @field_validator("requires")
+    @classmethod
+    def validate_requires(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("permission requirements must not be blank")
+        if len(set(values)) != len(values):
+            raise ValueError("permission requirements must not be duplicated")
+        return values
 
 
 class PluginCatalogEntry(BaseModel):
@@ -89,6 +99,7 @@ class PluginCatalog:
                 PermissionDetail(
                     id="pages.write", label="페이지 쓰기",
                     description="Notion 페이지를 만들거나 수정합니다.", effect="external",
+                    defaultApproved=False, requires=["pages.read"],
                 ),
             ],
             installSource="bundled-optional", defaultInstalled=False, connector="notion",
@@ -169,3 +180,39 @@ class PluginCatalog:
             if entry.id == plugin_id:
                 return entry
         raise KeyError(f"Plugin catalog entry not found: {plugin_id}")
+
+
+def permission_closure(entry: PluginCatalogEntry, selected: set[str]) -> set[str]:
+    """Return the selected permissions plus all declared transitive requirements."""
+
+    available = set(entry.permissions)
+    if not selected or not selected.issubset(available):
+        raise PermissionError("plugin permission approval is invalid")
+    details = {detail.id: detail for detail in entry.permission_details}
+    closure = set(selected)
+    pending = list(selected)
+    while pending:
+        permission = pending.pop()
+        detail = details.get(permission)
+        for required in detail.requires if detail else []:
+            if required not in available:
+                raise PermissionError(
+                    f"permission {permission} requires unknown permission {required}"
+                )
+            if required not in closure:
+                closure.add(required)
+                pending.append(required)
+    return closure
+
+
+def validate_permission_selection(entry: PluginCatalogEntry, selected: set[str]) -> set[str]:
+    """Reject a selection that omits any dependency instead of silently widening it."""
+
+    closure = permission_closure(entry, selected)
+    if closure != selected:
+        missing = sorted(closure - selected)
+        raise PermissionError(
+            "plugin permission approval is missing required permissions: "
+            + ", ".join(missing)
+        )
+    return closure

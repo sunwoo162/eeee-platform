@@ -12,6 +12,7 @@ const pendingResearchRequestIds = new Set();
 const pendingRunExecutionIds = new Set();
 const pluginHandoffStates = new Map();
 const pluginHandoffInFlight = new Set();
+const pluginPermissionSelections = new Map();
 let designReferenceRequestId = 0;
 let visualVerificationRequestId = 0;
 
@@ -280,7 +281,30 @@ async function refreshEeeeControlCenter() {
     const control = snapshot.controlCenter || {};
     const jobs = Array.isArray(control.jobs) ? control.jobs : [];
     const memory = control.memory || {};
-    const plugins = Array.isArray(control.plugins) ? control.plugins : [];
+    const statePlugins = Array.isArray(control.plugins) ? control.plugins : [];
+    let catalogPlugins = [];
+    try {
+      const catalog = await requestJson("/api/plugins/catalog");
+      catalogPlugins = Array.isArray(catalog) ? catalog : [];
+    } catch (_error) {
+      // The desktop snapshot remains a usable fallback while catalog refresh recovers.
+    }
+    const stateById = new Map(statePlugins.map((plugin) => [plugin.pluginId, plugin]));
+    const plugins = catalogPlugins.map((plugin) => ({
+      ...plugin,
+      ...(stateById.get(plugin.id) || {}),
+      pluginId: plugin.id,
+      // Catalog metadata is authoritative when the desktop snapshot is stale.
+      permissions: plugin.permissions,
+      credentialFields: plugin.credentialFields,
+      permissionDetails: plugin.permissionDetails,
+      approvedPermissions: plugin.approvedPermissions,
+      authMode: plugin.authMode,
+    }));
+    for (const plugin of statePlugins) {
+      if (!plugins.some((item) => item.pluginId === plugin.pluginId)) plugins.push(plugin);
+    }
+    normalizePluginPermissionSelections(plugins);
     const activeJobs = jobs.filter((job) => ["queued", "running", "paused"].includes(job.status)).length;
     const connectedPlugins = plugins.filter((plugin) => plugin.status === "connected").length;
     $("#eeee-active-work").textContent = `${activeJobs}개 작업`;
@@ -293,6 +317,117 @@ async function refreshEeeeControlCenter() {
   } catch (error) {
     status.textContent = error?.detail || "제어 센터 연결 대기";
     status.className = "status";
+  }
+}
+
+function isReadPermission(permission) {
+  return String(permission || "").endsWith(".read");
+}
+
+function pluginPermissionDetails(plugin) {
+  const permissions = Array.isArray(plugin.permissions) ? plugin.permissions : [];
+  const details = new Map(
+    (Array.isArray(plugin.permissionDetails) ? plugin.permissionDetails : [])
+      .filter((detail) => detail && detail.id)
+      .map((detail) => [detail.id, detail]),
+  );
+  return permissions.map((permission) => {
+    const detail = details.get(permission) || {};
+    const effect = detail.effect ?? detail.sideEffect;
+    return {
+      ...detail,
+      id: permission,
+      label: detail.label || permission,
+      description: detail.description || (isReadPermission(permission)
+        ? "읽기 전용 데이터에 접근합니다."
+        : "외부 데이터를 변경하거나 전송할 수 있습니다."),
+      effect: effect || (isReadPermission(permission) ? "none" : "external"),
+    };
+  });
+}
+
+function pluginPermissionRequirements(plugin) {
+  return new Map(
+    pluginPermissionDetails(plugin).map((detail) => [
+      detail.id,
+      Array.isArray(detail.requires) ? detail.requires.filter(Boolean) : [],
+    ]),
+  );
+}
+
+function closePluginPermissionSelection(plugin, selected) {
+  const permissions = new Set(Array.isArray(plugin.permissions) ? plugin.permissions : []);
+  const requirements = pluginPermissionRequirements(plugin);
+  const closed = new Set([...selected].filter((permission) => permissions.has(permission)));
+  const pending = [...closed];
+  while (pending.length) {
+    const permission = pending.pop();
+    for (const required of requirements.get(permission) || []) {
+      if (!permissions.has(required) || closed.has(required)) continue;
+      closed.add(required);
+      pending.push(required);
+    }
+  }
+  return closed;
+}
+
+function removeDependentPermissions(plugin, selected, removedPermission) {
+  const requirements = pluginPermissionRequirements(plugin);
+  const removed = new Set([removedPermission]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const permission of selected) {
+      if (removed.has(permission)) continue;
+      if ((requirements.get(permission) || []).some((required) => removed.has(required))) {
+        removed.add(permission);
+        changed = true;
+      }
+    }
+  }
+  for (const permission of removed) selected.delete(permission);
+  return removed;
+}
+
+function defaultPluginPermissions(plugin) {
+  const permissions = new Set(Array.isArray(plugin.permissions) ? plugin.permissions : []);
+  const approved = Array.isArray(plugin.approvedPermissions)
+    ? plugin.approvedPermissions.filter((permission) => permissions.has(permission))
+    : [];
+  if (approved.length) return approved;
+  const details = pluginPermissionDetails(plugin);
+  const hasExplicitDefaults = details.some((detail) => (
+    detail.defaultApproved !== undefined && detail.defaultApproved !== null
+  ));
+  return (hasExplicitDefaults
+    ? details.filter((detail) => detail.defaultApproved === true)
+    : details.filter((detail) => isReadPermission(detail.id))
+  ).map((detail) => detail.id);
+}
+
+function selectedPluginPermissions(plugin) {
+  const pluginId = plugin.pluginId || plugin.id;
+  if (!pluginPermissionSelections.has(pluginId)) {
+    pluginPermissionSelections.set(pluginId, new Set(defaultPluginPermissions(plugin)));
+  }
+  const closed = closePluginPermissionSelection(plugin, pluginPermissionSelections.get(pluginId));
+  pluginPermissionSelections.set(pluginId, closed);
+  return [...closed];
+}
+
+function normalizePluginPermissionSelections(plugins) {
+  const current = new Map(plugins.map((plugin) => [plugin.pluginId || plugin.id, plugin]));
+  for (const [pluginId, selected] of pluginPermissionSelections) {
+    const plugin = current.get(pluginId);
+    if (!plugin) {
+      pluginPermissionSelections.delete(pluginId);
+      continue;
+    }
+    const permissions = new Set(Array.isArray(plugin.permissions) ? plugin.permissions : []);
+    pluginPermissionSelections.set(
+      pluginId,
+      new Set([...selected].filter((permission) => permissions.has(permission))),
+    );
   }
 }
 
@@ -319,12 +454,20 @@ function renderEeeePluginStatus(plugins) {
         if (plugin.nextAction === "install") {
           await requestJson(`/api/plugins/${encodeURIComponent(plugin.pluginId)}/install`, { method: "POST" });
         } else if (["connect", "reconnect"].includes(plugin.nextAction)) {
+          const approvedPermissions = selectedPluginPermissions(plugin);
+          if (!approvedPermissions.length) {
+            const status = $("#eeee-control-status");
+            status.textContent = "연결하려면 하나 이상의 권한을 선택해 주세요.";
+            status.className = "status error";
+            button.disabled = false;
+            return;
+          }
           const popup = typeof window !== "undefined" && typeof window.open === "function"
             ? window.open("about:blank", "_blank", "noopener,noreferrer")
             : null;
           const result = await requestJson(`/api/plugins/${encodeURIComponent(plugin.pluginId)}/oauth/start`, {
             method: "POST",
-            body: JSON.stringify({ approvedPermissions: plugin.permissions || [] }),
+            body: JSON.stringify({ approvedPermissions }),
           });
           if (popup) popup.location.href = result.authorizationUrl;
           else if (typeof window !== "undefined") window.location.href = result.authorizationUrl;
@@ -362,6 +505,32 @@ function renderEeeePluginStatus(plugins) {
         if (plugin.nextAction === "open") pluginHandoffInFlight.delete(plugin.pluginId);
         button.disabled = false;
       }
+    });
+    surface.addEventListener("change", (event) => {
+      const input = event.target.closest("input[data-plugin-id]");
+      if (!input) return;
+      const plugin = (stateList.__eeeePlugins || []).find((item) => item.pluginId === input.dataset.pluginId);
+      if (!plugin) return;
+      const selected = new Set(selectedPluginPermissions(plugin));
+      if (input.checked) {
+        selected.add(input.dataset.permission);
+        pluginPermissionSelections.set(plugin.pluginId, closePluginPermissionSelection(plugin, selected));
+      } else {
+        const removed = removeDependentPermissions(plugin, selected, input.dataset.permission);
+        pluginPermissionSelections.set(plugin.pluginId, selected);
+        const details = pluginPermissionDetails(plugin);
+        const removedLabel = details.find((detail) => detail.id === input.dataset.permission)?.label
+          || input.dataset.permission;
+        const dependentLabels = details
+          .filter((detail) => removed.has(detail.id) && detail.id !== input.dataset.permission)
+          .map((detail) => detail.label || detail.id);
+        if (dependentLabels.length) {
+          const status = $("#eeee-control-status");
+          status.textContent = `${removedLabel} 권한 해제에 따라 ${dependentLabels.join(", ")} 권한도 함께 해제했습니다.`;
+          status.className = "status error";
+        }
+      }
+      renderEeeePluginStatus(stateList.__eeeePlugins || []);
     });
   }
   if (search && !search.dataset.bound) {
@@ -414,6 +583,40 @@ function renderEeeePluginStatus(plugins) {
       setupMessage.className = "plugin-setup-message";
       setupMessage.textContent = plugin.setupMessage;
       details.append(setupMessage);
+    }
+    if (["oauth", "token-or-oauth"].includes(plugin.authMode)
+      && ["connect", "reconnect"].includes(plugin.nextAction)) {
+      const permissionFieldset = document.createElement("fieldset");
+      permissionFieldset.className = "plugin-permissions";
+      const legend = document.createElement("legend");
+      legend.textContent = "연결 권한";
+      permissionFieldset.append(legend);
+      const permissionList = document.createElement("div");
+      permissionList.className = "plugin-permission-list";
+      const selected = new Set(selectedPluginPermissions(plugin));
+      for (const detail of pluginPermissionDetails(plugin)) {
+        const label = document.createElement("label");
+        label.className = "plugin-permission";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.dataset.pluginId = plugin.pluginId || "";
+        input.dataset.permission = detail.id;
+        input.checked = selected.has(detail.id);
+        const copy = document.createElement("span");
+        copy.className = "plugin-permission-copy";
+        const permissionName = document.createElement("strong");
+        permissionName.textContent = detail.label || detail.id;
+        const permissionDescription = document.createElement("span");
+        permissionDescription.textContent = detail.description || "설명 없음";
+        copy.append(permissionName, permissionDescription);
+        const effect = document.createElement("small");
+        effect.className = `plugin-permission-effect plugin-permission-effect-${detail.effect || "external"}`;
+        effect.textContent = detail.effect === "none" ? "읽기 전용" : "외부 변경·전송 가능";
+        label.append(input, copy, effect);
+        permissionList.append(label);
+      }
+      permissionFieldset.append(permissionList);
+      details.append(permissionFieldset);
     }
     const handoff = pluginHandoffStates.get(plugin.pluginId);
     if (handoff) {

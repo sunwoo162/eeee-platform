@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import sqlite3
 
 from app.knowledge.store import KnowledgeStore
 
@@ -41,6 +42,44 @@ def test_knowledge_store_does_not_cross_scope(tmp_path: Path) -> None:
     store.save_text("개인 문서", "개인 내용", scope="private")
 
     assert store.search("개인", scope="desktop-default") == []
+
+
+def test_knowledge_store_does_not_cross_user_scope(tmp_path: Path) -> None:
+    store = KnowledgeStore(tmp_path / "eeee.sqlite3")
+    store.save_text("A 문서", "A 전용 내용", scope="same-chat", user_id="user-a")
+
+    assert store.search("내용", scope="same-chat", user_id="user-a")
+    assert store.search("내용", scope="same-chat", user_id="user-b") == []
+
+
+def test_knowledge_store_migrates_legacy_documents_to_local_user(tmp_path: Path) -> None:
+    database = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE local_documents (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                source_path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT,
+                UNIQUE(scope, content_hash)
+            );
+            INSERT INTO local_documents
+                (id, title, content, scope, content_hash, created_at, updated_at)
+            VALUES ('legacy-1', '기존 문서', '기존 내용', 'desktop-default', 'hash-1',
+                    '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00');
+            """
+        )
+
+    store = KnowledgeStore(database)
+
+    assert [item.id for item in store.search("기존", scope="desktop-default")] == ["legacy-1"]
+    assert store.search("기존", scope="desktop-default", user_id="user-b") == []
 
 
 def test_knowledge_store_concurrent_same_document_is_idempotent(tmp_path: Path) -> None:

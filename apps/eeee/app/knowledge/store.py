@@ -59,26 +59,64 @@ class KnowledgeStore:
                         title TEXT NOT NULL,
                         content TEXT NOT NULL,
                         scope TEXT NOT NULL,
+                        user_id TEXT NOT NULL DEFAULT 'local-user',
                         content_hash TEXT NOT NULL,
                         source_path TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
                         deleted_at TEXT,
-                        UNIQUE(scope, content_hash)
+                        UNIQUE(user_id, scope, content_hash)
                     );
                     CREATE INDEX IF NOT EXISTS idx_local_documents_scope_updated
                         ON local_documents (scope, updated_at DESC);
                     """
                 )
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(local_documents)")
+                }
+                if "user_id" not in columns:
+                    connection.execute(
+                        """CREATE TABLE local_documents_v2 (
+                            id TEXT PRIMARY KEY,
+                            title TEXT NOT NULL,
+                            content TEXT NOT NULL,
+                            scope TEXT NOT NULL,
+                            user_id TEXT NOT NULL DEFAULT 'local-user',
+                            content_hash TEXT NOT NULL,
+                            source_path TEXT,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL,
+                            deleted_at TEXT,
+                            UNIQUE(user_id, scope, content_hash)
+                        )"""
+                    )
+                    connection.execute(
+                        """INSERT INTO local_documents_v2
+                            (id, title, content, scope, user_id, content_hash, source_path,
+                             created_at, updated_at, deleted_at)
+                            SELECT id, title, content, scope, 'local-user', content_hash,
+                                   source_path, created_at, updated_at, deleted_at
+                            FROM local_documents"""
+                    )
+                    connection.execute("DROP TABLE local_documents")
+                    connection.execute(
+                        "ALTER TABLE local_documents_v2 RENAME TO local_documents"
+                    )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_local_documents_user_scope_updated "
+                    "ON local_documents (user_id, scope, updated_at DESC)"
+                )
 
     def save_text(
-        self, title: str, content: str, *, scope: str = "global", source_path: str | None = None
+        self, title: str, content: str, *, scope: str = "global",
+        source_path: str | None = None, user_id: str = "local-user",
     ) -> KnowledgeDocument:
         title = title.strip()
         content = content.strip()
         scope = scope.strip()
-        if not title or not content or not scope:
-            raise ValueError("document title, content, and scope are required")
+        user_id = user_id.strip()
+        if not title or not content or not scope or not user_id:
+            raise ValueError("document title, content, scope, and user_id are required")
         if len(content.encode("utf-8")) > MAX_DOCUMENT_BYTES:
             raise ValueError("document is too large")
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -86,8 +124,9 @@ class KnowledgeStore:
         with self._session() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT * FROM local_documents WHERE scope = ? AND content_hash = ?",
-                (scope, content_hash),
+                "SELECT * FROM local_documents WHERE user_id = ? AND scope = ? "
+                "AND content_hash = ?",
+                (user_id, scope, content_hash),
             ).fetchone()
             if existing is not None:
                 if existing["deleted_at"] is None:
@@ -106,9 +145,9 @@ class KnowledgeStore:
             try:
                 connection.execute(
                     "INSERT INTO local_documents "
-                    "(id, title, content, scope, content_hash, source_path, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (document_id, title, content, scope, content_hash, source_path, now, now),
+                    "(id, title, content, scope, user_id, content_hash, source_path, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (document_id, title, content, scope, user_id, content_hash, source_path, now, now),
                 )
             except sqlite3.IntegrityError:
                 # A legacy database may race with another writer between the
@@ -116,8 +155,9 @@ class KnowledgeStore:
                 # process. Re-read the unique key and make the operation
                 # idempotent instead of leaking sqlite errors to the user.
                 existing = connection.execute(
-                    "SELECT * FROM local_documents WHERE scope = ? AND content_hash = ?",
-                    (scope, content_hash),
+                    "SELECT * FROM local_documents WHERE user_id = ? AND scope = ? "
+                    "AND content_hash = ?",
+                    (user_id, scope, content_hash),
                 ).fetchone()
                 if existing is None:
                     raise
@@ -138,30 +178,35 @@ class KnowledgeStore:
         assert row is not None
         return _document_from_row(row)
 
-    def list(self, *, scope: str = "global", limit: int = 20) -> list[KnowledgeDocument]:
+    def list(
+        self, *, scope: str = "global", limit: int = 20, user_id: str = "local-user"
+    ) -> list[KnowledgeDocument]:
         if limit < 1 or limit > MAX_SEARCH_RESULTS:
             raise ValueError(f"limit must be between 1 and {MAX_SEARCH_RESULTS}")
         with self._session() as connection:
             rows = connection.execute(
-                "SELECT * FROM local_documents WHERE scope = ? AND deleted_at IS NULL "
+                "SELECT * FROM local_documents WHERE user_id = ? AND scope = ? AND deleted_at IS NULL "
                 "ORDER BY updated_at DESC LIMIT ?",
-                (scope, limit),
+                (user_id, scope, limit),
             ).fetchall()
         return [_document_from_row(row) for row in rows]
 
-    def search(self, query: str, *, scope: str = "global", limit: int = 10) -> list[KnowledgeDocument]:
+    def search(
+        self, query: str, *, scope: str = "global", limit: int = 10,
+        user_id: str = "local-user",
+    ) -> list[KnowledgeDocument]:
         query = query.strip()
         if not query:
-            return self.list(scope=scope, limit=limit)
+            return self.list(scope=scope, limit=limit, user_id=user_id)
         if limit < 1 or limit > MAX_SEARCH_RESULTS:
             raise ValueError(f"limit must be between 1 and {MAX_SEARCH_RESULTS}")
         pattern = f"%{_escape_like(query)}%"
         with self._session() as connection:
             rows = connection.execute(
-                "SELECT * FROM local_documents WHERE scope = ? AND deleted_at IS NULL "
+                "SELECT * FROM local_documents WHERE user_id = ? AND scope = ? AND deleted_at IS NULL "
                 "AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') "
                 "ORDER BY updated_at DESC LIMIT ?",
-                (scope, pattern, pattern, limit),
+                (user_id, scope, pattern, pattern, limit),
             ).fetchall()
         return [_document_from_row(row, query=query) for row in rows]
 

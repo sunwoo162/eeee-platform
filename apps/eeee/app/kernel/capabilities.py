@@ -158,6 +158,7 @@ class KnowledgeDocumentsCapability:
             inputs={
                 "text": request.raw_text,
                 "scope": context.conversation_id,
+                "userId": _request_user_id(request),
             },
             side_effect_level=self.descriptor.side_effect_level,
             requires_approval=False,
@@ -167,6 +168,7 @@ class KnowledgeDocumentsCapability:
         result = self.service.handle(
             str(plan.inputs.get("text", "")),
             scope=str(plan.inputs.get("scope", "desktop-default")),
+            user_id=str(plan.inputs.get("userId", "local-user")),
         )
         output = {
             "status": result.status,

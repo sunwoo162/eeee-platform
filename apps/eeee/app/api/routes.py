@@ -883,10 +883,13 @@ def build_mobile_router(
     bridge: MobileBridge,
     assistant: AssistantService,
     snapshot_provider: Callable[[str | None], dict[str, object]],
+    *,
+    conversation_store: ConversationStore | None = None,
 ) -> APIRouter:
     """Expose the Desktop-owned remote-control contract for the Mobile client."""
 
     router = APIRouter(prefix="/api")
+    canonical_conversations = conversation_store or getattr(assistant, "conversation_store", None)
 
     @router.post("/bridge/pairing/code")
     def issue_pairing_code(request: Request) -> dict[str, str]:
@@ -912,6 +915,39 @@ def build_mobile_router(
         _authorize_mobile(bridge, bridge_token)
         return snapshot_provider(project_id)
 
+    @router.get("/mobile/assistant/conversations")
+    def list_mobile_assistant_conversations(
+        query: str = Query(default="", max_length=500),
+        limit: int = Query(default=50, ge=1, le=100),
+        bridge_token: str | None = Header(default=None, alias="X-Gleave-Bridge-Token"),
+    ) -> list[dict[str, object]]:
+        _authorize_mobile(bridge, bridge_token)
+        if canonical_conversations is None:
+            raise HTTPException(status_code=503, detail="Canonical conversation store is unavailable")
+        try:
+            return canonical_conversations.list_transcript_summaries(query=query, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/mobile/assistant/conversations/{conversation_id}/messages")
+    def get_mobile_assistant_messages(
+        conversation_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+        before_id: int | None = Query(default=None, alias="beforeId", ge=1),
+        bridge_token: str | None = Header(default=None, alias="X-Gleave-Bridge-Token"),
+    ) -> dict[str, object]:
+        _authorize_mobile(bridge, bridge_token)
+        if canonical_conversations is None:
+            raise HTTPException(status_code=503, detail="Canonical conversation store is unavailable")
+        try:
+            return canonical_conversations.get_transcript(
+                conversation_id, limit=limit, before_sequence=before_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @router.post("/mobile/assistant/route", response_model=AssistantRouteResponse)
     def mobile_assistant_route(
         payload: AssistantRequestPayload,
@@ -930,7 +966,7 @@ def build_mobile_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         bridge.publish(
-            "assistant.route.completed",
+            f"assistant.route.{result.status}",
             {
                 "deviceId": device["deviceId"],
                 "capabilityId": result.selection.capability_id,

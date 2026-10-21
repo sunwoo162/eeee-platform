@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.assistant.models import AssistantContext, AssistantRequest
 from app.assistant.registry import build_default_registry
 from app.assistant.router import CapabilityRouter
@@ -10,20 +12,36 @@ from app.kernel.capabilities import ProjectExecutionCapability
 from app.kernel.capabilities import EnvelopeContext
 from app.project_runtime.provisioner import ProjectProvisioner
 from app.storage.sqlite import SQLiteStore
+from app.conversations.store import ConversationStore
 
 
 class RecordingSupervisor:
     def __init__(self) -> None:
         self.input_data: dict[str, object] | None = None
         self.operation = None
+        self.submit_count = 0
+        self.job_id = "assistant-job-test"
 
     def submit(self, request_id, operation, *, input_data=None):
         self.input_data = dict(input_data or {})
         self.operation = operation
-        return "assistant-job-test"
+        self.submit_count += 1
+        self.request_id = request_id
+        return self.job_id
+
+    def find_by_request_id(self, request_id):
+        if request_id != getattr(self, "request_id", None):
+            return None
+        return {
+            "jobId": self.job_id,
+            "requestId": request_id,
+            "status": "running",
+            "input": self.input_data or {},
+            "result": None,
+        }
 
 
-def _service(tmp_path, supervisor):
+def _service(tmp_path, supervisor, *, canonical: bool = False):
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     store = SQLiteStore(settings.data_dir / "state.sqlite3")
     store.init()
@@ -34,6 +52,7 @@ def _service(tmp_path, supervisor):
         settings=settings,
         provisioner=ProjectProvisioner(store),
         background_supervisor=supervisor,
+        conversation_store=ConversationStore(store) if canonical else None,
     )
 
 
@@ -45,6 +64,38 @@ def test_accepted_project_request_persists_a_stable_project_identity(tmp_path) -
     assert result.project_id
     assert supervisor.input_data is not None
     assert supervisor.input_data["projectId"] == result.project_id
+
+
+def test_retry_without_request_id_attaches_to_existing_background_project(tmp_path) -> None:
+    supervisor = RecordingSupervisor()
+    service = _service(tmp_path, supervisor, canonical=True)
+
+    first = service.route("Todo 앱 만들어줘", conversation_id="retry-safe")
+    second = service.route("Todo 앱 만들어줘", conversation_id="retry-safe")
+
+    assert first.status == "accepted"
+    assert second.status == "accepted"
+    assert second.job_id == first.job_id
+    assert second.project_id == first.project_id
+    assert supervisor.submit_count == 1
+
+
+def test_background_failure_replaces_pending_canonical_reply(tmp_path) -> None:
+    supervisor = RecordingSupervisor()
+    service = _service(tmp_path, supervisor, canonical=True)
+    conversation_store = service.conversation_store
+
+    service.route("Todo 앱 만들어줘", conversation_id="failed-background")
+    service._route_sync = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("작업 실패"))
+
+    assert supervisor.operation is not None
+    with pytest.raises(RuntimeError, match="작업 실패"):
+        supervisor.operation()
+
+    assert conversation_store is not None
+    turns = conversation_store.get_transcript("failed-background")["turns"]
+    assert turns[1]["status"] == "failed"
+    assert "작업 실패" in turns[1]["content"]
 
 
 def test_background_project_result_replaces_accepted_turn_in_conversation_memory(tmp_path) -> None:

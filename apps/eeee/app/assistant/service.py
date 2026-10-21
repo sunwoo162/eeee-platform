@@ -114,7 +114,7 @@ class AssistantService:
         conversation_id: str = "desktop-default", approved: bool = False,
         approval_request_id: str | None = None, request_id: str | None = None,
     ) -> AssistantRouteResult:
-        request_id = request_id or f"assistant-request-{uuid4().hex}"
+        request_id = request_id.strip() if request_id else None
         request = AssistantRequest(
             raw_text=text,
             context={"workspace": workspace, "conversationId": conversation_id, "approved": approved},
@@ -123,6 +123,22 @@ class AssistantService:
         if self.background_supervisor is not None:
             selection = self.router.select(request)
             if selection.status == "selected" and selection.capability_id == "project-execution":
+                existing_request_id = request_id
+                if existing_request_id is None and self.conversation_store is not None:
+                    existing_request_id = self.conversation_store.find_pending_route(
+                        conversation_id, text
+                    )
+                if existing_request_id is not None:
+                    existing_job = self.background_supervisor.find_by_request_id(existing_request_id)
+                    if existing_job is not None:
+                        job_status = str(existing_job.get("status"))
+                        if job_status in {"queued", "running", "paused"}:
+                            return self._accepted_background_result(
+                                selection, existing_job, existing_request_id
+                            )
+                        if job_status == "completed" and isinstance(existing_job.get("result"), dict):
+                            return AssistantRouteResult.model_validate(existing_job["result"])
+                request_id = request_id or f"assistant-request-{uuid4().hex}"
                 # Allocate the identity before the worker starts.  The same
                 # value is persisted in the job input so a process restart or
                 # manual retry resumes the original project instead of
@@ -130,11 +146,21 @@ class AssistantService:
                 project_id = f"project-{uuid4().hex}"
 
                 def run_project() -> dict[str, object]:
-                    result = self._route_sync(
-                        text, workspace, requested_capability=requested_capability,
-                        conversation_id=conversation_id, approved=approved, resume_project_id=project_id,
-                        approval_request_id=approval_request_id, request_id=request_id,
-                    )
+                    try:
+                        result = self._route_sync(
+                            text, workspace, requested_capability=requested_capability,
+                            conversation_id=conversation_id, approved=approved, resume_project_id=project_id,
+                            approval_request_id=approval_request_id, request_id=request_id,
+                        )
+                    except Exception as exc:
+                        self._remember_turn(
+                            conversation_id,
+                            text,
+                            f"백그라운드 작업에 실패했어: {str(exc).strip() or type(exc).__name__}",
+                            request_id=request_id,
+                            status=MessageStatus.FAILED,
+                        )
+                        raise
                     self._remember_turn(
                         conversation_id, text, result.message, request_id=request_id,
                         status=self._message_status_for_result(result),
@@ -173,6 +199,7 @@ class AssistantService:
                     status=MessageStatus.PENDING,
                 )
                 return result
+        request_id = request_id or f"assistant-request-{uuid4().hex}"
         result = self._route_sync(
             text, workspace, requested_capability=requested_capability,
             conversation_id=conversation_id, approved=approved,
@@ -186,6 +213,26 @@ class AssistantService:
             status=self._message_status_for_result(result),
         )
         return result
+
+    def _accepted_background_result(
+        self, selection: CapabilitySelection, job: dict[str, object], request_id: str
+    ) -> AssistantRouteResult:
+        input_data = job.get("input")
+        input_data = input_data if isinstance(input_data, dict) else {}
+        project_id = input_data.get("projectId")
+        return AssistantRouteResult(
+            status="accepted",
+            selection=selection,
+            message="이미 같은 프로젝트 작업을 백그라운드에서 진행 중이야.",
+            project_id=project_id if isinstance(project_id, str) else None,
+            job_id=str(job.get("jobId")) if job.get("jobId") else None,
+            response_verification=ResponseVerification(
+                decision="WARN",
+                reason="A duplicate request was attached to the existing background job",
+                profile_version=self.settings.claim_latch_profile_version,
+                subject_id=request_id,
+            ),
+        )
 
     def _route_sync(
         self, text: str, workspace: str | None = None, *, requested_capability: str | None = None,
@@ -431,16 +478,26 @@ class AssistantService:
         resolved_request_id = request_id if isinstance(request_id, str) else None
 
         def run() -> dict[str, object]:
-            result = self._route_sync(
-                text,
-                workspace if isinstance(workspace, str) else None,
-                requested_capability=requested_capability if isinstance(requested_capability, str) else None,
-                conversation_id=resolved_conversation_id,
-                approved=approved is True,
-                approval_request_id=approval_request_id if isinstance(approval_request_id, str) else None,
-                resume_project_id=project_id if isinstance(project_id, str) else None,
-                request_id=resolved_request_id,
-            )
+            try:
+                result = self._route_sync(
+                    text,
+                    workspace if isinstance(workspace, str) else None,
+                    requested_capability=requested_capability if isinstance(requested_capability, str) else None,
+                    conversation_id=resolved_conversation_id,
+                    approved=approved is True,
+                    approval_request_id=approval_request_id if isinstance(approval_request_id, str) else None,
+                    resume_project_id=project_id if isinstance(project_id, str) else None,
+                    request_id=resolved_request_id,
+                )
+            except Exception as exc:
+                self._remember_turn(
+                    resolved_conversation_id,
+                    text,
+                    f"백그라운드 작업에 실패했어: {str(exc).strip() or type(exc).__name__}",
+                    request_id=resolved_request_id,
+                    status=MessageStatus.FAILED,
+                )
+                raise
             self._remember_turn(
                 resolved_conversation_id,
                 text,

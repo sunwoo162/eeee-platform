@@ -827,7 +827,8 @@ def build_assistant_router(
         return service.get_project_profile(project_id)
 
     @router.get("/assistant/jobs/{job_id}")
-    def get_assistant_job(job_id: str) -> dict[str, object]:
+    def get_assistant_job(job_id: str, request: Request) -> dict[str, object]:
+        _require_local_desktop(request)
         try:
             return service.get_background_job(job_id)
         except KeyError as exc:
@@ -835,9 +836,11 @@ def build_assistant_router(
 
     @router.get("/assistant/jobs")
     def list_assistant_jobs(
+        request: Request,
         status: str | None = Query(default=None, max_length=40),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> list[dict[str, object]]:
+        _require_local_desktop(request)
         try:
             return service.list_background_jobs(status=status, limit=limit)
         except ValueError as exc:
@@ -852,19 +855,23 @@ def build_assistant_router(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/assistant/jobs/{job_id}/pause")
-    def pause_assistant_job(job_id: str) -> dict[str, object]:
+    def pause_assistant_job(job_id: str, request: Request) -> dict[str, object]:
+        _require_local_desktop(request)
         return _job_action(service.pause_background_job, job_id)
 
     @router.post("/assistant/jobs/{job_id}/resume")
-    def resume_assistant_job(job_id: str) -> dict[str, object]:
+    def resume_assistant_job(job_id: str, request: Request) -> dict[str, object]:
+        _require_local_desktop(request)
         return _job_action(service.resume_background_job, job_id)
 
     @router.post("/assistant/jobs/{job_id}/cancel")
-    def cancel_assistant_job(job_id: str) -> dict[str, object]:
+    def cancel_assistant_job(job_id: str, request: Request) -> dict[str, object]:
+        _require_local_desktop(request)
         return _job_action(service.cancel_background_job, job_id)
 
     @router.post("/assistant/jobs/{job_id}/retry")
-    def retry_assistant_job(job_id: str) -> dict[str, object]:
+    def retry_assistant_job(job_id: str, request: Request) -> dict[str, object]:
+        _require_local_desktop(request)
         return _job_action(service.retry_background_job, job_id)
 
     @router.post(
@@ -1260,7 +1267,8 @@ def build_api_router(
     router = APIRouter(prefix="/api")
 
     @router.post("/requests", response_model=RequestResponse)
-    def create_api_request(payload: RequestPayload) -> RequestResponse:
+    def create_api_request(payload: RequestPayload, request: Request) -> RequestResponse:
+        _require_local_desktop(request)
         try:
             request_id, brief, run_id = flow.create_request(
                 payload.text,
@@ -1272,7 +1280,8 @@ def build_api_router(
         return RequestResponse(request_id=request_id, brief=brief, run_id=run_id)
 
     @router.get("/requests/{request_id}", response_model=RequestSnapshotResponse)
-    def get_api_request(request_id: str) -> RequestSnapshotResponse:
+    def get_api_request(request_id: str, request: Request) -> RequestSnapshotResponse:
+        _require_local_desktop(request)
         snapshot = flow.get_request_snapshot(request_id)
         return RequestSnapshotResponse(
             **snapshot.model_dump(mode="python"),
@@ -1280,7 +1289,8 @@ def build_api_router(
         )
 
     @router.get("/requests/{request_id}/project-brief", response_model=ProjectBriefV1)
-    def get_project_brief(request_id: str) -> ProjectBriefV1:
+    def get_project_brief(request_id: str, request: Request) -> ProjectBriefV1:
+        _require_local_desktop(request)
         project_id, _workspace = flow.store.get_request_context(request_id)
         return flow.coordinator.build_project_brief(project_id, request_id)
 
@@ -1452,7 +1462,8 @@ def build_api_router(
         return MemoryDeleteResponse(deleted=True, memoryId=deleted.id)
 
     @router.post("/requests/{request_id}/research", response_model=ResearchResponse)
-    def research_api_request(request_id: str) -> ResearchResponse:
+    def research_api_request(request_id: str, request: Request) -> ResearchResponse:
+        _require_local_desktop(request)
         try:
             candidates, work_plan = flow.research(request_id)
         except RuntimeError as exc:
@@ -1461,8 +1472,9 @@ def build_api_router(
 
     @router.post("/requests/{request_id}/approve", response_model=ApprovalResponse)
     def approve_api_request(
-        request_id: str, payload: ApprovalPayload
+        request_id: str, payload: ApprovalPayload, request: Request
     ) -> ApprovalResponse:
+        _require_local_desktop(request)
         decision, run_id, decision_events = flow.approve(request_id, payload.selected)
         return ApprovalResponse(
             decision=decision,
@@ -1471,11 +1483,13 @@ def build_api_router(
         )
 
     @router.post("/runs/{run_id}/execute", response_model=Run)
-    def execute_api_run(run_id: str) -> Run:
+    def execute_api_run(run_id: str, request: Request) -> Run:
+        _require_local_desktop(request)
         return flow.execute(run_id)
 
     @router.get("/runs", response_model=list[Run])
     def list_api_runs(
+        request: Request,
         response: Response,
         request_id: str | None = None,
         status: Literal["created", "running", "completed", "failed", "unavailable"] | None = None,
@@ -1486,6 +1500,7 @@ def build_api_router(
         limit: int | None = Query(default=None, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
     ) -> list[Run]:
+        _require_local_desktop(request)
         runs, total = flow.list_runs_with_count(
             request_id,
             status=status,
@@ -1504,11 +1519,13 @@ def build_api_router(
         return runs[:limit]
 
     @router.post("/runs/{run_id}/retry", response_model=Run)
-    def retry_api_run(run_id: str) -> Run:
+    def retry_api_run(run_id: str, request: Request) -> Run:
+        _require_local_desktop(request)
         return flow.retry(run_id)
 
     @router.get("/runs/{run_id}", response_model=Run)
-    def get_api_run(run_id: str) -> Run:
+    def get_api_run(run_id: str, request: Request) -> Run:
+        _require_local_desktop(request)
         return flow.get_run(run_id)
 
     return router

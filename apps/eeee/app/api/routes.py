@@ -1733,29 +1733,45 @@ def build_design_router(design: DesignService) -> APIRouter:
 
     @router.post("/references", response_model=DesignReferenceResponse)
     def create_design_references(
-        payload: DesignReferencePayload,
+        payload: DesignReferencePayload, request: Request,
     ) -> DesignReferenceResponse:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
             pack_id, pack, tokens = design.create(
-                payload.urls, payload.keywords, payload.target_type
+                payload.urls, payload.keywords, payload.target_type, user_id=user_id
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return DesignReferenceResponse(id=pack_id, pack=pack, tokens=tokens)
 
     @router.get("/references/{pack_id}", response_model=DesignReferenceResponse)
-    def get_design_references(pack_id: str) -> DesignReferenceResponse:
-        pack, tokens = design.get(pack_id)
+    def get_design_references(pack_id: str, request: Request) -> DesignReferenceResponse:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        try:
+            pack, tokens = design.get(pack_id, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return DesignReferenceResponse(id=pack_id, pack=pack, tokens=tokens)
 
     @router.post("/verify")
-    def verify_design(payload: DesignVerifyPayload) -> DesignVerifyResponse:
-        verification_id, report = design.verify(payload.url, payload.baseline)
+    def verify_design(payload: DesignVerifyPayload, request: Request) -> DesignVerifyResponse:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        verification_id, report = design.verify(
+            payload.url, payload.baseline, user_id=user_id
+        )
         return DesignVerifyResponse(id=verification_id, report=report)
 
     @router.get("/verify/{verification_id}", response_model=DesignVerifyResponse)
-    def get_design_verification(verification_id: str) -> DesignVerifyResponse:
-        _url, _baseline, report = design.get_verification(verification_id)
+    def get_design_verification(
+        verification_id: str, request: Request
+    ) -> DesignVerifyResponse:
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        try:
+            _url, _baseline, report = design.get_verification(
+                verification_id, user_id=user_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return DesignVerifyResponse(id=verification_id, report=report)
 
     return router

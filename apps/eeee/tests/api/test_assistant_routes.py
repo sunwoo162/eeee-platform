@@ -79,6 +79,9 @@ def test_assistant_route_reuses_a_reminder_for_the_same_request_id(tmp_path) -> 
     assert first.json()["status"] == "completed"
     assert retry.json()["status"] == "completed"
     assert first.json()["reminder"]["id"] == retry.json()["reminder"]["id"]
+    transcript = client.get("/api/assistant/conversations/reminder-idempotency")
+    assert transcript.status_code == 200
+    assert transcript.json()["messageCount"] == 2
 
 
 def test_assistant_route_runs_local_document_save_and_search(tmp_path) -> None:

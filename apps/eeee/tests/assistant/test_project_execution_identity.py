@@ -15,9 +15,11 @@ from app.storage.sqlite import SQLiteStore
 class RecordingSupervisor:
     def __init__(self) -> None:
         self.input_data: dict[str, object] | None = None
+        self.operation = None
 
     def submit(self, request_id, operation, *, input_data=None):
         self.input_data = dict(input_data or {})
+        self.operation = operation
         return "assistant-job-test"
 
 
@@ -43,6 +45,30 @@ def test_accepted_project_request_persists_a_stable_project_identity(tmp_path) -
     assert result.project_id
     assert supervisor.input_data is not None
     assert supervisor.input_data["projectId"] == result.project_id
+
+
+def test_background_project_result_replaces_accepted_turn_in_conversation_memory(tmp_path) -> None:
+    supervisor = RecordingSupervisor()
+    service = _service(tmp_path, supervisor)
+
+    accepted = service.route("Todo 앱 만들어줘", conversation_id="background-history")
+    assert accepted.status == "accepted"
+    assert supervisor.operation is not None
+    assert len(service.coordinator.memory.recent_conversation_turns("background-history")) == 2
+
+    class FinalResult:
+        message = "프로젝트가 검증을 마쳤지만 릴리스는 차단됐어."
+
+        def model_dump(self, mode="json"):
+            return {"message": self.message, "status": "blocked"}
+
+    service._route_sync = lambda *args, **kwargs: FinalResult()
+    supervisor.operation()
+
+    turns = service.coordinator.memory.recent_conversation_turns("background-history", limit=10)
+    assert len(turns) == 2
+    assert turns[0]["content"] == "Todo 앱 만들어줘"
+    assert turns[1] == {"role": "assistant", "content": FinalResult.message}
 
 
 def test_project_plan_reuses_resume_project_identity(tmp_path) -> None:

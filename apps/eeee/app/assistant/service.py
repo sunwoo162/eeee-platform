@@ -124,13 +124,21 @@ class AssistantService:
                 # manual retry resumes the original project instead of
                 # creating a second one.
                 project_id = f"project-{uuid4().hex}"
-                job_id = self.background_supervisor.submit(
-                    request_id,
-                    lambda: self._route_sync(
+
+                def run_project() -> dict[str, object]:
+                    result = self._route_sync(
                         text, workspace, requested_capability=requested_capability,
                         conversation_id=conversation_id, approved=approved, resume_project_id=project_id,
                         approval_request_id=approval_request_id, request_id=request_id,
-                    ).model_dump(mode="json"),
+                    )
+                    self._remember_turn(
+                        conversation_id, text, result.message, request_id=request_id,
+                    )
+                    return result.model_dump(mode="json")
+
+                job_id = self.background_supervisor.submit(
+                    request_id,
+                    run_project,
                     input_data={
                         "text": text,
                         "workspace": workspace,
@@ -155,14 +163,14 @@ class AssistantService:
                         subject_id=job_id,
                     ),
                 )
-                self._remember_turn(conversation_id, text, result.message)
+                self._remember_turn(conversation_id, text, result.message, request_id=request_id)
                 return result
         result = self._route_sync(
             text, workspace, requested_capability=requested_capability,
             conversation_id=conversation_id, approved=approved,
             approval_request_id=approval_request_id, request_id=request_id,
         )
-        self._remember_turn(conversation_id, text, result.message)
+        self._remember_turn(conversation_id, text, result.message, request_id=request_id)
         return result
 
     def _route_sync(
@@ -301,12 +309,19 @@ class AssistantService:
             response_verification=response_verification,
         )
 
-    def _remember_turn(self, conversation_id: str, user_text: str, assistant_text: str) -> None:
+    def _remember_turn(
+        self, conversation_id: str, user_text: str, assistant_text: str,
+        *, request_id: str | None = None,
+    ) -> None:
         memory_store = getattr(self.coordinator, "memory", None)
         if memory_store is None:
             return
-        memory_store.append_conversation_turn(conversation_id, "user", user_text)
-        memory_store.append_conversation_turn(conversation_id, "assistant", assistant_text)
+        memory_store.append_conversation_turn(
+            conversation_id, "user", user_text, request_id=request_id,
+        )
+        memory_store.append_conversation_turn(
+            conversation_id, "assistant", assistant_text, request_id=request_id,
+        )
 
     def get_project_profile(self, project_id: str) -> ProjectProfile:
         return self.store.get_project_profile(project_id)
@@ -357,15 +372,27 @@ class AssistantService:
         approved = input_data.get("approved")
         approval_request_id = input_data.get("approvalRequestId")
         project_id = input_data.get("projectId")
+        request_id = input_data.get("requestId")
         if not isinstance(text, str) or not text.strip():
             return lambda: {"status": "blocked", "message": "백그라운드 작업 요청 원문이 없어 재개할 수 없어."}
-        return lambda: self._route_sync(
-            text,
-            workspace if isinstance(workspace, str) else None,
-            requested_capability=requested_capability if isinstance(requested_capability, str) else None,
-            conversation_id=conversation_id if isinstance(conversation_id, str) else "desktop-default",
-            approved=approved is True,
-            approval_request_id=approval_request_id if isinstance(approval_request_id, str) else None,
-            resume_project_id=project_id if isinstance(project_id, str) else None,
-        ).model_dump(mode="json")
+        resolved_conversation_id = conversation_id if isinstance(conversation_id, str) else "desktop-default"
+        resolved_request_id = request_id if isinstance(request_id, str) else None
+
+        def run() -> dict[str, object]:
+            result = self._route_sync(
+                text,
+                workspace if isinstance(workspace, str) else None,
+                requested_capability=requested_capability if isinstance(requested_capability, str) else None,
+                conversation_id=resolved_conversation_id,
+                approved=approved is True,
+                approval_request_id=approval_request_id if isinstance(approval_request_id, str) else None,
+                resume_project_id=project_id if isinstance(project_id, str) else None,
+                request_id=resolved_request_id,
+            )
+            self._remember_turn(
+                resolved_conversation_id, text, result.message, request_id=resolved_request_id,
+            )
+            return result.model_dump(mode="json")
+
+        return run
 

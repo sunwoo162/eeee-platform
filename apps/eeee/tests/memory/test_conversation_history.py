@@ -89,3 +89,26 @@ def test_general_conversation_receives_recent_turns_without_explicit_remember_re
     assert len(runtime.prompts) == 2
     assert "내 고양이 이름은 모찌야." in runtime.prompts[1]
     assert "기억하고 이어서 답할게." in runtime.prompts[1]
+
+
+def test_memory_store_reuses_a_request_turn_and_updates_background_result(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / "eeee.sqlite3")
+    store.init()
+
+    store.append_conversation_turn("desktop-default", "user", "Todo 앱 만들어줘", request_id="req-1")
+    store.append_conversation_turn(
+        "desktop-default", "assistant", "백그라운드에서 시작했어.", request_id="req-1"
+    )
+    store.append_conversation_turn(
+        "desktop-default", "user", "Todo 앱 만들어줘", request_id="req-1"
+    )
+    store.append_conversation_turn(
+        "desktop-default", "assistant", "완료 결과와 검증을 확인했어.", request_id="req-1"
+    )
+
+    turns = store.recent_conversation_turns("desktop-default", limit=10)
+
+    assert turns == [
+        {"role": "user", "content": "Todo 앱 만들어줘"},
+        {"role": "assistant", "content": "완료 결과와 검증을 확인했어."},
+    ]

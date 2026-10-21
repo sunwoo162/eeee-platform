@@ -93,6 +93,7 @@ class MemoryStore:
                     conversation_id TEXT NOT NULL,
                     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
                     content TEXT NOT NULL,
+                    request_id TEXT,
                     created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS assistant_feedback (
@@ -127,12 +128,26 @@ class MemoryStore:
                 connection.execute("ALTER TABLE memory_records ADD COLUMN source_message_id TEXT")
             if "source_request_id" not in columns:
                 connection.execute("ALTER TABLE memory_records ADD COLUMN source_request_id TEXT")
+            conversation_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(conversation_turns)").fetchall()
+            }
+            if "request_id" not in conversation_columns:
+                connection.execute("ALTER TABLE conversation_turns ADD COLUMN request_id TEXT")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_turns_request_role "
+                "ON conversation_turns (conversation_id, request_id, role) "
+                "WHERE request_id IS NOT NULL"
+            )
 
-    def append_conversation_turn(self, conversation_id: str, role: str, content: str) -> None:
+    def append_conversation_turn(
+        self, conversation_id: str, role: str, content: str, *, request_id: str | None = None
+    ) -> None:
         """Persist one local conversation turn for short-term continuity."""
 
         conversation_id = conversation_id.strip()
         content = _redact_conversation_content(content.strip())
+        request_id = request_id.strip() if request_id else None
         if not conversation_id:
             raise ValueError("conversation_id is required")
         if role not in {"user", "assistant"}:
@@ -140,10 +155,26 @@ class MemoryStore:
         if not content:
             raise ValueError("conversation content is required")
         with self._connect() as connection:
+            now = _iso(_now())
+            if request_id is not None:
+                existing = connection.execute(
+                    "SELECT id, content FROM conversation_turns "
+                    "WHERE conversation_id = ? AND request_id = ? AND role = ?",
+                    (conversation_id, request_id, role),
+                ).fetchone()
+                if existing is not None:
+                    if role == "user" and existing["content"] != content:
+                        raise ValueError("request_id was reused with different user content")
+                    if role == "assistant" and existing["content"] != content:
+                        connection.execute(
+                            "UPDATE conversation_turns SET content = ?, created_at = ? WHERE id = ?",
+                            (content, now, existing["id"]),
+                        )
+                    return
             connection.execute(
                 "INSERT INTO conversation_turns "
-                "(conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-                (conversation_id, role, content, _iso(_now())),
+                "(conversation_id, role, content, request_id, created_at) VALUES (?, ?, ?, ?, ?)",
+                (conversation_id, role, content, request_id, now),
             )
 
     def recent_conversation_turns(

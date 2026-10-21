@@ -386,23 +386,53 @@ class ConversationStore:
         )
 
     def list_transcript_summaries(
-        self, *, query: str = "", limit: int = 50
+        self,
+        *,
+        query: str = "",
+        limit: int = 50,
+        before_updated_at: str | None = None,
+        before_conversation_id: str | None = None,
     ) -> list[dict[str, object]]:
         """List canonical transcript summaries in the legacy history shape."""
 
         if limit < 1 or limit > 100:
             raise ValueError("limit must be between 1 and 100")
+        if (before_updated_at is None) != (before_conversation_id is None):
+            raise ValueError(
+                "before_updated_at and before_conversation_id must be provided together"
+            )
+        if before_updated_at is not None and not before_updated_at.strip():
+            raise ValueError("before_updated_at is required when paging")
+        if before_conversation_id is not None and not before_conversation_id.strip():
+            raise ValueError("before_conversation_id is required when paging")
+        if before_updated_at is not None:
+            try:
+                datetime.fromisoformat(before_updated_at)
+            except ValueError as exc:
+                raise ValueError("before_updated_at must be an ISO-8601 timestamp") from exc
         query = query.strip()
         pattern = f"%{_escape_like(query)}%"
+        filters = [
+            "c.archived_at IS NULL",
+            "(? = '' OR c.id LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')",
+        ]
+        parameters: list[object] = [query, pattern, pattern]
+        if before_updated_at is not None and before_conversation_id is not None:
+            filters.append(
+                "(c.updated_at < ? OR (c.updated_at = ? AND c.id < ?))"
+            )
+            parameters.extend(
+                [before_updated_at, before_updated_at, before_conversation_id]
+            )
+        parameters.append(limit)
         with self.store._connect() as connection:
             rows = connection.execute(
                 "SELECT c.id, COUNT(m.id) AS message_count, "
                 "MAX(m.sequence) AS latest_sequence, MAX(c.updated_at) AS updated_at "
                 "FROM conversations c JOIN messages m ON m.conversation_id = c.id "
-                "WHERE c.archived_at IS NULL AND "
-                "(? = '' OR c.id LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\') "
+                f"WHERE {' AND '.join(filters)} "
                 "GROUP BY c.id ORDER BY updated_at DESC, c.id DESC LIMIT ?",
-                (query, pattern, pattern, limit),
+                parameters,
             ).fetchall()
             summaries: list[dict[str, object]] = []
             for row in rows:

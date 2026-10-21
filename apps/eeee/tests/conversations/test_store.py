@@ -159,3 +159,38 @@ def test_duplicate_request_client_message_is_idempotent(tmp_path) -> None:
     assert conversations.find_request_by_client_message(
         conversation.id, "same-request-id"
     ).id == first.id
+
+
+def test_transcript_summary_listing_pages_with_a_stable_keyset_cursor(tmp_path) -> None:
+    conversations = make_store(tmp_path)
+    for index in range(1, 5):
+        conversation_id = f"conversation-{index}"
+        conversations.record_route_turn(
+            conversation_id,
+            user_content=f"페이지 {index} 공통 검색어",
+            assistant_content=f"답변 {index}",
+            request_id=f"request-{index}",
+        )
+
+    # Force a timestamp tie so the conversation id must be the second cursor key.
+    with conversations.store._connect() as connection:
+        connection.execute(
+            "UPDATE conversations SET updated_at = ?",
+            ("2026-10-21T00:00:00+00:00",),
+        )
+
+    first_page = conversations.list_transcript_summaries(query="공통", limit=2)
+    cursor = (first_page[-1]["updatedAt"], first_page[-1]["conversationId"])
+    second_page = conversations.list_transcript_summaries(
+        query="공통",
+        limit=2,
+        before_updated_at=cursor[0],
+        before_conversation_id=cursor[1],
+    )
+
+    assert [item["conversationId"] for item in first_page] == [
+        "conversation-4", "conversation-3"
+    ]
+    assert [item["conversationId"] for item in second_page] == [
+        "conversation-2", "conversation-1"
+    ]

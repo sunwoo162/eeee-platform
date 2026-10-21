@@ -4,7 +4,7 @@ from app.config import Settings
 from app.main import create_app
 
 
-def test_app_reports_unavailable_instead_of_faking_general_chat(monkeypatch, tmp_path):
+def test_app_uses_builtin_for_basic_chat_without_external_provider(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
@@ -14,9 +14,10 @@ def test_app_reports_unavailable_instead_of_faking_general_chat(monkeypatch, tmp
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "blocked"
-    assert "로컬 AI" in payload["message"]
-    assert payload["response_verification"]["decision"] in {"WARN", "BLOCK", "BLOCKED"}
+    assert payload["status"] == "completed"
+    assert payload["provider"] == "builtin"
+    assert "안녕" in payload["message"]
+    assert payload["response_verification"]["decision"] == "WARN"
     assert "LLM_API_KEY" not in payload["message"]
 
 
@@ -89,7 +90,7 @@ def test_general_chat_uses_web_when_project_runtime_is_injected(monkeypatch, tmp
     assert general.runtime.web is not None
 
 
-def test_general_route_does_not_expose_local_provider(monkeypatch, tmp_path):
+def test_general_route_uses_builtin_instead_of_discovered_local_provider(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: "qwen3:4b")
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: "qwen2.5:1.5b")
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
@@ -102,8 +103,8 @@ def test_general_route_does_not_expose_local_provider(monkeypatch, tmp_path):
         response = client.post("/api/assistant/route", json={"text": "안녕"})
 
     assert response.status_code == 200
-    assert response.json()["status"] == "blocked"
-    assert response.json()["provider"] in {None, "unavailable"}
+    assert response.json()["status"] == "completed"
+    assert response.json()["provider"] == "builtin"
 
 
 def test_connected_chatgpt_web_is_primary_when_no_real_local_model_exists(monkeypatch, tmp_path):

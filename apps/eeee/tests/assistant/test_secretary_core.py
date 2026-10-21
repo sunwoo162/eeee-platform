@@ -35,13 +35,13 @@ def test_secretary_extracts_safe_preference_but_rejects_secret() -> None:
     assert secretary.rememberable_facts("내 비밀번호는 secret-value야") == []
 
 
-def test_fast_local_conversation_does_not_repeat_one_generic_reply_for_every_request() -> None:
+def test_fast_local_conversation_answers_distinct_bounded_basic_intents() -> None:
     runtime = FastLocalConversationRuntime()
-    first = runtime.run(AgentRequest("내일 회의 정리 도와줘", Path.cwd(), [], "turn-1"))
-    second = runtime.run(AgentRequest("오늘 점심 뭐 먹을까?", Path.cwd(), [], "turn-2"))
+    first = runtime.run(AgentRequest("안녕", Path.cwd(), [], "turn-1"))
+    second = runtime.run(AgentRequest("오늘 기분이 어때?", Path.cwd(), [], "turn-2"))
 
     assert first.status == "completed"
     assert second.status == "completed"
     assert first.summary != second.summary
-    assert "회의" in first.summary
-    assert "점심" in second.summary
+    assert "안녕" in first.summary
+    assert "듣고 있어" in second.summary

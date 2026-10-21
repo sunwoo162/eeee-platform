@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.agent.hybrid_runtime import FastLocalConversationRuntime
 from app.agent.protocol import AgentRequest
 
@@ -13,12 +15,13 @@ def test_builtin_local_lane_answers_common_chat_without_web():
     assert result.events[0]["provider"] == "builtin"
 
 
-def test_builtin_local_lane_answers_unknown_chat_without_web():
+@pytest.mark.parametrize("prompt", ["오늘 날씨 어때?", "대한민국의 수도는 어디야?", "파이썬이 뭐야?"])
+def test_builtin_local_lane_rejects_weather_and_fact_questions_without_web(prompt):
     result = FastLocalConversationRuntime().run(
-        AgentRequest("오늘 날씨 어때?", Path("."), [], "run-2")
+        AgentRequest(prompt, Path("."), [], "run-2")
     )
 
-    assert result.status == "completed"
+    assert result.status == "unavailable"
     assert result.changed_files == []
     assert result.test_commands == []
 

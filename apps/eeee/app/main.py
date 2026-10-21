@@ -32,7 +32,7 @@ from app.assistant.service import AssistantService
 from app.capabilities.registry import build_core_capability_manager
 from app.config import Settings
 from app.conversations.context import ConversationContextBuilder
-from app.conversations.providers import build_conversation_provider
+from app.conversations.providers import BuiltinConversationProvider, build_conversation_provider
 from app.conversations.service import ConversationProvider, ConversationService
 from app.conversations.store import ConversationStore
 from app.contracts import LocalEventBus
@@ -79,7 +79,7 @@ def create_app(
 ) -> FastAPI:
     from app.agent.chatgpt_web_agent_runtime import ChatGptWebAgentRuntime
     from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
-    from app.agent.hybrid_runtime import HybridAssistantRuntime
+    from app.agent.hybrid_runtime import FastLocalConversationRuntime, HybridAssistantRuntime
 
     app_settings = settings or Settings()
     configured_provider_configs = load_provider_configs(
@@ -123,6 +123,7 @@ def create_app(
             workspace=app_settings.workspace_root,
             context_tokens=app_settings.ollama_context_tokens,
             web_status=web_runtime_status,
+            builtin=BuiltinConversationProvider(),
         )
         selected_conversation_provider = provider_selection.provider
     conversation_store = ConversationStore(store)
@@ -341,7 +342,9 @@ def create_app(
         local_general_runtime = None
     active_web_runtime = None if ollama_legacy_enabled else web_runtime
     general_runtime: AgentRuntime = HybridAssistantRuntime(
-        local=local_general_runtime, web=active_web_runtime
+        local=local_general_runtime,
+        web=active_web_runtime,
+        builtin=FastLocalConversationRuntime(),
     )
     # The same Web GPT brain handles project execution when connected. The
     # injected runtime remains available for tests and controlled embedding.

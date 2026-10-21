@@ -148,3 +148,21 @@ def test_desktop_state_exposes_the_eeee_control_center_snapshot(tmp_path):
     assert notion["status"] == "not_installed"
     assert notion["nextAction"] == "install"
     assert control_center["verification"]["claimLatch"]["profileVersion"] == "claimlatch-v0.2.0"
+
+
+def test_desktop_state_does_not_expose_another_users_jobs(tmp_path):
+    application = create_app(
+        Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    )
+    application.state.assistant_supervisor.submit(
+        "assistant-control-center-user-a", lambda: {"ok": True},
+        input_data={"userId": "user-a"},
+    )
+
+    with TestClient(application) as client:
+        response = client.get(
+            "/api/desktop/state", headers={"X-EEEE-User-Id": "user-b"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["controlCenter"]["jobs"] == []

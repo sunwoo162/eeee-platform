@@ -136,7 +136,9 @@ class AssistantService:
                         conversation_id, text, user_id=user_id
                     )
                 if existing_request_id is not None:
-                    existing_job = self.background_supervisor.find_by_request_id(existing_request_id)
+                    existing_job = self.background_supervisor.find_by_request_id(
+                        existing_request_id, user_id=user_id
+                    )
                     if existing_job is not None:
                         job_status = str(existing_job.get("status"))
                         if job_status in {"queued", "running", "paused"}:
@@ -513,35 +515,41 @@ class AssistantService:
     def get_project_profile(self, project_id: str) -> ProjectProfile:
         return self.store.get_project_profile(project_id)
 
-    def get_background_job(self, job_id: str) -> dict[str, object]:
+    def get_background_job(self, job_id: str, *, user_id: str = "local-user") -> dict[str, object]:
         if self.background_supervisor is None:
             raise KeyError(f"Assistant job not found: {job_id}")
-        return self.background_supervisor.get(job_id)
+        return self.background_supervisor.get(job_id, user_id=user_id)
 
-    def list_background_jobs(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
+    def list_background_jobs(
+        self, *, status: str | None = None, limit: int = 100, user_id: str = "local-user",
+    ) -> list[dict[str, object]]:
         if self.background_supervisor is None:
             return []
-        return self.background_supervisor.list_jobs(status=status, limit=limit)
+        return self.background_supervisor.list_jobs(status=status, limit=limit, user_id=user_id)
 
-    def pause_background_job(self, job_id: str) -> dict[str, object]:
+    def pause_background_job(self, job_id: str, *, user_id: str = "local-user") -> dict[str, object]:
         if self.background_supervisor is None:
             raise KeyError(f"Assistant job not found: {job_id}")
-        return self.background_supervisor.pause(job_id)
+        return self.background_supervisor.pause(job_id, user_id=user_id)
 
-    def cancel_background_job(self, job_id: str) -> dict[str, object]:
+    def cancel_background_job(self, job_id: str, *, user_id: str = "local-user") -> dict[str, object]:
         if self.background_supervisor is None:
             raise KeyError(f"Assistant job not found: {job_id}")
-        return self.background_supervisor.cancel(job_id)
+        return self.background_supervisor.cancel(job_id, user_id=user_id)
 
-    def resume_background_job(self, job_id: str) -> dict[str, object]:
+    def resume_background_job(self, job_id: str, *, user_id: str = "local-user") -> dict[str, object]:
         if self.background_supervisor is None:
             raise KeyError(f"Assistant job not found: {job_id}")
-        return self.background_supervisor.resume(job_id, self._background_operation_factory)
+        return self.background_supervisor.resume(
+            job_id, self._background_operation_factory, user_id=user_id
+        )
 
-    def retry_background_job(self, job_id: str) -> dict[str, object]:
+    def retry_background_job(self, job_id: str, *, user_id: str = "local-user") -> dict[str, object]:
         if self.background_supervisor is None:
             raise KeyError(f"Assistant job not found: {job_id}")
-        return self.background_supervisor.retry(job_id, self._background_operation_factory)
+        return self.background_supervisor.retry(
+            job_id, self._background_operation_factory, user_id=user_id
+        )
 
     def resume_background_jobs(self) -> list[str]:
         if self.background_supervisor is None:

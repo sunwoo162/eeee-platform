@@ -845,8 +845,9 @@ def build_assistant_router(
     @router.get("/assistant/jobs/{job_id}")
     def get_assistant_job(job_id: str, request: Request) -> dict[str, object]:
         _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
-            return service.get_background_job(job_id)
+            return service.get_background_job(job_id, user_id=user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -857,14 +858,17 @@ def build_assistant_router(
         limit: int = Query(default=100, ge=1, le=500),
     ) -> list[dict[str, object]]:
         _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
-            return service.list_background_jobs(status=status, limit=limit)
+            return service.list_background_jobs(status=status, limit=limit, user_id=user_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    def _job_action(action: Callable[[str], dict[str, object]], job_id: str) -> dict[str, object]:
+    def _job_action(
+        action: Callable[..., dict[str, object]], job_id: str, user_id: str,
+    ) -> dict[str, object]:
         try:
-            return action(job_id)
+            return action(job_id, user_id=user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except JobTransitionError as exc:
@@ -873,22 +877,26 @@ def build_assistant_router(
     @router.post("/assistant/jobs/{job_id}/pause")
     def pause_assistant_job(job_id: str, request: Request) -> dict[str, object]:
         _require_local_desktop(request)
-        return _job_action(service.pause_background_job, job_id)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return _job_action(service.pause_background_job, job_id, user_id)
 
     @router.post("/assistant/jobs/{job_id}/resume")
     def resume_assistant_job(job_id: str, request: Request) -> dict[str, object]:
         _require_local_desktop(request)
-        return _job_action(service.resume_background_job, job_id)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return _job_action(service.resume_background_job, job_id, user_id)
 
     @router.post("/assistant/jobs/{job_id}/cancel")
     def cancel_assistant_job(job_id: str, request: Request) -> dict[str, object]:
         _require_local_desktop(request)
-        return _job_action(service.cancel_background_job, job_id)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return _job_action(service.cancel_background_job, job_id, user_id)
 
     @router.post("/assistant/jobs/{job_id}/retry")
     def retry_assistant_job(job_id: str, request: Request) -> dict[str, object]:
         _require_local_desktop(request)
-        return _job_action(service.retry_background_job, job_id)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return _job_action(service.retry_background_job, job_id, user_id)
 
     @router.post(
         "/projects/{project_id}/documents/sync",
@@ -1066,10 +1074,14 @@ def build_desktop_router(
 
     router = APIRouter(prefix="/api/desktop")
 
-    def _plugin_execution_payload(limit: int = 20) -> list[dict[str, object]]:
+    def _plugin_execution_payload(
+        limit: int = 20, *, user_id: str = "local-user",
+    ) -> list[dict[str, object]]:
         if assistant_service is None:
             return []
-        executions = assistant_service.kernel.executions.list_plugin_routes(limit=limit)
+        executions = assistant_service.kernel.executions.list_plugin_routes(
+            limit=limit, user_id=user_id
+        )
         items: list[dict[str, object]] = []
         for execution in executions:
             output = dict(execution.output or {})
@@ -1104,7 +1116,8 @@ def build_desktop_router(
         limit: int = Query(default=20, ge=1, le=100),
     ) -> dict[str, object]:
         _require_local_desktop(request)
-        return {"items": _plugin_execution_payload(limit)}
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return {"items": _plugin_execution_payload(limit, user_id=user_id)}
 
     @router.get("/state")
     def desktop_state(
@@ -1112,6 +1125,7 @@ def build_desktop_router(
         project_id: str | None = Query(default=None, alias="projectId"),
     ) -> dict[str, object]:
         _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         events = _desktop_events(bridge, 0)["events"]
         snapshot: dict[str, object] = {
             "status": "ok",
@@ -1123,11 +1137,18 @@ def build_desktop_router(
             "projectState": None,
             "events": events[-20:],
             "latestEventCursor": int(events[-1]["cursor"]) if events else 0,
-            "pluginExecutions": _plugin_execution_payload(),
+            "pluginExecutions": _plugin_execution_payload(user_id=user_id),
         }
-        active_memories = coordinator.memory.list_records(status=MemoryStatus.ACTIVE, limit=500)
-        candidate_memories = coordinator.memory.list_records(status=MemoryStatus.CANDIDATE, limit=500)
-        jobs = assistant_service.list_background_jobs(limit=20) if assistant_service is not None else []
+        active_memories = coordinator.memory.list_records(
+            status=MemoryStatus.ACTIVE, limit=500, user_id=user_id
+        )
+        candidate_memories = coordinator.memory.list_records(
+            status=MemoryStatus.CANDIDATE, limit=500, user_id=user_id
+        )
+        jobs = (
+            assistant_service.list_background_jobs(limit=20, user_id=user_id)
+            if assistant_service is not None else []
+        )
         plugins = []
         if plugin_host is not None:
             plugins = [
@@ -1141,7 +1162,7 @@ def build_desktop_router(
             ]
         if plugin_platform is not None:
             for entry in plugin_platform.catalog():
-                status = plugin_platform.status(entry.id)
+                status = plugin_platform.status(entry.id, user_id)
                 plugins.append({
                     "pluginId": entry.id,
                     "name": entry.name,
@@ -1163,7 +1184,9 @@ def build_desktop_router(
                         "paused": "resume",
                         "disabled": "configure",
                     }.get(status, "connect"),
-                    "approvedPermissions": _platform_permissions(plugin_platform, entry.id),
+                    "approvedPermissions": _platform_permissions(
+                        plugin_platform, entry.id, user_id
+                    ),
                 })
         snapshot["controlCenter"] = {
             "sections": [

@@ -57,7 +57,7 @@ class BackgroundExecutionSupervisor:
             self._futures[job_id] = future
         return job_id
 
-    def get(self, job_id: str) -> dict[str, object]:
+    def get(self, job_id: str, *, user_id: str | None = None) -> dict[str, object]:
         with self.store._connect() as connection:
             row = connection.execute(
                 "SELECT job_id, request_id, status, input_json, result_json, error, created_at, updated_at, "
@@ -66,7 +66,7 @@ class BackgroundExecutionSupervisor:
             ).fetchone()
         if row is None:
             raise KeyError(f"Assistant job not found: {job_id}")
-        return {
+        job = {
             "jobId": row["job_id"],
             "requestId": row["request_id"],
             "status": row["status"],
@@ -78,61 +78,93 @@ class BackgroundExecutionSupervisor:
             "leaseOwner": row["lease_owner"],
             "leaseExpiresAt": row["lease_expires_at"],
         }
+        if user_id is not None and self._job_user_id(job) != user_id:
+            raise KeyError(f"Assistant job not found: {job_id}")
+        return job
 
-    def find_by_request_id(self, request_id: str) -> dict[str, object] | None:
+    def find_by_request_id(
+        self, request_id: str, *, user_id: str | None = None,
+    ) -> dict[str, object] | None:
         """Return the durable job for a request, if one already exists."""
 
         with self.store._connect() as connection:
-            row = connection.execute(
-                "SELECT job_id FROM assistant_jobs WHERE request_id = ? "
-                "ORDER BY created_at DESC LIMIT 1",
+            rows = connection.execute(
+                "SELECT job_id, input_json FROM assistant_jobs WHERE request_id = ? "
+                "ORDER BY created_at DESC",
                 (request_id,),
-            ).fetchone()
-        return self.get(str(row["job_id"])) if row is not None else None
+            ).fetchall()
+        for row in rows:
+            job = self.get(str(row["job_id"]))
+            if user_id is None or self._job_user_id(job) == user_id:
+                return job
+        return None
 
-    def list_jobs(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
+    def list_jobs(
+        self, *, status: str | None = None, limit: int = 100,
+        user_id: str | None = None,
+    ) -> list[dict[str, object]]:
         if limit < 1 or limit > 500:
             raise ValueError("limit must be between 1 and 500")
         with self.store._connect() as connection:
-            if status is None:
+            if status is None and user_id is None:
                 rows = connection.execute(
                     "SELECT job_id FROM assistant_jobs ORDER BY created_at DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
-            else:
+            elif status is None:
                 rows = connection.execute(
-                    "SELECT job_id FROM assistant_jobs WHERE status = ? "
-                    "ORDER BY created_at DESC LIMIT ?",
-                    (status, limit),
+                    "SELECT job_id FROM assistant_jobs ORDER BY created_at DESC",
                 ).fetchall()
-        return [self.get(str(row["job_id"])) for row in rows]
+            else:
+                query = "SELECT job_id FROM assistant_jobs WHERE status = ? ORDER BY created_at DESC"
+                parameters: tuple[object, ...] = (status,)
+                if user_id is None:
+                    query += " LIMIT ?"
+                    parameters += (limit,)
+                rows = connection.execute(query, parameters).fetchall()
+        jobs = [self.get(str(row["job_id"])) for row in rows]
+        if user_id is not None:
+            jobs = [job for job in jobs if self._job_user_id(job) == user_id]
+        return jobs[:limit]
 
-    def pause(self, job_id: str) -> dict[str, object]:
-        return self._transition(job_id, "paused", {"queued", "running", "paused"})
+    def pause(self, job_id: str, *, user_id: str | None = None) -> dict[str, object]:
+        self.get(job_id, user_id=user_id)
+        return self._transition(job_id, "paused", {"queued", "running", "paused"}, user_id=user_id)
 
-    def cancel(self, job_id: str) -> dict[str, object]:
-        return self._transition(job_id, "cancelled", {"queued", "running", "paused", "cancelled"})
+    def cancel(self, job_id: str, *, user_id: str | None = None) -> dict[str, object]:
+        self.get(job_id, user_id=user_id)
+        return self._transition(
+            job_id, "cancelled", {"queued", "running", "paused", "cancelled"}, user_id=user_id
+        )
 
     def resume(
         self,
         job_id: str,
         operation_factory: Callable[[dict[str, object]], Callable[[], dict[str, Any]]] | None = None,
+        *,
+        user_id: str | None = None,
     ) -> dict[str, object]:
+        self.get(job_id, user_id=user_id)
         return self._restart(
             job_id,
             expected={"paused"},
             operation_factory=operation_factory,
+            user_id=user_id,
         )
 
     def retry(
         self,
         job_id: str,
         operation_factory: Callable[[dict[str, object]], Callable[[], dict[str, Any]]] | None = None,
+        *,
+        user_id: str | None = None,
     ) -> dict[str, object]:
+        self.get(job_id, user_id=user_id)
         return self._restart(
             job_id,
             expected={"failed", "cancelled"},
             operation_factory=operation_factory,
+            user_id=user_id,
         )
 
     def shutdown(self, *, wait: bool = True) -> None:
@@ -233,7 +265,9 @@ class BackgroundExecutionSupervisor:
             )
         return cursor.rowcount == 1
 
-    def _transition(self, job_id: str, target: str, allowed: set[str]) -> dict[str, object]:
+    def _transition(
+        self, job_id: str, target: str, allowed: set[str], *, user_id: str | None = None,
+    ) -> dict[str, object]:
         allowed_placeholders = ", ".join("?" for _ in allowed)
         with self.store._connect() as connection:
             cursor = connection.execute(
@@ -256,7 +290,7 @@ class BackgroundExecutionSupervisor:
                 raise JobTransitionError(
                     f"Assistant job {job_id} changed before it could transition to {target}"
                 )
-        return self.get(job_id)
+        return self.get(job_id, user_id=user_id)
 
     def _restart(
         self,
@@ -264,8 +298,9 @@ class BackgroundExecutionSupervisor:
         *,
         expected: set[str],
         operation_factory: Callable[[dict[str, object]], Callable[[], dict[str, Any]]] | None,
+        user_id: str | None,
     ) -> dict[str, object]:
-        job = self.get(job_id)
+        job = self.get(job_id, user_id=user_id)
         status = str(job["status"])
         if status not in expected:
             raise JobTransitionError(
@@ -295,7 +330,16 @@ class BackgroundExecutionSupervisor:
         future = self._pool.submit(self._run, job_id, operation)
         with self._lock:
             self._futures[job_id] = future
-        return self.get(job_id)
+        return self.get(job_id, user_id=user_id)
+
+    @staticmethod
+    def _job_user_id(job: dict[str, object]) -> str:
+        input_data = job.get("input")
+        if isinstance(input_data, dict):
+            value = input_data.get("userId")
+            if isinstance(value, str) and value.strip():
+                return value
+        return "local-user"
 
     def _update_if_current(
         self,

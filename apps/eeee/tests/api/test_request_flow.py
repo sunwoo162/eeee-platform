@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import Event, Lock
 from time import monotonic
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.agent.protocol import AgentRequest, AgentResult
@@ -249,6 +250,60 @@ def test_request_research_approval_and_execution_flow(tmp_path):
 
     retry_completed = client.post(f"/api/runs/{run_id}/retry")
     assert retry_completed.status_code == 409
+
+
+def test_legacy_request_and_run_routes_are_user_scoped(tmp_path):
+    client, _runtime = make_client(tmp_path)
+    user_a = {"X-EEEE-User-Id": "user-a"}
+    user_b = {"X-EEEE-User-Id": "user-b"}
+
+    created = client.post(
+        "/api/requests",
+        headers=user_a,
+        json={"text": "Build a web app"},
+    )
+    assert created.status_code == 200
+    request_id = created.json()["request_id"]
+    run_id = created.json()["run_id"]
+    transcript_a = client.app.state.conversation_store.get_transcript(
+        "desktop-default", user_id="user-a"
+    )
+    assert transcript_a["turns"][-1]["requestId"] == request_id
+    with pytest.raises(KeyError):
+        client.app.state.conversation_store.get_transcript(
+            "desktop-default", user_id="user-b"
+        )
+
+    assert client.get(f"/api/requests/{request_id}", headers=user_a).status_code == 200
+    assert client.get(
+        f"/api/requests/{request_id}/project-brief", headers=user_a
+    ).status_code == 200
+    assert client.post(
+        f"/api/requests/{request_id}/research", headers=user_a
+    ).status_code == 200
+    assert client.post(
+        f"/api/requests/{request_id}/approve",
+        headers=user_a,
+        json={"selected": ["owner/alpha"]},
+    ).status_code == 200
+    assert client.get(f"/api/runs/{run_id}", headers=user_a).status_code == 200
+
+    assert client.get(f"/api/requests/{request_id}", headers=user_b).status_code == 404
+    assert client.get(
+        f"/api/requests/{request_id}/project-brief", headers=user_b
+    ).status_code == 404
+    assert client.post(
+        f"/api/requests/{request_id}/research", headers=user_b
+    ).status_code == 404
+    assert client.post(
+        f"/api/requests/{request_id}/approve",
+        headers=user_b,
+        json={"selected": ["owner/alpha"]},
+    ).status_code == 404
+    assert client.get(f"/api/runs/{run_id}", headers=user_b).status_code == 404
+    assert client.post(f"/api/runs/{run_id}/execute", headers=user_b).status_code == 404
+    assert client.post(f"/api/runs/{run_id}/retry", headers=user_b).status_code == 404
+    assert client.get("/api/runs", headers=user_b).json() == []
 
 
 def test_legacy_request_can_join_a_named_assistant_conversation(tmp_path):

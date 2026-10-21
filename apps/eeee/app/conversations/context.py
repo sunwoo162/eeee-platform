@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from app.conversations.models import ConversationMessage, MessageRole, MessageStatus
 from app.conversations.store import ConversationStore
 from app.memory.models import MemoryStatus
 from app.memory.store import MemoryStore
@@ -65,6 +66,8 @@ class ConversationContextBuilder:
         transcript: list[dict[str, str]] = []
         used = sum(len(item["content"]) for item in memory_items)
         for message in reversed(self.store.get_messages(conversation_id, limit=500)):
+            if not _is_usable_context_message(message):
+                continue
             item = {"role": message.role.value, "content": message.content}
             size = len(message.content)
             if size > max_characters - used:
@@ -74,6 +77,23 @@ class ConversationContextBuilder:
         # Memories are only sourced from active records. Raw conversation turns
         # remain transcript context and are never promoted implicitly.
         return memory_items + list(reversed(transcript))
+
+
+def _is_usable_context_message(message: ConversationMessage) -> bool:
+    """Return whether a persisted message is safe to send back to a provider.
+
+    The transcript is the user-facing audit trail, so failed and interrupted
+    assistant output must remain stored. It is not, however, a trustworthy
+    conversational turn: a partial stream can contain invented or incomplete
+    instructions and would cause the next request to build on a failed run.
+    User, system, and tool messages keep their existing behavior. Pending
+    assistant messages are intentional durable acknowledgements for queued
+    work and remain useful context until a completed result replaces them.
+    """
+
+    if message.role is not MessageRole.ASSISTANT:
+        return True
+    return message.status in {MessageStatus.PENDING, MessageStatus.COMPLETED}
 
 
 def _is_usable_memory(memory, conversation_id: str, *, automatic: bool) -> bool:

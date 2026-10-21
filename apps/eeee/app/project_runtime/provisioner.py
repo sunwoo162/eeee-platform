@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from app.domain.models import Project, RequestBrief
-from app.project_runtime.connectors import ProjectConnector, build_default_connectors
+from app.project_runtime.connectors import PlanningConnector, ProjectConnector, build_default_connectors
 from app.project_runtime.models import ProjectProfile, ProjectProvisioningResult
 from app.project_runtime.scaffold import create_todo_scaffold
 from app.project_runtime.web_scaffold import create_web_app_scaffold
@@ -27,12 +28,14 @@ class ProjectProvisioner:
         self,
         store: SQLiteStore,
         connectors: Mapping[str, ProjectConnector] | None = None,
+        configured_connector_ids: Callable[[], set[str]] | None = None,
         iseol_bridge: IseolPlanBridge | None = None,
         todo_runner: TodoProjectRunner | None = None,
         web_runner: WebProjectRunner | None = None,
     ) -> None:
         self.store = store
         self.connectors = dict(connectors or build_default_connectors())
+        self.configured_connector_ids = configured_connector_ids
         self.iseol_bridge = iseol_bridge
         self.todo_runner = todo_runner or TodoProjectRunner()
         self.web_runner = web_runner or WebProjectRunner()
@@ -83,7 +86,11 @@ class ProjectProvisioner:
                 "connectors": "local_connector_registry",
             },
         )
-        bindings = [connector.plan(profile) for connector in self.connectors.values()]
+        configured = set(self.configured_connector_ids() if self.configured_connector_ids else ())
+        bindings = [
+            _plan_connector(connector, profile, configured)
+            for connector in self.connectors.values()
+        ]
         profile = profile.model_copy(update={"connectors": bindings})
         self.store.save_project_profile(profile)
         self._write_local_project_documents(profile, request, planning_handoff)
@@ -198,6 +205,16 @@ def _result(profile: ProjectProfile, *, execution_plan_path: str | None = None) 
         if binding.state == "awaiting_configuration"
     )
     return ProjectProvisioningResult(profile=profile, missing_connectors=missing, execution_plan_path=execution_plan_path)
+
+
+def _plan_connector(
+    connector: ProjectConnector,
+    profile: ProjectProfile,
+    configured_connector_ids: set[str],
+) -> ConnectorBinding:
+    if isinstance(connector, PlanningConnector) and connector.connector_id in configured_connector_ids:
+        connector = replace(connector, configured=True)
+    return connector.plan(profile)
 
 
 def _is_todo_request(goal: str, scope: list[str]) -> bool:

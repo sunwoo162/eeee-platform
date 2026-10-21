@@ -2,6 +2,26 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.plugins.connectors import ConnectorConnection, ConnectorHealth
+from app.plugins.credentials import MemoryCredentialStore
+
+
+class _HealthyNotionConnector:
+    plugin_id = "notion"
+
+    def connect(self, user_id, credential, approved_permissions):
+        return ConnectorConnection(
+            user_id=user_id,
+            plugin_id=self.plugin_id,
+            approved_permissions=frozenset(approved_permissions),
+            client=object(),
+        )
+
+    def disconnect(self, connection):
+        return None
+
+    def health(self, connection):
+        return ConnectorHealth(status="healthy", code="healthy", reason="ok")
 
 
 def test_app_uses_builtin_for_basic_chat_without_external_provider(monkeypatch, tmp_path):
@@ -19,6 +39,20 @@ def test_app_uses_builtin_for_basic_chat_without_external_provider(monkeypatch, 
     assert "안녕" in payload["message"]
     assert payload["response_verification"]["decision"] == "WARN"
     assert "LLM_API_KEY" not in payload["message"]
+
+
+def test_connected_plugin_state_flows_into_project_provisioner(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
+    application = create_app(Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces"))
+    application.state.plugin_platform.credentials = MemoryCredentialStore()
+    application.state.plugin_platform.connectors = {"notion": _HealthyNotionConnector()}
+    application.state.plugin_platform.install("notion")
+    application.state.plugin_platform.connect(
+        "local-user", "notion", {"pages.read"}, {"token": "secret"}, "Workspace"
+    )
+
+    assert application.state.api_flow.project_provisioner.configured_connector_ids() == {"notion"}
 
 
 def test_unconfigured_project_lane_uses_provider_neutral_runtime(monkeypatch, tmp_path):

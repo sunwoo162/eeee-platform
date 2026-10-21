@@ -206,6 +206,10 @@ def create_app(
     project_provisioner = ProjectProvisioner(
         store,
         connectors=build_default_connectors(configured=configured_connectors),
+        configured_connector_ids=lambda: {
+            *configured_connectors,
+            *plugin_platform.connected_connector_ids("local-user"),
+        },
         iseol_bridge=IseolPlanBridge(timeout=app_settings.command_timeout_seconds),
     )
     app_settings.workspace_root.mkdir(parents=True, exist_ok=True)

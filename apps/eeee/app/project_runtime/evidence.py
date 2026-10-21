@@ -25,9 +25,9 @@ class ProjectEvidenceService:
         self.event_publisher = event_publisher
 
     def ingest_github_review(
-        self, result: GithubReviewResultV1
+        self, result: GithubReviewResultV1, *, user_id: str = "local-user"
     ) -> ProjectEvidenceIngestionResult:
-        project = self.store.get_project(result.project_id)
+        project = self.store.get_project(result.project_id, user_id=user_id)
         if project.revision != result.project_revision:
             raise ApprovalError(
                 "Cannot ingest GitHub review evidence: stale project revision "
@@ -68,6 +68,7 @@ class ProjectEvidenceService:
                     "headSha": result.head_sha,
                     "reason": trust.reason,
                 },
+                user_id=user_id,
             )
             return ProjectEvidenceIngestionResult(
                 status="blocked", trust=trust, reason=trust.reason
@@ -96,12 +97,15 @@ class ProjectEvidenceService:
                 "findingsCount": result.findings_count,
                 "trustDecision": trust.decision,
             },
+            user_id=user_id,
         )
         return ProjectEvidenceIngestionResult(status="accepted", evidence=evidence, trust=trust)
 
-    def _publish(self, kind: str, payload: dict[str, object]) -> None:
+    def _publish(
+        self, kind: str, payload: dict[str, object], *, user_id: str = "local-user"
+    ) -> None:
         if self.event_publisher is not None:
-            self.event_publisher(kind, payload)
+            self.event_publisher(kind, {**payload, "userId": user_id})
 
 
 def _content_hash(value: dict[str, object]) -> str:

@@ -1437,6 +1437,7 @@ def build_api_router(
     def ingest_github_review_evidence(
         project_id: str,
         payload: GithubReviewResultV1,
+        request: Request,
         bridge_token: str | None = Header(default=None, alias="X-Gleave-Bridge-Token"),
     ) -> ProjectEvidenceIngestionResult:
         if iseol_bridge_token is not None and bridge_token != iseol_bridge_token:
@@ -1445,8 +1446,11 @@ def build_api_router(
             raise HTTPException(status_code=409, detail="Evidence project does not match the route")
         if evidence is None:
             raise HTTPException(status_code=503, detail="Project evidence service is unavailable")
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
-            return evidence.ingest_github_review(payload)
+            return evidence.ingest_github_review(payload, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ApprovalError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

@@ -1379,11 +1379,13 @@ def build_api_router(
     @router.post("/requests", response_model=RequestResponse)
     def create_api_request(payload: RequestPayload, request: Request) -> RequestResponse:
         _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
             request_id, brief, run_id = flow.create_request(
                 payload.text,
                 payload.workspace,
                 conversation_id=payload.conversation_id,
+                user_id=user_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1392,7 +1394,11 @@ def build_api_router(
     @router.get("/requests/{request_id}", response_model=RequestSnapshotResponse)
     def get_api_request(request_id: str, request: Request) -> RequestSnapshotResponse:
         _require_local_desktop(request)
-        snapshot = flow.get_request_snapshot(request_id)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        try:
+            snapshot = flow.get_request_snapshot(request_id, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return RequestSnapshotResponse(
             **snapshot.model_dump(mode="python"),
             work_plan=build_work_plan(snapshot.brief, snapshot.candidates),
@@ -1401,11 +1407,16 @@ def build_api_router(
     @router.get("/requests/{request_id}/project-brief", response_model=ProjectBriefV1)
     def get_project_brief(request_id: str, request: Request) -> ProjectBriefV1:
         _require_local_desktop(request)
-        project_id, _workspace = flow.store.get_request_context(request_id)
         user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
-        return flow.coordinator.build_project_brief(
-            project_id, request_id, user_id=user_id
-        )
+        try:
+            project_id, _workspace, _project = flow._project_for_request(
+                request_id, user_id=user_id
+            )
+            return flow.coordinator.build_project_brief(
+                project_id, request_id, user_id=user_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.post(
         "/projects/{project_id}/outcomes",
@@ -1607,8 +1618,11 @@ def build_api_router(
     @router.post("/requests/{request_id}/research", response_model=ResearchResponse)
     def research_api_request(request_id: str, request: Request) -> ResearchResponse:
         _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         try:
-            candidates, work_plan = flow.research(request_id)
+            candidates, work_plan = flow.research(request_id, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return ResearchResponse(candidates=candidates, work_plan=work_plan)
@@ -1618,7 +1632,13 @@ def build_api_router(
         request_id: str, payload: ApprovalPayload, request: Request
     ) -> ApprovalResponse:
         _require_local_desktop(request)
-        decision, run_id, decision_events = flow.approve(request_id, payload.selected)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        try:
+            decision, run_id, decision_events = flow.approve(
+                request_id, payload.selected, user_id=user_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return ApprovalResponse(
             decision=decision,
             run_id=run_id,
@@ -1628,7 +1648,11 @@ def build_api_router(
     @router.post("/runs/{run_id}/execute", response_model=Run)
     def execute_api_run(run_id: str, request: Request) -> Run:
         _require_local_desktop(request)
-        return flow.execute(run_id)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        try:
+            return flow.execute(run_id, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.get("/runs", response_model=list[Run])
     def list_api_runs(
@@ -1644,6 +1668,7 @@ def build_api_router(
         offset: int = Query(default=0, ge=0),
     ) -> list[Run]:
         _require_local_desktop(request)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
         runs, total = flow.list_runs_with_count(
             request_id,
             status=status,
@@ -1653,6 +1678,7 @@ def build_api_router(
             sort=sort,
             limit=None if limit is None else limit + 1,
             offset=offset,
+            user_id=user_id,
         )
         response.headers["X-Total-Count"] = str(total)
         if limit is None:
@@ -1664,12 +1690,20 @@ def build_api_router(
     @router.post("/runs/{run_id}/retry", response_model=Run)
     def retry_api_run(run_id: str, request: Request) -> Run:
         _require_local_desktop(request)
-        return flow.retry(run_id)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        try:
+            return flow.retry(run_id, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.get("/runs/{run_id}", response_model=Run)
     def get_api_run(run_id: str, request: Request) -> Run:
         _require_local_desktop(request)
-        return flow.get_run(run_id)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        try:
+            return flow.get_run(run_id, user_id=user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return router
 

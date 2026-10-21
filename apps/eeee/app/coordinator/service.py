@@ -157,7 +157,7 @@ class Coordinator:
     ) -> ProjectBriefV1:
         """Retrieve verified memory before ISEOL decomposes the next project."""
 
-        project = self.store.get_project(project_id)
+        project = self.store.get_project(project_id, user_id=user_id)
         request = self.store.get_request(request_id)
         memories = self.memory.search(request.raw_text, user_id=user_id, limit=50)
         memory_ids = [memory.id for memory in memories]
@@ -214,7 +214,7 @@ class Coordinator:
             task.id,
             {"action": "request_created", "actor": "user", "request_id": request_id},
         )
-        return self.get_state(project_id)
+        return self.get_state(project_id, user_id=user_id)
 
     def get_state(self, project_id: str, *, user_id: str | None = None) -> PetViewModel:
         project = self.store.get_project(project_id, user_id=user_id)
@@ -277,7 +277,7 @@ class Coordinator:
                 updated.id,
                 {"action": "plan_write_failed", "actor": "coordinator"},
             )
-            return self.get_state(project_id)
+            return self.get_state(project_id, user_id=user_id)
         self.approvals.approve_decision(request_id, selected)
         updated = self.store.update_task(
             task.id,
@@ -294,7 +294,7 @@ class Coordinator:
                 "artifacts": [{"type": "plan", "path": str(plan_path)}],
             },
         )
-        return self.get_state(project_id)
+        return self.get_state(project_id, user_id=user_id)
 
     def advance_task(
         self, project_id: str, task_id: str, *, user_id: str | None = None
@@ -326,7 +326,7 @@ class Coordinator:
                         "status_code": exc.status_code,
                     },
                 )
-                return self.get_state(project_id)
+                return self.get_state(project_id, user_id=user_id)
             self.store.save_candidates(task.request_id, candidates)
             updated = self.store.update_task(
                 task.id,
@@ -338,7 +338,7 @@ class Coordinator:
                 updated.id,
                 {"action": "research_completed", "actor": "coordinator", "candidate_count": len(candidates)},
             )
-            return self.get_state(project_id)
+            return self.get_state(project_id, user_id=user_id)
         if task.state == PetState.awaiting_approval:
             raise ApprovalError("Approval required before work can continue")
         if task.state in {PetState.working, PetState.verifying}:
@@ -353,7 +353,7 @@ class Coordinator:
                     updated.id,
                     {"action": "stale_revision", "actor": "coordinator", "revision": project.revision},
                 )
-                return self.get_state(project_id)
+                return self.get_state(project_id, user_id=user_id)
             if task.state == PetState.verifying and self.verifier is not None:
                 try:
                     verification = self.verifier.verify(project.workspace)
@@ -372,7 +372,7 @@ class Coordinator:
                             "reason": str(exc),
                         },
                     )
-                    return self.get_state(project_id)
+                    return self.get_state(project_id, user_id=user_id)
                 report_payload = verification.as_report_payload()
                 if verification.status == "passed":
                     next_state = PetState.completed
@@ -406,7 +406,7 @@ class Coordinator:
                         updated.id,
                         {"action": "verification_write_failed", "actor": "coordinator"},
                     )
-                    return self.get_state(project_id)
+                    return self.get_state(project_id, user_id=user_id)
                 report_id = str(uuid4())
                 report = {
                     "id": report_id,
@@ -438,7 +438,7 @@ class Coordinator:
                 updated.id,
                 {"action": next_state.value, "actor": "coordinator", "revision": updated.revision},
             )
-            return self.get_state(project_id)
+            return self.get_state(project_id, user_id=user_id)
         if task.state == PetState.completed:
             raise ApprovalError("Task is already completed")
         raise ApprovalError("Task requires retry before it can continue")
@@ -454,8 +454,8 @@ class Coordinator:
                 raise ApprovalError("Task does not belong to the active project")
             if state.state not in {PetState.researching, PetState.working, PetState.verifying}:
                 return state
-            self.advance_task(project_id, task_id)
-        return self.get_state(project_id)
+            self.advance_task(project_id, task_id, user_id=user_id)
+        return self.get_state(project_id, user_id=user_id)
 
     def retry_task(
         self, project_id: str, task_id: str, *, user_id: str | None = None
@@ -488,7 +488,7 @@ class Coordinator:
             updated.id,
             {"action": "retry_requested", "actor": "user", "revision": project.revision},
         )
-        return self.get_state(project_id)
+        return self.get_state(project_id, user_id=user_id)
 
     def _active_task(self, project: Project) -> TaskRecord:
         if project.active_task_id is None:

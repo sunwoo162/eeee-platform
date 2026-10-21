@@ -72,6 +72,7 @@ class ApiFlowService:
         workspace: str | None,
         *,
         conversation_id: str = "desktop-default",
+        user_id: str = "local-user",
     ) -> tuple[str, RequestBrief, str]:
         # `/api/requests` is the legacy project workbench endpoint. The new
         # `/api/assistant/route` endpoint is the canonical intent-aware entrypoint;
@@ -80,17 +81,21 @@ class ApiFlowService:
         project_id = f"api-{uuid4().hex}"
         workspace_path = self._resolve_workspace(workspace, project_id)
         workspace_path.mkdir(parents=True, exist_ok=True)
-        self.coordinator.create_project(project_id, text[:80], str(workspace_path))
-        state = self.coordinator.create_request(project_id, text)
+        self.coordinator.create_project(
+            project_id, text[:80], str(workspace_path), user_id=user_id
+        )
+        state = self.coordinator.create_request(project_id, text, user_id=user_id)
         if state.request_id is None:
             raise RuntimeError("Created request did not produce a request ID")
         request_id = state.request_id
         self.store.save_request_context(
             request_id, project_id, str(workspace_path), conversation_id
         )
-        project_brief = self.coordinator.build_project_brief(project_id, request_id)
+        project_brief = self.coordinator.build_project_brief(
+            project_id, request_id, user_id=user_id
+        )
         self.project_provisioner.provision(
-            self.store.get_project(project_id),
+            self.store.get_project(project_id, user_id=user_id),
             self.store.get_request(request_id),
             memory_ids=project_brief.retrieved_memory_ids,
             qa_baseline_ids=project_brief.qa_baseline_ids,
@@ -102,32 +107,46 @@ class ApiFlowService:
             text,
             "프로젝트 요청을 접수했어. 조사와 승인 후 실행할 수 있어.",
             MessageStatus.PENDING,
+            user_id=user_id,
         )
         return request_id, self.store.get_request(request_id), run.id
 
-    def research(self, request_id: str) -> tuple[list[CandidateScore], WorkPlan]:
-        project_id, _workspace = self.store.get_request_context(request_id)
-        state = self.coordinator.get_state(project_id)
+    def research(
+        self, request_id: str, *, user_id: str | None = None
+    ) -> tuple[list[CandidateScore], WorkPlan]:
+        project_id, _workspace, _project = self._project_for_request(
+            request_id, user_id=user_id
+        )
+        state = self.coordinator.get_state(project_id, user_id=user_id)
         if state.state.value == "researching":
-            state = self.coordinator.advance_task(project_id, state.task_id or "")
+            state = self.coordinator.advance_task(
+                project_id, state.task_id or "", user_id=user_id
+            )
         if state.state.value == "failed":
             raise RuntimeError(state.message)
         candidates = self.store.get_candidates(request_id)
         return candidates, build_work_plan(self.store.get_request(request_id), candidates)
 
     def approve(
-        self, request_id: str, selected: list[str]
+        self, request_id: str, selected: list[str], *, user_id: str | None = None
     ) -> tuple[Decision, str, list[dict[str, object]]]:
-        project_id, _workspace = self.store.get_request_context(request_id)
-        self.coordinator.approve_selection(project_id, request_id, selected)
+        project_id, _workspace, _project = self._project_for_request(
+            request_id, user_id=user_id
+        )
+        self.coordinator.approve_selection(
+            project_id, request_id, selected, user_id=user_id
+        )
         decision = self.store.get_decision(request_id)
         if decision is None or not decision.approved:
             raise ApprovalError("Approval was not persisted")
         run = self.store.get_run_for_request(request_id)
         return decision, run.id, self.store.get_decision_events(request_id)
 
-    def execute(self, run_id: str) -> Run:
+    def execute(self, run_id: str, *, user_id: str | None = None) -> Run:
         run = self.store.get_run(run_id)
+        project_id, _workspace, project = self._project_for_request(
+            run.request_id, user_id=user_id
+        )
         decision = self.store.get_decision(run.request_id)
         if decision is None or not decision.approved:
             raise ApprovalError("Run execution requires an approved decision")
@@ -184,8 +203,6 @@ class ApiFlowService:
                     error=f"Agent runtime returned non-terminal status: {result.status}",
                 )
             events = list(result.events)
-            project_id, _workspace = self.store.get_request_context(run.request_id)
-            project = self.store.get_project(project_id)
             trust_envelope = ExecutionEnvelope(
                 execution_id=f"{run.id}:agent-result",
                 request_id=run.request_id,
@@ -273,6 +290,7 @@ class ApiFlowService:
                 if result.status == "completed"
                 else MessageStatus.FAILED,
                 error_code=result.error,
+                user_id=user_id or "local-user",
             )
             return completed if completed is not None else self.store.get_run(run_id)
         except Exception:
@@ -291,6 +309,7 @@ class ApiFlowService:
                     "프로젝트 실행 결과를 저장하지 못했어.",
                     MessageStatus.FAILED,
                     error_code="legacy_run_persistence_failed",
+                    user_id=user_id or "local-user",
                 )
             except Exception:
                 pass
@@ -303,8 +322,10 @@ class ApiFlowService:
         if self.event_publisher is not None:
             self.event_publisher(kind, payload)
 
-    def get_run(self, run_id: str) -> Run:
-        return self.store.get_run(run_id)
+    def get_run(self, run_id: str, *, user_id: str | None = None) -> Run:
+        run = self.store.get_run(run_id)
+        self._project_for_request(run.request_id, user_id=user_id)
+        return run
 
     def list_runs(
         self,
@@ -317,7 +338,21 @@ class ApiFlowService:
         sort: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> list[Run]:
+        if user_id is not None:
+            runs, _total = self.list_runs_with_count(
+                request_id,
+                status=status,
+                search=search,
+                created_after=created_after,
+                created_before=created_before,
+                sort=sort,
+                limit=limit,
+                offset=offset,
+                user_id=user_id,
+            )
+            return runs
         return self.store.list_runs(
             request_id,
             status=status,
@@ -337,7 +372,18 @@ class ApiFlowService:
         search: str | None = None,
         created_after: str | None = None,
         created_before: str | None = None,
+        user_id: str | None = None,
     ) -> int:
+        if user_id is not None:
+            _runs, total = self.list_runs_with_count(
+                request_id,
+                status=status,
+                search=search,
+                created_after=created_after,
+                created_before=created_before,
+                user_id=user_id,
+            )
+            return total
         return self.store.count_runs(
             request_id,
             status=status,
@@ -357,7 +403,28 @@ class ApiFlowService:
         sort: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> tuple[list[Run], int]:
+        if user_id is not None:
+            all_runs = self.store.list_runs(
+                request_id,
+                status=status,
+                search=search,
+                created_after=created_after,
+                created_before=created_before,
+                sort=sort,
+            )
+            owned_runs = []
+            for run in all_runs:
+                try:
+                    self._project_for_request(run.request_id, user_id=user_id)
+                except KeyError:
+                    continue
+                owned_runs.append(run)
+            total = len(owned_runs)
+            if limit is None:
+                return owned_runs[offset:], total
+            return owned_runs[offset : offset + limit], total
         return self.store.list_runs_with_count(
             request_id,
             status=status,
@@ -369,9 +436,13 @@ class ApiFlowService:
             offset=offset,
         )
 
-    def get_request_snapshot(self, request_id: str) -> RequestSnapshot:
+    def get_request_snapshot(
+        self, request_id: str, *, user_id: str | None = None
+    ) -> RequestSnapshot:
+        project_id, workspace, _project = self._project_for_request(
+            request_id, user_id=user_id
+        )
         brief = self.store.get_request(request_id)
-        project_id, workspace = self.store.get_request_context(request_id)
         return RequestSnapshot(
             request_id=request_id,
             project_id=project_id,
@@ -380,11 +451,12 @@ class ApiFlowService:
             candidates=self.store.get_candidates(request_id),
             decision=self.store.get_decision(request_id),
             decision_events=self.store.get_decision_events(request_id),
-            runs=self.store.list_runs(request_id),
+            runs=self.list_runs(request_id, user_id=user_id),
         )
 
-    def retry(self, run_id: str) -> Run:
+    def retry(self, run_id: str, *, user_id: str | None = None) -> Run:
         run = self.store.get_run(run_id)
+        self._project_for_request(run.request_id, user_id=user_id)
         decision = self.store.get_decision(run.request_id)
         if decision is None or not decision.approved:
             raise ApprovalError("Run retry requires an approved decision")
@@ -396,8 +468,16 @@ class ApiFlowService:
             "프로젝트 실행을 다시 준비하고 있어.",
             MessageStatus.PENDING,
             error_code=None,
+            user_id=user_id or "local-user",
         )
         return retried
+
+    def _project_for_request(
+        self, request_id: str, *, user_id: str | None = None
+    ) -> tuple[str, str, object]:
+        project_id, workspace = self.store.get_request_context(request_id)
+        project = self.store.get_project(project_id, user_id=user_id)
+        return project_id, workspace, project
 
     def _record_legacy_request(
         self,
@@ -408,6 +488,7 @@ class ApiFlowService:
         status: MessageStatus,
         *,
         error_code: str | None = None,
+        user_id: str = "local-user",
     ) -> None:
         if self.conversation_store is None:
             return
@@ -418,6 +499,7 @@ class ApiFlowService:
             request_id=request_id,
             assistant_status=status,
             error_code=error_code,
+            user_id=user_id,
         )
         self.conversation_store.record_route_lifecycle(
             conversation_id,
@@ -426,6 +508,7 @@ class ApiFlowService:
             if status is MessageStatus.FAILED
             else "accepted",
             error_code=error_code,
+            user_id=user_id,
         )
 
     def _resolve_workspace(self, requested: str | None, project_id: str) -> Path:

@@ -45,7 +45,11 @@ class BackgroundExecutionSupervisor:
         *, input_data: dict[str, Any] | None = None,
     ) -> str:
         job_id = f"assistant-job-{uuid4().hex}"
-        self._create(job_id, request_id, input_data or {})
+        stored_job_id = self._create(job_id, request_id, input_data or {})
+        if stored_job_id != job_id:
+            # Another request won the durable request-id race.  Reuse its
+            # job instead of starting a second project operation.
+            return stored_job_id
         with self._lock:
             self._operations[job_id] = operation
         future = self._pool.submit(self._run, job_id, operation)
@@ -179,15 +183,24 @@ class BackgroundExecutionSupervisor:
     def _lease_expiry(self) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=self._lease_seconds)).isoformat()
 
-    def _create(self, job_id: str, request_id: str, input_data: dict[str, Any]) -> None:
+    def _create(self, job_id: str, request_id: str, input_data: dict[str, Any]) -> str:
         timestamp = _now()
         with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT job_id FROM assistant_jobs WHERE request_id = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (request_id,),
+            ).fetchone()
+            if existing is not None:
+                return str(existing["job_id"])
             connection.execute(
                 "INSERT INTO assistant_jobs "
                 "(job_id, request_id, status, input_json, result_json, error, created_at, updated_at) "
                 "VALUES (?, ?, 'queued', ?, NULL, NULL, ?, ?)",
                 (job_id, request_id, json.dumps(input_data, ensure_ascii=False), timestamp, timestamp),
             )
+        return job_id
 
     def _run(
         self, job_id: str, operation: Callable[[], dict[str, Any]], claimed: bool = False,

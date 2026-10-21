@@ -204,6 +204,9 @@ def test_request_research_approval_and_execution_flow(tmp_path):
     run_id = created_payload["run_id"]
     assert created_payload["brief"]["target_type"] == "web_app"
     assert workspace.is_dir()
+    transcript = client.app.state.conversation_store.get_transcript("desktop-default")
+    assert transcript["turns"][-1]["status"] == "pending"
+    assert transcript["turns"][-1]["requestId"] == request_id
 
     research = client.post(f"/api/requests/{request_id}/research")
     assert research.status_code == 200
@@ -246,6 +249,24 @@ def test_request_research_approval_and_execution_flow(tmp_path):
 
     retry_completed = client.post(f"/api/runs/{run_id}/retry")
     assert retry_completed.status_code == 409
+
+
+def test_legacy_request_can_join_a_named_assistant_conversation(tmp_path):
+    client, _runtime = make_client(tmp_path)
+
+    created = client.post(
+        "/api/requests",
+        json={
+            "text": "Build a web app",
+            "conversationId": "project-planning-chat",
+        },
+    )
+
+    assert created.status_code == 200
+    request_id = created.json()["request_id"]
+    transcript = client.app.state.conversation_store.get_transcript("project-planning-chat")
+    assert transcript["turns"][-1]["requestId"] == request_id
+    assert transcript["turns"][-1]["status"] == "pending"
 
 
 def test_concurrent_execution_requests_only_start_one_runtime_call(tmp_path):

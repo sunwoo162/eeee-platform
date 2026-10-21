@@ -49,7 +49,9 @@ def test_user_can_request_todo_and_receive_a_generated_project(tmp_path) -> None
     assert payload["project_profile"], payload
     workspace = Path(payload["project_profile"]["workspace"])
     assert payload["selection"]["capability_id"] == "project-execution"
-    assert payload["status"] == "completed", payload
+    # A generated project can have a PASS quality run while the release
+    # review still blocks completion on missing rollback evidence.
+    assert payload["status"] == "blocked", payload
     assert payload["quality_status"] == "PASS", payload
     assert payload["qa_report_path"].endswith("QA_REPORT.json")
     assert payload["release_manifest_path"].endswith("RELEASE_MANIFEST.json")

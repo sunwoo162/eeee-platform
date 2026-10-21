@@ -137,6 +137,7 @@ class AssistantService:
                     )
                     self._remember_turn(
                         conversation_id, text, result.message, request_id=request_id,
+                        status=self._message_status_for_result(result),
                     )
                     return result.model_dump(mode="json")
 
@@ -177,7 +178,13 @@ class AssistantService:
             conversation_id=conversation_id, approved=approved,
             approval_request_id=approval_request_id, request_id=request_id,
         )
-        self._remember_turn(conversation_id, text, result.message, request_id=request_id)
+        self._remember_turn(
+            conversation_id,
+            text,
+            result.message,
+            request_id=request_id,
+            status=self._message_status_for_result(result),
+        )
         return result
 
     def _route_sync(
@@ -329,6 +336,13 @@ class AssistantService:
                 request_id=request_id,
                 assistant_status=status,
             )
+            # ConversationStore is the canonical transcript.  Do not mirror
+            # route turns into the legacy memory table: background completion
+            # would otherwise create a second physical history and make the
+            # provider/context boundary ambiguous.  MemoryStore remains the
+            # compatibility path for embedded callers that have not supplied
+            # a canonical conversation store.
+            return
         memory_store = getattr(self.coordinator, "memory", None)
         if memory_store is None:
             return
@@ -338,6 +352,28 @@ class AssistantService:
         memory_store.append_conversation_turn(
             conversation_id, "assistant", assistant_text, request_id=request_id,
         )
+
+    @staticmethod
+    def _message_status_for_result(result: AssistantRouteResult | object) -> MessageStatus:
+        """Translate route lifecycle into the canonical message lifecycle.
+
+        ``AssistantRouteResult.status`` describes whether EEEE fulfilled the
+        request, while ``MessageStatus`` describes the persisted assistant
+        message.  A non-empty explanation for a blocked or unsupported route
+        is still a failed request, not a completed one.
+        """
+
+        route_status = getattr(result, "status", None)
+        if not isinstance(route_status, str):
+            dump = getattr(result, "model_dump", None)
+            payload = dump(mode="json") if callable(dump) else {}
+            route_status = payload.get("status") if isinstance(payload, dict) else None
+
+        if route_status == "accepted":
+            return MessageStatus.PENDING
+        if route_status == "completed":
+            return MessageStatus.COMPLETED
+        return MessageStatus.FAILED
 
     def get_project_profile(self, project_id: str) -> ProjectProfile:
         return self.store.get_project_profile(project_id)
@@ -406,7 +442,11 @@ class AssistantService:
                 request_id=resolved_request_id,
             )
             self._remember_turn(
-                resolved_conversation_id, text, result.message, request_id=resolved_request_id,
+                resolved_conversation_id,
+                text,
+                result.message,
+                request_id=resolved_request_id,
+                status=self._message_status_for_result(result),
             )
             return result.model_dump(mode="json")
 

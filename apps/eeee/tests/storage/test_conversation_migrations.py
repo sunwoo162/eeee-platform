@@ -23,7 +23,7 @@ def test_conversation_migration_is_applied_without_removing_legacy_tables(tmp_pa
 
     assert {"projects", "requests", "memory_records", "conversations", "messages"} <= tables
     assert {"assistant_requests", "assistant_events"} <= tables
-    assert versions == [(1,), (2,)]
+    assert versions == [(1,), (2,), (3,)]
 
 
 def test_migration_preserves_an_existing_project(tmp_path) -> None:

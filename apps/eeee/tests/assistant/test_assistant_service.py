@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.assistant.registry import build_default_registry
 from app.assistant.router import CapabilityRouter
 from app.assistant.service import AssistantService
@@ -11,6 +13,74 @@ from app.storage.sqlite import SQLiteStore
 from app.runtime.store import ExecutionStore
 from app.agent.protocol import AgentResult
 from app.memory.models import MemoryCandidate
+from app.conversations.models import MessageStatus
+from app.conversations.store import ConversationStore
+
+
+@pytest.mark.parametrize(
+    ("route_status", "expected_message_status"),
+    [
+        ("blocked", MessageStatus.FAILED),
+        ("unsupported", MessageStatus.FAILED),
+        ("needs_clarification", MessageStatus.FAILED),
+    ],
+)
+def test_assistant_route_maps_non_completed_result_status_to_canonical_message_status(
+    tmp_path, route_status, expected_message_status
+) -> None:
+    class FakeKernel:
+        def route(self, _request, _context):
+            envelope = ExecutionEnvelope(
+                executionId=f"{route_status}-execution",
+                requestId=f"{route_status}-request",
+                capabilityId="general-conversation",
+                toolId="eeee.route",
+                actor="EEEE",
+            )
+            running = envelope.transition(ExecutionStatus.RUNNING)
+            return running.transition(
+                ExecutionStatus.COMPLETED,
+                output={
+                    "status": route_status,
+                    "selection": {
+                        "status": "selected",
+                        "capability_id": "general-conversation",
+                        "candidates": [],
+                        "reasons": [],
+                    },
+                    "message": f"{route_status} 응답",
+                    "responseVerification": {
+                        "decision": "BLOCKED" if route_status != "needs_clarification" else "WARN",
+                        "reason": f"{route_status} 사유",
+                        "profile_version": "claimlatch-v0.2.0",
+                        "subject_id": f"{route_status}-execution",
+                    },
+                },
+            )
+
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    coordinator = Coordinator(store)
+    conversation_store = ConversationStore(store)
+    service = AssistantService(
+        router=CapabilityRouter(build_default_registry()),
+        coordinator=coordinator,
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+        kernel=FakeKernel(),
+        conversation_store=conversation_store,
+    )
+
+    result = service.route(
+        "모호한 요청",
+        conversation_id=f"conversation-{route_status}",
+    )
+
+    assert result.status == route_status
+    assistant_message = conversation_store.get_transcript(f"conversation-{route_status}")["turns"][1]
+    assert assistant_message["status"] == expected_message_status.value
 
 
 def test_assistant_service_never_reports_completed_when_response_verification_is_blocked(tmp_path) -> None:

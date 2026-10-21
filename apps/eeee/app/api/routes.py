@@ -1233,6 +1233,8 @@ def _desktop_events(bridge: MobileBridge, cursor: int) -> dict[str, object]:
     batch = bridge.events_after(cursor)
     return {
         "cursor": batch["cursor"],
+        "hasGap": batch["hasGap"],
+        "oldestCursor": batch["oldestCursor"],
         "events": [_redact_desktop_event(event) for event in batch["events"]],
     }
 

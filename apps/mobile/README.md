@@ -19,6 +19,8 @@ This directory is the deployment boundary for a future standalone
 `gleave-mobile` repository.
 
 The typed transport client is in `src/client.ts`. It exposes pairing, state,
-assistant commands, cursor-based polling, and SSE consumption. A native shell
-may provide a secure `TokenStore`; the client itself never receives provider
-tokens or a project database.
+assistant commands, cursor-based polling, and SSE consumption. Polling responses
+include `hasGap` and `oldestCursor`; a `hasGap` response means the mobile client
+must refresh its snapshot/history before applying the retained events. A native
+shell may provide a secure `TokenStore`; the client itself never receives
+provider tokens or a project database.

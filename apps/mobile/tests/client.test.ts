@@ -11,7 +11,7 @@ test("mobile client pairs, stores the Desktop token, and resumes event cursors",
     if (request.url.endsWith("/api/mobile/pair")) {
       return new Response(JSON.stringify({ deviceId: "mobile-1", deviceName: "Phone", accessToken: "token-1" }), { status: 200 });
     }
-    return new Response(JSON.stringify({ cursor: 3, events: [{ cursor: 3, kind: "project.completed", payload: {}, createdAt: "2026-10-06T00:00:00Z" }] }), { status: 200 });
+    return new Response(JSON.stringify({ cursor: 3, events: [{ cursor: 3, kind: "project.completed", payload: {}, createdAt: "2026-10-06T00:00:00Z" }], hasGap: true, oldestCursor: 2 }), { status: 200 });
   };
 
   try {
@@ -22,6 +22,8 @@ test("mobile client pairs, stores the Desktop token, and resumes event cursors",
 
     assert.equal(store.get(), "token-1");
     assert.equal(batch.events[0]?.cursor, 3);
+    assert.equal(batch.hasGap, true);
+    assert.equal(batch.oldestCursor, 2);
     assert.equal(calls[1]?.headers.get("X-Gleave-Bridge-Token"), "token-1");
   } finally {
     globalThis.fetch = originalFetch;

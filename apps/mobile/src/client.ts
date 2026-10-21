@@ -14,6 +14,10 @@ export type MobileEvent = {
 export type MobileEventBatch = {
   cursor: number;
   events: MobileEvent[];
+  /** True when the requested cursor predates the Desktop bridge retention window. */
+  hasGap: boolean;
+  /** The oldest event still available, or null when the bridge has no events. */
+  oldestCursor: number | null;
 };
 
 export type AssistantRouteOptions = {

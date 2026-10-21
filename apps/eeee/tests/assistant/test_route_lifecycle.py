@@ -22,6 +22,11 @@ def test_legacy_assistant_route_projects_terminal_request_and_events(tmp_path):
     assert payload["requestId"] == "assistant-request-lifecycle-1"
     request = client.app.state.conversation_store.get_request(payload["requestId"])
     assert request.state.value == "completed"
+    transcript = client.app.state.conversation_store.get_transcript("route-lifecycle")
+    assistant_turn = transcript["turns"][-1]
+    assert assistant_turn["role"] == "assistant"
+    assert assistant_turn["provider"] == "builtin"
+    assert assistant_turn["errorCode"] is None
     events = client.app.state.conversation_store.events_after(request.id)
     assert [event.event_type for event in events] == [
         "request.accepted",

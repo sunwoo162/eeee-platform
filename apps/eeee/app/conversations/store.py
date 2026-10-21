@@ -435,6 +435,9 @@ class ConversationStore:
                 "content": str(row["content"]),
                 "status": str(row["status"]),
                 "requestId": row["request_id"],
+                "provider": row["provider"],
+                "model": row["model"],
+                "errorCode": row["error_code"],
                 "createdAt": str(row["created_at"]),
             }
             for row in page

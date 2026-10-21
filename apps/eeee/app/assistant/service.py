@@ -160,6 +160,7 @@ class AssistantService:
                             f"백그라운드 작업에 실패했어: {str(exc).strip() or type(exc).__name__}",
                             request_id=request_id,
                             status=MessageStatus.FAILED,
+                            error_code="assistant_route_failed",
                         )
                         self._record_route_lifecycle(
                             conversation_id, request_id, "failed", error_code="assistant_route_failed"
@@ -168,6 +169,7 @@ class AssistantService:
                     self._remember_turn(
                         conversation_id, text, result.message, request_id=request_id,
                         status=self._message_status_for_result(result),
+                        provider=getattr(result, "provider", None),
                     )
                     self._record_route_lifecycle(
                         conversation_id, request_id, self._route_status_for_result(result)
@@ -203,6 +205,7 @@ class AssistantService:
                     self._remember_turn(
                         conversation_id, text, failure_message, request_id=request_id,
                         status=MessageStatus.FAILED,
+                        error_code="assistant_job_submit_failed",
                     )
                     self._record_route_lifecycle(
                         conversation_id, request_id, "failed",
@@ -215,6 +218,8 @@ class AssistantService:
                     message=accepted_message,
                     project_id=project_id,
                     job_id=job_id,
+                    provider=None,
+                    request_id=request_id,
                     response_verification=ResponseVerification(
                         decision="WARN",
                         reason="Project execution was accepted and is awaiting background verification",
@@ -235,6 +240,7 @@ class AssistantService:
             result.message,
             request_id=request_id,
             status=self._message_status_for_result(result),
+            provider=getattr(result, "provider", None),
         )
         self._record_route_lifecycle(
             conversation_id, request_id, self._route_status_for_result(result)
@@ -414,6 +420,9 @@ class AssistantService:
         self, conversation_id: str, user_text: str, assistant_text: str,
         *, request_id: str | None = None,
         status: MessageStatus = MessageStatus.COMPLETED,
+        provider: str | None = None,
+        model: str | None = None,
+        error_code: str | None = None,
     ) -> None:
         if self.conversation_store is not None and request_id is not None:
             self.conversation_store.record_route_turn(
@@ -422,6 +431,9 @@ class AssistantService:
                 assistant_content=assistant_text,
                 request_id=request_id,
                 assistant_status=status,
+                provider=provider,
+                model=model,
+                error_code=error_code,
             )
             # ConversationStore is the canonical transcript.  Do not mirror
             # route turns into the legacy memory table: background completion
@@ -542,6 +554,7 @@ class AssistantService:
                     f"백그라운드 작업에 실패했어: {str(exc).strip() or type(exc).__name__}",
                     request_id=resolved_request_id,
                     status=MessageStatus.FAILED,
+                    error_code="assistant_route_failed",
                 )
                 self._record_route_lifecycle(
                     resolved_conversation_id, resolved_request_id, "failed",
@@ -554,6 +567,7 @@ class AssistantService:
                 result.message,
                 request_id=resolved_request_id,
                 status=self._message_status_for_result(result),
+                provider=getattr(result, "provider", None),
             )
             self._record_route_lifecycle(
                 resolved_conversation_id, resolved_request_id,

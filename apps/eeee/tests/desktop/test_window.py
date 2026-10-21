@@ -63,3 +63,16 @@ def test_create_request_does_not_block_gui_while_auto_run_is_in_progress():
 
     assert window.current_state.get("state") == "awaiting_approval"
     assert window.request_button.isEnabled()
+
+
+def test_background_refresh_does_not_overwrite_a_foreground_request():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    calls = []
+    window.refresh = lambda *, silent=False: calls.append(silent)
+    window._busy = True
+
+    window._background_refresh()
+
+    assert calls == []
+    window.close()

@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.contracts import EventEnvelope, ExecutionEnvelope, ExecutionStatus
+from app.contracts import ApprovalState, EventEnvelope, ExecutionEnvelope, ExecutionStatus
 from app.storage.sqlite import SQLiteStore
 
 
@@ -154,6 +154,26 @@ class ExecutionStore:
         if row is None:
             raise KeyError(f"Execution not found: {execution_id}")
         return ExecutionEnvelope.model_validate_json(row["envelope_json"])
+
+    def claim_approval(self, execution_id: str) -> ExecutionEnvelope:
+        """Atomically claim an awaiting execution before running an external action."""
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT envelope_json FROM execution_envelopes WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Execution not found: {execution_id}")
+            current = ExecutionEnvelope.model_validate_json(row["envelope_json"])
+            if current.status != ExecutionStatus.AWAITING_APPROVAL:
+                raise ValueError(f"execution is no longer awaiting approval: {current.status.value}")
+            claimed = current.transition(
+                ExecutionStatus.RUNNING,
+                approval_state=ApprovalState.APPROVED,
+            )
+            self._save(connection, claimed)
+            return claimed
 
     def list_for_project(self, project_id: str, revision: str | None = None) -> list[ExecutionEnvelope]:
         query = "SELECT envelope_json FROM execution_envelopes WHERE project_id = ?"

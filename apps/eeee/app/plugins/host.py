@@ -6,7 +6,7 @@ import subprocess
 import sys
 from uuid import uuid4
 
-from app.contracts import ExecutionEnvelope, ExecutionError, ExecutionStatus
+from app.contracts import ApprovalState, ExecutionEnvelope, ExecutionError, ExecutionStatus, SideEffectLevel
 from app.plugins.manifest import discover_manifest
 from app.plugins.models import PluginHealth, PluginManifest
 from app.plugins.protocol import request, validate_response
@@ -48,25 +48,62 @@ class PluginHost:
             raise RuntimeError(health.reason)
         return self.registrations.set_status(plugin_id, "connected")
 
-    def invoke(self, plugin_id: str, action: str, value: dict[str, object]) -> ExecutionEnvelope:
+    def invoke(
+        self, plugin_id: str, action: str, value: dict[str, object], *, approved: bool = False,
+        execution_id: str | None = None,
+    ) -> ExecutionEnvelope:
         registration = self.registrations.get(plugin_id)
         manifest = self._manifest(plugin_id, registration.manifest)
-        envelope = ExecutionEnvelope(
-            execution_id=f"plugin-execution-{uuid4().hex}", request_id=f"plugin-request-{uuid4().hex}",
-            capability_id=f"plugin:{plugin_id}", tool_id=plugin_id, actor="EEEE",
-            input={"action": action, "input": value},
-        )
-        self.executions.save(envelope)
+        selected = next((item for item in manifest.actions if item.id == action), None)
+        side_effect_level = selected.side_effect_level if selected is not None else SideEffectLevel.NONE
+        requires_approval = side_effect_level == SideEffectLevel.EXTERNAL
+        expected_input = {"action": action, "input": value}
         running: ExecutionEnvelope | None = None
+        if approved and requires_approval:
+            if not execution_id:
+                raise ValueError("execution_id is required to approve an external plugin action")
+            envelope = self.executions.get(execution_id)
+            if envelope.capability_id != f"plugin:{plugin_id}" or dict(envelope.input) != expected_input:
+                raise ValueError("approval target does not match the requested plugin action")
+            if envelope.status != ExecutionStatus.AWAITING_APPROVAL:
+                if envelope.status in {ExecutionStatus.RUNNING, ExecutionStatus.COMPLETED}:
+                    return envelope
+                raise ValueError("plugin execution is not awaiting approval")
+        else:
+            if execution_id:
+                raise ValueError("execution_id can only be used to approve an external plugin action")
+            envelope = ExecutionEnvelope(
+                execution_id=f"plugin-execution-{uuid4().hex}", request_id=f"plugin-request-{uuid4().hex}",
+                capability_id=f"plugin:{plugin_id}", tool_id=plugin_id, actor="EEEE",
+                input=expected_input,
+                side_effect_level=side_effect_level,
+                required_approval=requires_approval,
+                approval_state=(
+                    ApprovalState.APPROVED if approved else ApprovalState.AWAITING_APPROVAL
+                ) if requires_approval else ApprovalState.NOT_REQUIRED,
+            )
+            self.executions.save(envelope)
         try:
             if registration.status == "paused":
                 raise PermissionError("plugin is paused")
             if registration.status != "connected":
                 raise PermissionError("plugin is not connected")
-            selected = next((item for item in manifest.actions if item.id == action), None)
             if selected is None:
                 raise ValueError(f"unknown plugin action: {action}")
-            running = envelope.transition(ExecutionStatus.RUNNING)
+            if requires_approval and not approved:
+                awaiting = envelope.transition(
+                    ExecutionStatus.AWAITING_APPROVAL,
+                    approval_state=ApprovalState.AWAITING_APPROVAL,
+                )
+                self.executions.save(awaiting)
+                return awaiting
+            if requires_approval:
+                running = self.executions.claim_approval(envelope.execution_id)
+            else:
+                running = envelope.transition(
+                    ExecutionStatus.RUNNING,
+                    approval_state=ApprovalState.NOT_REQUIRED,
+                )
             self.executions.save(running)
             output = self._call(manifest, action, value, plugin_id)
             completed = running.transition(ExecutionStatus.COMPLETED, output=output)
@@ -75,7 +112,11 @@ class PluginHost:
         except Exception as exc:
             failed = running or envelope
             error = ExecutionError(code="plugin_failed", message=str(exc) or type(exc).__name__)
-            if failed.status == ExecutionStatus.QUEUED:
+            if approved and requires_approval and running is None:
+                latest = self.executions.get(envelope.execution_id)
+                if latest.status != ExecutionStatus.AWAITING_APPROVAL:
+                    return latest
+            if failed.status in {ExecutionStatus.QUEUED, ExecutionStatus.AWAITING_APPROVAL}:
                 failed = failed.transition(ExecutionStatus.BLOCKED, error=error)
             else:
                 failed = failed.transition(ExecutionStatus.FAILED, error=error)

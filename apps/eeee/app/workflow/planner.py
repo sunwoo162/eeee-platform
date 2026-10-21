@@ -23,7 +23,7 @@ class WorkPlan(BaseModel):
 _TARGET_PATTERNS = (
     ("todo_app", re.compile(r"(?:\btodo\b|할\s*일|체크리스트|to\s*do)", re.I)),
     ("local_ai_app", re.compile(r"\b(?:local\s+ai|offline\s+ai)\b", re.I)),
-    ("web_app", re.compile(r"\b(?:web\s*app|website|web\s+application)\b", re.I)),
+    ("web_app", re.compile(r"(?:\b(?:web\s*app|website|web\s+application)\b|웹(?:\s*(?:앱|프로젝트|서비스))?)", re.I)),
     ("developer_tool", re.compile(r"\b(?:developer\s+(?:cli\s+)?tool|cli|command.line\s+tool)\b", re.I)),
     ("automation", re.compile(r"\b(?:automate|automation|workflow)\b", re.I)),
 )

@@ -141,6 +141,16 @@ class ProjectExecutionCapability:
     def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
         text = plan.inputs["text"]
         brief = parse_request(text)
+        blocking_uncertainties = [item for item in brief.uncertainties if "platform" not in item.lower()]
+        if blocking_uncertainties:
+            return CapabilityOutcome(
+                {
+                    "status": "needs_clarification",
+                    "message": "요청을 실행하기 전에 조금 더 구체적으로 알려줘.",
+                    "uncertainties": blocking_uncertainties,
+                },
+                ExecutionStatus.BLOCKED,
+            )
         project = self.coordinator.create_project(
             plan.inputs["projectId"], brief.goal[:80], plan.inputs["workspace"],
         )

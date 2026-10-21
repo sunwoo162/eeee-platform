@@ -79,12 +79,27 @@ class AssistantService:
         if envelope.error is not None and envelope.error.code == "invalid_request":
             raise ValueError(envelope.error.message)
         output = envelope.model_dump(mode="json")["output"] or {}
+        response_verification = ResponseVerification.model_validate(
+            output.get("responseVerification", {
+                "decision": "WARN",
+                "reason": "Response verification metadata is missing",
+                "profile_version": "claimlatch-v0.2.0",
+                "subject_id": envelope.execution_id,
+            })
+        )
         quality_status = output.get("qualityStatus")
-        completed_locally = quality_status == "PASS"
+        completed_locally = quality_status == "PASS" and response_verification.decision == "PASS"
         status = "completed" if completed_locally else output.get("status", "blocked")
         message = output.get("message", "요청을 완료하지 못했어.")
         if completed_locally:
             message = "로컬 프로젝트가 생성되고 QA/ClaimLatch 검증을 통과했어. 외부 플러그인은 선택적으로 연결할 수 있어."
+        elif status == "completed":
+            status = "blocked"
+            message = (
+                response_verification.reason
+                if response_verification.decision != "PASS"
+                else "완료 검증 증거가 없어."
+            )
         return AssistantRouteResult(
             status=status,
             selection=CapabilitySelection.model_validate(output["selection"]),
@@ -101,14 +116,7 @@ class AssistantService:
             release_manifest_path=output.get("releaseManifestPath"),
             git_branch=output.get("gitBranch"),
             git_commit=output.get("gitCommit"),
-            response_verification=ResponseVerification.model_validate(
-                output.get("responseVerification", {
-                    "decision": "WARN",
-                    "reason": "Response verification metadata is missing",
-                    "profile_version": "claimlatch-v0.2.0",
-                    "subject_id": envelope.execution_id,
-                })
-            ),
+            response_verification=response_verification,
         )
 
     def get_project_profile(self, project_id: str) -> ProjectProfile:

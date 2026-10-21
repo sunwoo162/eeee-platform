@@ -52,6 +52,21 @@ class PluginManifest(BaseModel):
         }
         if missing:
             raise ValueError(f"plugin action references unknown permissions: {sorted(missing)}")
+        effect_rank = {
+            SideEffectLevel.NONE: 0,
+            SideEffectLevel.LOCAL: 1,
+            SideEffectLevel.EXTERNAL: 2,
+        }
+        permissions_by_id = {permission.id: permission for permission in self.permissions}
+        for action in self.actions:
+            required_effect = max(
+                (effect_rank[permissions_by_id[item].side_effect_level] for item in action.permission_ids),
+                default=0,
+            )
+            if effect_rank[action.side_effect_level] < required_effect:
+                raise ValueError(
+                    f"plugin action {action.id!r} declares a weaker side effect than its permissions"
+                )
         return self
 
 

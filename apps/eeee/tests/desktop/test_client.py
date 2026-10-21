@@ -56,7 +56,7 @@ def test_client_supports_canonical_eeee_desktop_contract(monkeypatch):
         (
             "POST",
             "http://127.0.0.1:8123/api/assistant/route",
-            {"timeout": 5.0, "json": {"text": "Make a project", "workspace": "C:/work"}},
+            {"timeout": 120.0, "json": {"text": "Make a project", "workspace": "C:/work"}},
         ),
         (
             "POST",

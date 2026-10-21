@@ -7,9 +7,18 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $eeee = Join-Path $root "apps\eeee"
+$iseol = Join-Path $root "packages\iseol"
 $python = Join-Path $root ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $python)) {
     $python = (Get-Command python).Source
+}
+
+Push-Location $iseol
+try {
+    npm run build --silent
+    if ($LASTEXITCODE -ne 0) { throw "ISEOL build failed before EEEE startup." }
+} finally {
+    Pop-Location
 }
 
 $arguments = @(

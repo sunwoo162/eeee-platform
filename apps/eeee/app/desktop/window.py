@@ -117,6 +117,7 @@ class PetWindow:
                 self._drag_offset = None
                 self._busy = False
                 self._refreshing = False
+                self._request_generation = 0
                 self._closing = False
                 self._quit_requested = False
                 self._tray = None
@@ -181,6 +182,7 @@ class PetWindow:
                 self.assistant_input = QLineEdit()
                 self.assistant_button = QPushButton()
                 self.assistant_button.clicked.connect(self._route_assistant)
+                self.assistant_input.returnPressed.connect(self._route_assistant)
                 assistant_row.addWidget(self.assistant_input)
                 assistant_row.addWidget(self.assistant_button)
                 root.addLayout(assistant_row)
@@ -370,6 +372,8 @@ class PetWindow:
                 self._submit(operation, self._text("connecting"), silent=silent)
 
             def _background_refresh(self):
+                if self._closing or self._busy:
+                    return
                 self.refresh(silent=True)
 
             def _update_controls(self):
@@ -395,6 +399,8 @@ class PetWindow:
             def _submit(self, operation, busy_message: str, on_success=None, *, silent=False):
                 if self._closing or (self._busy and not silent) or (silent and self._refreshing):
                     return
+                generation = self._request_generation + 1
+                self._request_generation = generation
                 if silent:
                     self._refreshing = True
                 else:
@@ -403,6 +409,10 @@ class PetWindow:
                     self._update_controls()
 
                 def success(payload):
+                    if generation != self._request_generation:
+                        if silent:
+                            self._refreshing = False
+                        return
                     if self._closing:
                         return
                     if silent:
@@ -415,6 +425,10 @@ class PetWindow:
                         on_success(payload)
 
                 def failure(error):
+                    if generation != self._request_generation:
+                        if silent:
+                            self._refreshing = False
+                        return
                     if self._closing:
                         return
                     if silent:

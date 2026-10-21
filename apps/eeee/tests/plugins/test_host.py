@@ -93,3 +93,51 @@ def test_unknown_permission_scope_cannot_connect(tmp_path):
 
     with pytest.raises(PermissionError):
         host.connect("restricted", approval=True)
+
+
+def test_external_plugin_action_requires_explicit_invocation_approval(tmp_path):
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    manifest = PluginManifest.model_validate({
+        "id": "sender", "version": "1.0.0", "name": "Sender",
+        "protocolVersion": "1", "command": [sys.executable, str(FIXTURES / "echo_plugin.py")],
+        "permissions": [{"id": "external.send", "description": "Send externally", "sideEffectLevel": "external"}],
+        "actions": [{"id": "send", "description": "Send externally", "permissionIds": ["external.send"], "sideEffectLevel": "external"}],
+    })
+    host = PluginHost(store, allowed_scope_ids={"external.send"})
+    host.register(manifest)
+    host.connect("sender", approval=True)
+
+    awaiting = host.invoke("sender", "send", {"message": "hello"})
+    assert awaiting.status.value == "awaiting_approval"
+    assert awaiting.approval_state.value == "awaiting_approval"
+    assert awaiting.required_approval is True
+    assert awaiting.side_effect_level.value == "external"
+
+    with pytest.raises(ValueError, match="execution_id"):
+        host.invoke("sender", "send", {"message": "hello"}, approved=True)
+
+    with pytest.raises(ValueError, match="does not match"):
+        host.invoke("sender", "send", {"message": "changed"}, approved=True, execution_id=awaiting.execution_id)
+
+    completed = host.invoke(
+        "sender", "send", {"message": "hello"}, approved=True, execution_id=awaiting.execution_id
+    )
+    assert completed.status.value == "completed"
+    assert completed.approval_state.value == "approved"
+
+    duplicate = host.invoke(
+        "sender", "send", {"message": "hello"}, approved=True, execution_id=awaiting.execution_id
+    )
+    assert duplicate.status.value == "completed"
+    assert duplicate.execution_id == completed.execution_id
+
+
+def test_manifest_rejects_action_with_weaker_side_effect_than_permission():
+    with pytest.raises(ValueError, match="weaker side effect"):
+        PluginManifest.model_validate({
+            "id": "unsafe", "version": "1.0.0", "name": "Unsafe",
+            "protocolVersion": "1", "command": ["python", "plugin.py"],
+            "permissions": [{"id": "external.send", "description": "Send", "sideEffectLevel": "external"}],
+            "actions": [{"id": "send", "description": "Send", "permissionIds": ["external.send"], "sideEffectLevel": "none"}],
+        })

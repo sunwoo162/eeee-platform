@@ -181,6 +181,10 @@ class PluginConnectPayload(BaseModel):
 class PluginInvokePayload(BaseModel):
     action: str = Field(min_length=1)
     input: dict[str, object] = Field(default_factory=dict)
+    approved: bool = False
+    execution_id: str | None = Field(default=None, alias="executionId")
+
+    model_config = {"populate_by_name": True}
 
 
 def _plugin_registration_payload(registration: object) -> dict[str, object]:
@@ -238,9 +242,14 @@ def build_plugin_router(host: PluginHost) -> APIRouter:
     @router.post("/{plugin_id}/invoke")
     def invoke_plugin(plugin_id: str, payload: PluginInvokePayload):
         try:
-            return host.invoke(plugin_id, payload.action, payload.input)
+            return host.invoke(
+                plugin_id, payload.action, payload.input,
+                approved=payload.approved, execution_id=payload.execution_id,
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.post("/{plugin_id}/disconnect")
     def disconnect_plugin(plugin_id: str) -> dict[str, object]:

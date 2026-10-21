@@ -13,7 +13,8 @@ class PetApiClient:
         self.project_id = project_id
 
     def _request(self, method: str, path: str, **kwargs) -> dict[str, object]:
-        response = httpx.request(method, f"{self.base_url}{path}", timeout=5.0, **kwargs)
+        timeout = kwargs.pop("timeout", 5.0)
+        response = httpx.request(method, f"{self.base_url}{path}", timeout=timeout, **kwargs)
         if response.is_error:
             try:
                 detail = response.json().get("detail", response.text)
@@ -45,7 +46,7 @@ class PetApiClient:
         payload: dict[str, object] = {"text": text}
         if workspace is not None:
             payload["workspace"] = workspace
-        return self._request("POST", "/api/assistant/route", json=payload)
+        return self._request("POST", "/api/assistant/route", timeout=120.0, json=payload)
 
     def open_project(self, project_id: str) -> dict[str, object]:
         """Load the durable organization map for a project in the Desktop view."""

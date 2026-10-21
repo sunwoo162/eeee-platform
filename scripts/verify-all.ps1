@@ -29,9 +29,9 @@ try {
 Push-Location $eeee
 try {
     if ($Full) {
-        & $python -m pytest -q --basetemp $pytestBase tests
+        & $python -m pytest -q --import-mode=importlib --basetemp $pytestBase tests
     } else {
-        & $python -m pytest -q --basetemp $pytestBase `
+        & $python -m pytest -q --import-mode=importlib --basetemp $pytestBase `
             tests/integrations `
             tests/memory `
             tests/trust `

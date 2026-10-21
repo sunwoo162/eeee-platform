@@ -133,7 +133,7 @@ def test_allocation_failure_is_persisted_without_success(tmp_path):
             raise RuntimeError("allocation failed")
 
     kernel, store, _ = make_kernel(tmp_path, coordinator_type=BrokenCoordinator)
-    result = kernel.route(AssistantRequest(raw_text="앱 만들어줘"), AssistantContext())
+    result = kernel.route(AssistantRequest(raw_text="웹 앱 만들어줘"), AssistantContext())
     assert result.status == ExecutionStatus.FAILED
     assert result.error.message == "allocation failed"
     assert ExecutionStore(store).get(result.execution_id) == result
@@ -145,7 +145,7 @@ def test_child_failure_is_recorded_and_parent_does_not_claim_project_success(tmp
             raise RuntimeError("provision failed")
 
     kernel, store, _ = make_kernel(tmp_path, provisioner_type=BrokenProvisioner)
-    result = kernel.route(AssistantRequest(raw_text="앱 만들어줘"), AssistantContext())
+    result = kernel.route(AssistantRequest(raw_text="웹 앱 만들어줘"), AssistantContext())
     assert result.status == ExecutionStatus.FAILED
     child = ExecutionStore(store).get(result.output["childExecutionId"])
     assert child.status == ExecutionStatus.FAILED
@@ -157,7 +157,7 @@ def test_stale_project_context_blocks_before_capability_execution(tmp_path):
     kernel, store, _ = make_kernel(tmp_path)
     store.create_project("existing", "Existing", str(tmp_path / "existing"), revision="rev-2")
     result = kernel.route(
-        AssistantRequest(raw_text="앱 만들어줘", context={"projectId": "existing", "projectRevision": "rev-1"}),
+        AssistantRequest(raw_text="웹 앱 만들어줘", context={"projectId": "existing", "projectRevision": "rev-1"}),
         AssistantContext(),
     )
     assert result.status == ExecutionStatus.BLOCKED
@@ -168,7 +168,7 @@ def test_stale_project_context_blocks_before_capability_execution(tmp_path):
 
 def test_required_trust_gate_blocks_project_action_with_auditable_child(tmp_path):
     kernel, store, _ = make_kernel(tmp_path, trust_gate=TrustGate(None, mode="required"))
-    result = kernel.route(AssistantRequest(raw_text="앱 만들어줘"), AssistantContext())
+    result = kernel.route(AssistantRequest(raw_text="웹 앱 만들어줘"), AssistantContext())
     assert result.status == ExecutionStatus.BLOCKED
     child = ExecutionStore(store).get(result.output["childExecutionId"])
     assert child.status == ExecutionStatus.BLOCKED
@@ -206,7 +206,7 @@ def test_request_creation_failure_keeps_allocated_project_link_in_parent(tmp_pat
             raise RuntimeError("request creation failed")
 
     kernel, store, _ = make_kernel(tmp_path, coordinator_type=BrokenRequestCoordinator)
-    result = kernel.route(AssistantRequest(raw_text="앱 만들어줘"), AssistantContext())
+    result = kernel.route(AssistantRequest(raw_text="웹 앱 만들어줘"), AssistantContext())
     assert result.status == ExecutionStatus.FAILED
     assert store.get_project(result.output["projectId"]).id == result.output["projectId"]
     assert result.error.message == "request creation failed"
@@ -221,7 +221,7 @@ def test_initial_stale_child_rejection_keeps_project_and_request_on_parent(tmp_p
             return state
 
     kernel, store, _ = make_kernel(tmp_path, coordinator_type=RevisionAdvancingCoordinator)
-    result = kernel.route(AssistantRequest(raw_text="앱 만들어줘"), AssistantContext())
+    result = kernel.route(AssistantRequest(raw_text="웹 앱 만들어줘"), AssistantContext())
 
     assert result.status == ExecutionStatus.FAILED
     assert result.error.code == "stale_project_revision"
@@ -242,7 +242,7 @@ def test_trust_gate_exception_terminalizes_child_and_parent_without_provisioning
             raise RuntimeError("trust engine failed")
 
     kernel, store, _ = make_kernel(tmp_path, trust_gate=BrokenTrustGate(None))
-    result = kernel.route(AssistantRequest(raw_text="앱 만들어줘"), AssistantContext())
+    result = kernel.route(AssistantRequest(raw_text="웹 앱 만들어줘"), AssistantContext())
     assert result.status == ExecutionStatus.FAILED
     child = ExecutionStore(store).get(result.output["childExecutionId"])
     assert child.status == ExecutionStatus.FAILED
@@ -280,7 +280,7 @@ def test_revision_advancing_during_provisioning_records_child_and_parent_failure
             return result
 
     kernel, store, bus = make_kernel(tmp_path, provisioner_type=RevisionAdvancingProvisioner)
-    result = kernel.route(AssistantRequest(raw_text="앱 만들어줘"), AssistantContext())
+    result = kernel.route(AssistantRequest(raw_text="웹 앱 만들어줘"), AssistantContext())
     assert result.status == ExecutionStatus.FAILED
     child = ExecutionStore(store).get(result.output["childExecutionId"])
     assert child.status == ExecutionStatus.FAILED
@@ -310,7 +310,7 @@ def test_completion_and_event_are_atomic_when_revision_advances_after_commit(tmp
             store.update_project_revision(completed["project_id"], "rev-next")
 
     store._connect = connection_with_revision_race
-    result = kernel.route(AssistantRequest(raw_text="앱 만들어줘"), AssistantContext())
+    result = kernel.route(AssistantRequest(raw_text="웹 앱 만들어줘"), AssistantContext())
     assert advanced
     assert result.status == ExecutionStatus.COMPLETED
     child = ExecutionStore(store).get(result.output["childExecutionId"])

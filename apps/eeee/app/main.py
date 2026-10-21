@@ -372,6 +372,7 @@ def create_app(
         # project runner skip every specialist and falsely release a scaffold.
         agent_runtime=project_agent_runtime,
         general_runtime=general_runtime,
+        conversation_store=conversation_store,
         chatgpt_web_enabled=app_settings.chatgpt_web_enabled,
         plugin_platform=plugin_platform,
     )

@@ -14,6 +14,7 @@ from app.assistant.router import CapabilityRouter
 from app.config import Settings
 from app.contracts import ApprovalState, EventEnvelope, ExecutionEnvelope, ExecutionError, ExecutionStatus, LocalEventBus, SideEffectLevel
 from app.coordinator.service import Coordinator
+from app.conversations.store import ConversationStore
 from app.kernel.capabilities import CapabilityOutcome, EnvelopeContext, GeneralConversationCapability, KnowledgeDocumentsCapability, LocalPlanningCapability, LocalSecretaryCapability, ProjectExecutionCapability, UserPreferenceCapability
 from app.memory.store import MemoryStore
 from app.memory.context import MemoryContextCompiler
@@ -36,11 +37,13 @@ class KernelService:
         agent_runtime: AgentRuntime | None = None, general_runtime: AgentRuntime | None = None,
         chatgpt_web_enabled: bool = False, plugin_host: PluginHost | None = None,
         plugin_platform: PluginPlatformService | None = None,
+        conversation_store: ConversationStore | None = None,
     ) -> None:
         self.router = router
         self.coordinator = coordinator
         self.store = store
         self.memory = memory or coordinator.memory
+        self.conversation_store = conversation_store
         self.memory_context_compiler = MemoryContextCompiler()
         self.trust_gate = trust_gate or coordinator.trust_gate or TrustGate(None, mode="advisory")
         self.plugin_host = plugin_host
@@ -448,6 +451,11 @@ class KernelService:
         memories = self.memory.search(request.raw_text)
         memory_packet = self.memory_context_compiler.compile(request.raw_text, self.memory)
         conversation_id = str(request.context.get("conversationId") or "desktop-default")
+        conversation_turns = (
+            self.conversation_store.recent_conversation_turns(conversation_id)
+            if self.conversation_store is not None
+            else self.memory.recent_conversation_turns(conversation_id)
+        )
         return AssistantContext(
             memory_ids=list(dict.fromkeys([*supplied.memory_ids, *(item.id for item in memories)])),
             qa_baseline_ids=list(dict.fromkeys([
@@ -455,7 +463,7 @@ class KernelService:
             ])), user_preferences={**memory_packet.preference_values, **supplied.user_preferences},
             memory_context=memory_packet.prompt_context,
             conversation_id=conversation_id,
-            conversation_turns=self.memory.recent_conversation_turns(conversation_id),
+            conversation_turns=conversation_turns,
         )
 
     def _context_identity_error(self, request: AssistantRequest) -> str | None:

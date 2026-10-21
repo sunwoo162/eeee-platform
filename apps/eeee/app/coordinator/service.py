@@ -61,10 +61,7 @@ class Coordinator:
     ) -> list[MemoryRecord]:
         """Ingest ISEOL's independently verified project result into EEEE memory."""
 
-        try:
-            project = self.store.get_project(outcome_report.project_id)
-        except KeyError:
-            project = None
+        project = self._existing_owned_project(outcome_report.project_id, user_id)
         if project is not None and project.revision != outcome_report.project_revision:
             raise ApprovalError(
                 "Cannot ingest project outcome: stale project revision "
@@ -128,10 +125,7 @@ class Coordinator:
         user_id: str = "local-user"
     ) -> MemoryRecord:
         record = self.memory.get(memory_id, user_id=user_id)
-        try:
-            project = self.store.get_project(record.source_project_id)
-        except KeyError:
-            project = None
+        project = self._existing_owned_project(record.source_project_id, user_id)
         if project is not None and self.trust_gate is not None:
             trust = self.trust_gate.verify_action(
                 subject_id=f"{memory_id}:promotion",
@@ -494,6 +488,17 @@ class Coordinator:
         if project.active_task_id is None:
             raise ApprovalError("Project has no active task")
         return self.store.get_task(project.active_task_id)
+
+    def _existing_owned_project(self, project_id: str, user_id: str) -> Project | None:
+        """Keep legacy external outcomes permissive while protecting known projects."""
+
+        try:
+            project = self.store.get_project(project_id)
+        except KeyError:
+            return None
+        if project.user_id != user_id:
+            raise KeyError(f"Project not found: {project_id}")
+        return project
 
 
 def _demo_candidates() -> list[CandidateScore]:

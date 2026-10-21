@@ -62,6 +62,24 @@ def test_memory_api_rejects_unverified_outcome_before_memory_promotion(tmp_path)
     assert client.get("/api/memory", params={"query": "smoke"}).json() == []
 
 
+def test_memory_api_rejects_outcome_for_another_users_project(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspace")
+    application = create_app(settings)
+    application.state.coordinator.create_project(
+        "project-api-1", "User A project", str(tmp_path / "user-a"), user_id="user-a"
+    )
+    client = TestClient(application)
+
+    response = client.post(
+        "/api/projects/project-api-1/outcomes",
+        headers={"X-EEEE-User-Id": "user-b"},
+        json=_outcome().model_dump(mode="json", by_alias=True),
+    )
+
+    assert response.status_code == 404
+    assert client.get("/api/memory", headers={"X-EEEE-User-Id": "user-b"}).json() == []
+
+
 def test_memory_api_persists_explicit_user_preference(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspace")
     with TestClient(create_app(settings)) as client:

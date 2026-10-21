@@ -1183,7 +1183,7 @@ def build_desktop_router(
     ) -> dict[str, object]:
         _require_local_desktop(request)
         user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
-        events = _desktop_events(bridge, 0)["events"]
+        events = _desktop_events(bridge, 0, user_id=user_id)["events"]
         snapshot: dict[str, object] = {
             "status": "ok",
             "transport": "desktop-local",
@@ -1285,7 +1285,8 @@ def build_desktop_router(
         cursor: int = Query(default=0, ge=0),
     ) -> dict[str, object]:
         _require_local_desktop(request)
-        return _desktop_events(bridge, cursor)
+        user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        return _desktop_events(bridge, cursor, user_id=user_id)
 
     @router.post("/pairing/code")
     def desktop_pairing_code(request: Request) -> dict[str, str]:
@@ -1317,14 +1318,29 @@ def _platform_permissions(
         return []
 
 
-def _desktop_events(bridge: MobileBridge, cursor: int) -> dict[str, object]:
+def _desktop_events(
+    bridge: MobileBridge, cursor: int, *, user_id: str | None = None
+) -> dict[str, object]:
     batch = bridge.events_after(cursor)
+    events = [
+        event for event in batch["events"] if _desktop_event_visible(event, user_id)
+    ]
     return {
         "cursor": batch["cursor"],
         "hasGap": batch["hasGap"],
         "oldestCursor": batch["oldestCursor"],
-        "events": [_redact_desktop_event(event) for event in batch["events"]],
+        "events": [_redact_desktop_event(event) for event in events],
     }
+
+
+def _desktop_event_visible(event: object, user_id: str | None) -> bool:
+    if user_id is None or not isinstance(event, dict):
+        return True
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return True
+    scoped_user_id = payload.get("userId")
+    return not isinstance(scoped_user_id, str) or scoped_user_id == user_id
 
 
 def _redact_desktop_event(event: object) -> dict[str, object]:

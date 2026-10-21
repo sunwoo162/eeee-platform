@@ -281,6 +281,43 @@ def test_web_runner_records_available_browser_ui_e2e_evidence(tmp_path):
     assert browser_runner.calls[0][1:] == (root.resolve(), "todo_app")
 
 
+def test_web_runner_retries_a_transient_browser_failure(tmp_path):
+    root = tmp_path / "web-project"
+    create_web_app_scaffold(root, "Todo Web")
+
+    class FlakyBrowserUIE2ERunner:
+        def __init__(self):
+            self.calls = 0
+
+        def run(self, *, url, workspace, template_id):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "name": "browser:ui-e2e",
+                    "status": "failed",
+                    "evidenceId": "evidence-browser-ui-failed",
+                    "path": str(workspace),
+                    "detail": "transient browser startup failure",
+                }
+            return {
+                "name": "browser:ui-e2e",
+                "status": "passed",
+                "evidenceId": "evidence-browser-ui-retry-pass",
+                "path": str(workspace),
+                "detail": "retry passed",
+            }
+
+    browser_runner = FlakyBrowserUIE2ERunner()
+    prepared = WebProjectRunner(browser_ui_runner=browser_runner).prepare(
+        project_id="project-web", project_revision="rev-1", workspace=root
+    )
+
+    browser_check = next(item for item in prepared.qa_report["checks"] if item["name"] == "browser:ui-e2e")
+    assert browser_check["status"] == "passed"
+    assert "after one retry" in browser_check["detail"]
+    assert browser_runner.calls == 2
+
+
 def test_browser_ui_e2e_runner_reports_not_run_when_local_runtime_is_missing(tmp_path):
     runner = BrowserUIE2ERunner(
         playwright_core=tmp_path / "missing-playwright-core",

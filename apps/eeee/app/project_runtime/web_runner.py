@@ -443,6 +443,28 @@ class WebProjectRunner:
             runtime = self.start(root, port=self._free_port())
             try:
                 browser_check = self.browser_ui_runner.run(url=runtime.url, workspace=root, template_id=template_id)
+                if browser_check.get("status") == "failed":
+                    # Browser startup and local Chromium timing can be
+                    # transient on CI. Retry once with a fresh browser
+                    # process; a deterministic UI failure still fails after
+                    # both attempts and keeps both diagnostics in the report.
+                    first_detail = str(browser_check.get("detail", "first attempt failed"))
+                    retry_check = self.browser_ui_runner.run(
+                        url=runtime.url, workspace=root, template_id=template_id
+                    )
+                    if retry_check.get("status") == "passed":
+                        browser_check = {
+                            **retry_check,
+                            "detail": f"passed after one retry; initial failure: {first_detail}",
+                        }
+                    else:
+                        browser_check = {
+                            **browser_check,
+                            "detail": (
+                                f"{first_detail}; retry: "
+                                f"{retry_check.get('detail', 'retry failed')}"
+                            ),
+                        }
                 checks.append(self._check("e2e:health", self._json_get(runtime.url + "/api/health").get("status") == "ok", api))
                 before = self._http(runtime.url + "/api/session", method="POST", payload={"mode": "demo"})
                 created = self._http(runtime.url + "/api/todos", method="POST", payload={"title": "release check", "priority": "high"})

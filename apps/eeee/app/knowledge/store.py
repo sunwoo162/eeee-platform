@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Iterator
 from uuid import uuid4
 
 from app.knowledge.models import KnowledgeDocument
@@ -21,9 +23,20 @@ class KnowledgeStore:
         self.init()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=5.0)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA journal_mode = WAL")
         return connection
+
+    @contextmanager
+    def _session(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,20 +72,55 @@ class KnowledgeStore:
             raise ValueError("document is too large")
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         now = _iso(_now())
-        with self._connect() as connection:
+        with self._session() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT * FROM local_documents WHERE scope = ? AND content_hash = ? AND deleted_at IS NULL",
+                "SELECT * FROM local_documents WHERE scope = ? AND content_hash = ?",
                 (scope, content_hash),
             ).fetchone()
             if existing is not None:
-                return _document_from_row(existing)
+                if existing["deleted_at"] is None:
+                    return _document_from_row(existing)
+                connection.execute(
+                    "UPDATE local_documents SET title = ?, content = ?, source_path = ?, "
+                    "updated_at = ?, deleted_at = NULL WHERE id = ?",
+                    (title, content, source_path, now, existing["id"]),
+                )
+                row = connection.execute(
+                    "SELECT * FROM local_documents WHERE id = ?", (existing["id"],)
+                ).fetchone()
+                assert row is not None
+                return _document_from_row(row)
             document_id = f"document-{uuid4().hex}"
-            connection.execute(
-                "INSERT INTO local_documents "
-                "(id, title, content, scope, content_hash, source_path, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (document_id, title, content, scope, content_hash, source_path, now, now),
-            )
+            try:
+                connection.execute(
+                    "INSERT INTO local_documents "
+                    "(id, title, content, scope, content_hash, source_path, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (document_id, title, content, scope, content_hash, source_path, now, now),
+                )
+            except sqlite3.IntegrityError:
+                # A legacy database may race with another writer between the
+                # read and insert, or contain a row created by an older
+                # process. Re-read the unique key and make the operation
+                # idempotent instead of leaking sqlite errors to the user.
+                existing = connection.execute(
+                    "SELECT * FROM local_documents WHERE scope = ? AND content_hash = ?",
+                    (scope, content_hash),
+                ).fetchone()
+                if existing is None:
+                    raise
+                if existing["deleted_at"] is not None:
+                    connection.execute(
+                        "UPDATE local_documents SET title = ?, content = ?, source_path = ?, "
+                        "updated_at = ?, deleted_at = NULL WHERE id = ?",
+                        (title, content, source_path, now, existing["id"]),
+                    )
+                row = connection.execute(
+                    "SELECT * FROM local_documents WHERE id = ?", (existing["id"],)
+                ).fetchone()
+                assert row is not None
+                return _document_from_row(row)
             row = connection.execute(
                 "SELECT * FROM local_documents WHERE id = ?", (document_id,)
             ).fetchone()
@@ -82,7 +130,7 @@ class KnowledgeStore:
     def list(self, *, scope: str = "global", limit: int = 20) -> list[KnowledgeDocument]:
         if limit < 1 or limit > MAX_SEARCH_RESULTS:
             raise ValueError(f"limit must be between 1 and {MAX_SEARCH_RESULTS}")
-        with self._connect() as connection:
+        with self._session() as connection:
             rows = connection.execute(
                 "SELECT * FROM local_documents WHERE scope = ? AND deleted_at IS NULL "
                 "ORDER BY updated_at DESC LIMIT ?",
@@ -97,7 +145,7 @@ class KnowledgeStore:
         if limit < 1 or limit > MAX_SEARCH_RESULTS:
             raise ValueError(f"limit must be between 1 and {MAX_SEARCH_RESULTS}")
         pattern = f"%{_escape_like(query)}%"
-        with self._connect() as connection:
+        with self._session() as connection:
             rows = connection.execute(
                 "SELECT * FROM local_documents WHERE scope = ? AND deleted_at IS NULL "
                 "AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') "

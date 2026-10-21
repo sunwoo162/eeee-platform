@@ -251,6 +251,20 @@ class GeneralConversationCapability:
                 workspace=workspace,
                 allowed_actions=["read"], run_id=envelope_context.envelope.execution_id,
             ))
+            if result.status == "completed" and not result.summary.strip():
+                return CapabilityOutcome(
+                    {
+                        "status": "blocked",
+                        "capabilityStatus": "blocked",
+                        "message": "AI가 빈 답변을 반환해서 완료로 처리하지 않았어. 다시 시도해줘.",
+                        "runtimeStatus": result.status,
+                    },
+                    ExecutionStatus.BLOCKED,
+                    ExecutionError(
+                        code="assistant_empty_response",
+                        message="Assistant provider returned an empty response",
+                    ),
+                )
             if result.status == "completed":
                 return CapabilityOutcome({
                     "status": "completed", "capabilityStatus": "completed",

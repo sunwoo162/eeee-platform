@@ -770,7 +770,10 @@ def build_assistant_router(
     router = APIRouter(prefix="/api")
 
     @router.post("/assistant/route", response_model=AssistantRouteResponse)
-    def route_assistant_request(payload: AssistantRequestPayload) -> AssistantRouteResponse:
+    def route_assistant_request(
+        payload: AssistantRequestPayload, request: Request
+    ) -> AssistantRouteResponse:
+        _require_local_desktop(request)
         try:
             return AssistantRouteResponse.model_validate(
                 service.route(

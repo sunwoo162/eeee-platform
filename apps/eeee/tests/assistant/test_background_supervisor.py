@@ -1,4 +1,5 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
 from app.assistant.background import BackgroundExecutionSupervisor
@@ -63,6 +64,39 @@ def test_background_job_status_can_be_read_after_submission(tmp_path):
         job_id = supervisor.submit("assistant-request-3", lambda: {"ok": True})
         assert supervisor.get(job_id)["status"] in {"queued", "running", "completed"}
     finally:
+        supervisor.shutdown()
+
+
+def test_concurrent_submit_with_same_request_id_reuses_one_durable_job(tmp_path):
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    supervisor = BackgroundExecutionSupervisor(store, max_workers=1)
+    started = Event()
+    release = Event()
+
+    def operation():
+        started.set()
+        release.wait(timeout=3)
+        return {"ok": True}
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            job_ids = list(
+                pool.map(
+                    lambda _index: supervisor.submit(
+                        "assistant-request-concurrent", operation
+                    ),
+                    range(8),
+                )
+            )
+
+        assert len(set(job_ids)) == 1
+        assert started.wait(timeout=3)
+        release.set()
+        assert _wait_for(supervisor, job_ids[0], "completed")["result"] == {"ok": True}
+        assert len(supervisor.list_jobs()) == 1
+    finally:
+        release.set()
         supervisor.shutdown()
 
 

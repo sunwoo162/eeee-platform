@@ -973,6 +973,9 @@ def build_mobile_router(
                 "capabilityId": result.selection.capability_id,
                 "status": result.status,
                 "projectId": result.project_id,
+                "conversationId": payload.conversation_id,
+                "requestId": result.request_id,
+                "jobId": result.job_id,
             },
         )
         return AssistantRouteResponse.model_validate(result.model_dump())

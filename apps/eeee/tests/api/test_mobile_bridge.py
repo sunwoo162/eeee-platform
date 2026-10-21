@@ -39,6 +39,8 @@ def test_mobile_controls_desktop_owned_assistant_and_receives_live_events(tmp_pa
     assert "assistant.route.started" in kinds
     assert kinds[-1] == "assistant.route.completed"
     assert events.json()["events"][-1]["payload"]["deviceId"] == paired.json()["deviceId"]
+    assert events.json()["events"][-1]["payload"]["conversationId"] == "desktop-default"
+    assert events.json()["events"][-1]["payload"]["requestId"] == command.json()["requestId"]
 
 
 def test_mobile_accepted_route_publishes_accepted_event_not_completed(tmp_path) -> None:

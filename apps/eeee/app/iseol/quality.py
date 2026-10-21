@@ -99,7 +99,13 @@ class ProductQualityProfile(BaseModel):
         artifacts = [artifact.model_copy(update={"paths": replacements.get(artifact.id, artifact.paths)}) for artifact in profile.artifacts]
         return profile.model_copy(update={"artifacts": artifacts})
 
-    def evaluate(self, workspace: Path, *, require_release_evidence: bool = True) -> "QualityReport":
+    def evaluate(
+        self,
+        workspace: Path,
+        *,
+        require_release_evidence: bool = True,
+        allow_qa_warning: bool = False,
+    ) -> "QualityReport":
         checks: list[QualityCheck] = []
         root = Path(workspace).resolve()
         for artifact in self.artifacts:
@@ -130,9 +136,12 @@ class ProductQualityProfile(BaseModel):
                     for check in (payload.get("checks", []) if isinstance(payload, dict) else [])
                     if isinstance(check, dict) and isinstance(check.get("evidenceId"), str)
                 }
+                accepted_qa_statuses = {"PASS"}
+                if allow_qa_warning:
+                    accepted_qa_statuses.add("WARN")
                 qa_valid = (
                     isinstance(payload, dict)
-                    and payload.get("status") == "PASS"
+                    and payload.get("status") in accepted_qa_statuses
                     and payload.get("independent") is True
                     and isinstance(qa_evidence, list)
                     and bool(qa_evidence)
@@ -140,17 +149,26 @@ class ProductQualityProfile(BaseModel):
                 )
             except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
                 qa_valid = False
+        qa_status = "PASS" if qa_valid and payload.get("status") == "PASS" else "WARN" if qa_valid else "BLOCK"
         checks.append(QualityCheck(
             name="quality:qa-report",
-            status="PASS" if qa_valid else "BLOCK",
-            message="Independent QA report is present and evidence-linked" if qa_valid else "Independent QA report is missing, malformed, or lacks linked evidence",
+            status=qa_status,
+            message=(
+                "Independent QA report is present and evidence-linked"
+                if qa_status == "PASS"
+                else "Independent QA report is evidence-linked but includes unexecuted checks"
+                if qa_status == "WARN"
+                else "Independent QA report is missing, malformed, or lacks linked evidence"
+            ),
         ))
         if require_release_evidence:
             if manifest_path.is_file():
                 checks.append(QualityCheck(name="quality:release-manifest", status="PASS", message="Release manifest is present"))
             else:
                 checks.append(QualityCheck(name="quality:release-manifest", status="BLOCK", message="Release manifest is missing"))
-        decision = "BLOCK" if any(check.status == "BLOCK" for check in checks) else "PASS"
+        decision = "BLOCK" if any(check.status == "BLOCK" for check in checks) else (
+            "WARN" if any(check.status == "WARN" for check in checks) else "PASS"
+        )
         return QualityReport(decision=decision, checks=checks)
 
 

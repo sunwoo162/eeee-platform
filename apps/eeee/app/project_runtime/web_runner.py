@@ -194,7 +194,7 @@ console.log(JSON.stringify({ status: 'passed' }));
     def run(self, *, url: str, workspace: str | Path, template_id: str) -> dict[str, str]:
         root = Path(workspace).resolve()
         if template_id != "todo_app":
-            return self._not_run(root, "template does not expose the todo browser contract")
+            return self._not_applicable(root, "template does not expose the todo browser contract")
         parsed = urlsplit(url)
         if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
             return self._failed(root, "Browser UI E2E is restricted to a local URL")
@@ -307,6 +307,16 @@ console.log(JSON.stringify({ status: 'passed' }));
             "name": "browser:ui-e2e",
             "status": "not_run",
             "evidenceId": "evidence-browser-not-run",
+            "path": str(root),
+            "detail": detail,
+        }
+
+    @staticmethod
+    def _not_applicable(root: Path, detail: str) -> dict[str, str]:
+        return {
+            "name": "browser:ui-e2e",
+            "status": "not_applicable",
+            "evidenceId": "evidence-browser-not-applicable",
             "path": str(root),
             "detail": detail,
         }
@@ -482,23 +492,40 @@ class WebProjectRunner:
         report = {
             "schemaVersion": 1, "id": f"qa-{project_id}-{project_revision}",
             "projectId": project_id, "projectRevision": project_revision,
-            "status": "PASS", "independent": True, "runner": "EEEE.WebProjectRunner",
+            "status": "WARN" if browser_check["status"] == "not_run" else "PASS",
+            "independent": True, "runner": "EEEE.WebProjectRunner",
             "runtimeProfile": "web_app", "authMode": "demo",
             "deploymentReadiness": "awaiting_configuration",
-            "browserVerification": "PASS" if browser_check["status"] == "passed" else "NOT_RUN",
+            "browserVerification": (
+                "PASS"
+                if browser_check["status"] == "passed"
+                else "NOT_APPLICABLE"
+                if browser_check["status"] == "not_applicable"
+                else "NOT_RUN"
+            ),
             "verificationScope": "local-api-static-browser-ui" if browser_check["status"] == "passed" else "local-api-and-static",
             "createdAt": datetime.now(timezone.utc).isoformat(), "checks": checks,
             "evidenceIds": evidence_ids,
         }
         if acceptance_criteria:
+            trace_status = "partial" if browser_check["status"] == "not_run" else "verified"
+            trace_evidence_ids = (
+                evidence_ids
+                if trace_status == "verified"
+                else [item["evidenceId"] for item in checks if item["status"] == "passed"]
+            )
             report["requirementTraceability"] = [
-                {"criterion": criterion, "status": "verified", "evidenceIds": evidence_ids}
+                {"criterion": criterion, "status": trace_status, "evidenceIds": trace_evidence_ids}
                 for criterion in acceptance_criteria
             ]
         qa_path = root / "QA_REPORT.json"
         qa_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        quality = ProductQualityProfile.web_app().evaluate(root, require_release_evidence=False)
-        if quality.decision != "PASS":
+        quality = ProductQualityProfile.web_app().evaluate(
+            root,
+            require_release_evidence=False,
+            allow_qa_warning=True,
+        )
+        if quality.decision == "BLOCK":
             raise ValueError("Web portfolio quality profile failed: " + "; ".join(check.message for check in quality.checks if check.status == "BLOCK"))
         report["qualityProfile"] = quality.model_dump(mode="json")
         qa_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -530,6 +557,13 @@ class WebProjectRunner:
     def finalize(self, *, project_id: str, project_revision: str, workspace: str | Path, prepared: PreparedWebRun, claim_latch: Mapping[str, Any]) -> WebRunResult:
         if claim_latch.get("decision") != "PASS" or not claim_latch.get("receiptId"):
             return WebRunResult("BLOCKED", "ClaimLatch release verification did not PASS", prepared.qa_report_path, None)
+        if prepared.qa_report.get("status") != "PASS" or prepared.qa_report.get("browserVerification") == "NOT_RUN":
+            return WebRunResult(
+                "BLOCKED",
+                "Browser UI E2E verification did not PASS; release remains blocked",
+                prepared.qa_report_path,
+                None,
+            )
         manifest = build_release_manifest(project_id=project_id, project_revision=project_revision, workspace=str(Path(workspace).resolve()), artifacts=prepared.artifacts, qa_report=prepared.qa_report, claim_latch=dict(claim_latch))
         manifest_path = Path(workspace).resolve() / "RELEASE_MANIFEST.json"
         manifest_path.write_text(json.dumps(manifest.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -100,6 +100,8 @@ class ProjectQualityEvaluator:
         browser = _browser_status(qa)
         if browser == "NOT_RUN":
             limitations.append("Browser UI verification is NOT_RUN; this is not a portfolio-complete release")
+        elif browser == "NOT_APPLICABLE":
+            limitations.append("Browser UI verification is not applicable to this project template")
         elif browser == "BLOCK":
             blockers.append("Browser UI verification failed")
         for extension_id in plan.missing_extensions:
@@ -264,6 +266,8 @@ def _requirement_traceability(
 def _browser_status(qa: Mapping[str, object]) -> str:
     if qa.get("browserVerification") == "NOT_RUN":
         return "NOT_RUN"
+    if qa.get("browserVerification") == "NOT_APPLICABLE":
+        return "NOT_APPLICABLE"
     checks = qa.get("checks")
     if isinstance(checks, list):
         for check in checks:

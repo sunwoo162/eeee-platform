@@ -168,3 +168,24 @@ def test_final_report_preserves_retry_evidence(tmp_path) -> None:
     )
 
     assert report.retries == qa["retries"]
+
+
+def test_not_applicable_browser_verification_is_reported_as_a_limitation(tmp_path) -> None:
+    _workspace(tmp_path)
+    qa = _qa()
+    qa["browserVerification"] = "NOT_APPLICABLE"
+    qa["checks"].append({
+        "name": "browser:ui-e2e",
+        "status": "not_applicable",
+        "evidenceId": "browser-not-applicable",
+    })
+    qa["evidenceIds"].append("browser-not-applicable")
+    qa["requirementTraceability"][0]["evidenceIds"].append("browser-not-applicable")
+
+    report = ProjectQualityEvaluator().evaluate(
+        tmp_path, _intent(), _plan(), qa,
+        {"decision": "PASS", "receiptId": "receipt-1", "claimLatchReportId": "report-1"},
+    )
+
+    assert not any("Browser UI verification failed" in blocker for blocker in report.blockers)
+    assert any("not applicable" in limitation for limitation in report.limitations)

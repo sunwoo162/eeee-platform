@@ -158,3 +158,29 @@ def test_plugin_platform_notion_adapter_uses_connected_connector() -> None:
 
     assert page.id == "page-2"
     assert page.url == "https://notion.so/page-2"
+
+
+def test_project_document_service_routes_plugin_notion_by_user(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    store.create_project("project-1", "Gleave project", str(tmp_path / "workspace"), "rev-1")
+    profile = _profile()
+    calls: list[tuple[str, str]] = []
+
+    class Platform:
+        def connected_connector_ids(self, user_id, *, required_permissions):
+            calls.append(("connected", user_id))
+            return {"notion"} if user_id == "user-a" else set()
+
+        def invoke_connector_action(self, user_id, plugin_id, action, value):
+            calls.append((action, user_id))
+            return {"id": "page-user-a", "url": "https://notion.so/page-user-a"}
+
+    service = ProjectDocumentService(
+        store, PluginPlatformNotionAdapter(Platform()), _passed_gate()
+    )
+
+    result = service.sync(profile, user_id="user-a")
+
+    assert result.status == "synced"
+    assert calls == [("connected", "user-a"), ("create_project_page", "user-a")]

@@ -136,13 +136,14 @@ def test_project_plan_reuses_resume_project_identity(tmp_path) -> None:
     )
     request = AssistantRequest(
         raw_text="Todo 앱 만들어줘",
-        context={"resumeProjectId": "project-resume-1"},
+        context={"resumeProjectId": "project-resume-1", "userId": "user-a"},
     )
 
     plan = capability.plan(request, AssistantContext())
 
     assert plan.inputs["projectId"] == "project-resume-1"
     assert Path(plan.inputs["workspace"]).is_relative_to(settings.workspace_root)
+    assert plan.inputs["userId"] == "user-a"
 
 
 def test_project_plan_preserves_external_action_approval_context(tmp_path) -> None:
@@ -207,4 +208,40 @@ def test_project_execution_passes_external_action_context_to_orchestrator(tmp_pa
     assert seen["externalActionRequired"] is True
     assert seen["approved"] is False
     assert seen["externalActions"]
+
+
+def test_project_execution_preserves_user_context_for_orchestrator(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    store = SQLiteStore(settings.data_dir / "state.sqlite3")
+    store.init()
+    descriptor = build_default_registry().resolve("project-execution").descriptor
+    capability = ProjectExecutionCapability(
+        descriptor,
+        coordinator=Coordinator(store),
+        store=store,
+        settings=settings,
+        provisioner=ProjectProvisioner(store),
+    )
+    plan = capability.plan(
+        AssistantRequest(raw_text="Todo 앱 만들어줘", context={"userId": "user-a"}),
+        AssistantContext(),
+    )
+    seen: dict[str, object] = {}
+
+    class RecordingOrchestrator:
+        def run(self, request, _context, _envelope):
+            seen.update(request.context)
+            return {"status": "blocked"}
+
+    capability.orchestrator = RecordingOrchestrator()
+    capability.execute(
+        plan,
+        EnvelopeContext(
+            envelope=object(),
+            assistant_context=AssistantContext(),
+            run_child=lambda **_kwargs: None,
+        ),
+    )
+
+    assert seen["userId"] == "user-a"
 

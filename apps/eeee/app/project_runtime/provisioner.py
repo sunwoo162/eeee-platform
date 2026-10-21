@@ -28,7 +28,7 @@ class ProjectProvisioner:
         self,
         store: SQLiteStore,
         connectors: Mapping[str, ProjectConnector] | None = None,
-        configured_connector_ids: Callable[[], set[str]] | None = None,
+        configured_connector_ids: Callable[..., set[str]] | None = None,
         iseol_bridge: IseolPlanBridge | None = None,
         todo_runner: TodoProjectRunner | None = None,
         web_runner: WebProjectRunner | None = None,
@@ -51,6 +51,7 @@ class ProjectProvisioner:
         request_id: str | None = None,
         planning_handoff: PlanningHandoff | None = None,
         intent: ProjectIntent | None = None,
+        user_id: str = "local-user",
     ) -> ProjectProvisioningResult:
         existing = self._existing_current_profile(project)
         if existing is not None:
@@ -84,9 +85,10 @@ class ProjectProvisioner:
                 "goal": "user_request",
                 "scope": "request_parser",
                 "connectors": "local_connector_registry",
+                "userId": user_id,
             },
         )
-        configured = set(self.configured_connector_ids() if self.configured_connector_ids else ())
+        configured = self._configured_connector_ids(user_id)
         bindings = [
             _plan_connector(connector, profile, configured)
             for connector in self.connectors.values()
@@ -100,6 +102,16 @@ class ProjectProvisioner:
             intent=intent,
         )
         return _result(profile, execution_plan_path=execution_plan_path)
+
+    def _configured_connector_ids(self, user_id: str) -> set[str]:
+        if self.configured_connector_ids is None:
+            return set()
+        try:
+            return set(self.configured_connector_ids(user_id))
+        except TypeError:
+            # Keep embedders that supplied the pre-user-scope callback working
+            # while every first-party callback receives the actual principal.
+            return set(self.configured_connector_ids())
 
     @staticmethod
     def _create_scaffold(

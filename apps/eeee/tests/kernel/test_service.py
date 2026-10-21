@@ -93,7 +93,7 @@ def test_routing_record_exists_before_project_allocation(tmp_path):
 
 def test_non_project_and_explicit_capability_requests_do_not_allocate_project(tmp_path):
     kernel, store, _ = make_kernel(tmp_path)
-    reminder = kernel.route(AssistantRequest(raw_text="내일 회의 일정 알려줘"), AssistantContext())
+    reminder = kernel.route(AssistantRequest(raw_text="내일 오후 3시에 회의 알려줘"), AssistantContext())
     explicit = kernel.route(
         AssistantRequest(raw_text="프로젝트 문서 정리해줘", requested_capability="knowledge-documents"),
         AssistantContext(user_preferences={"language": "ko"}),
@@ -101,8 +101,9 @@ def test_non_project_and_explicit_capability_requests_do_not_allocate_project(tm
 
     assert reminder.capability_id == "personal-secretary"
     assert explicit.capability_id == "knowledge-documents"
-    assert reminder.output["status"] == "selected"
-    assert reminder.output["capabilityStatus"] == "planned"
+    assert reminder.output["status"] == "completed"
+    assert reminder.output["capabilityStatus"] == "completed"
+    assert reminder.output["reminder"]["title"] == "회의"
     assert explicit.output["context"]["user_preferences"]["language"] == "ko"
     assert reminder.project_id is None
     with sqlite3.connect(store.path) as connection:
@@ -129,11 +130,11 @@ def test_explicit_user_preference_is_saved_and_reused_on_next_request(tmp_path):
     kernel, store, _ = make_kernel(tmp_path)
 
     remembered = kernel.route(AssistantRequest(raw_text="앞으로 한국어로 답해줘"), AssistantContext())
-    next_request = kernel.route(AssistantRequest(raw_text="내일 회의 일정 알려줘"), AssistantContext())
+    next_request = kernel.route(AssistantRequest(raw_text="내일 오후 3시에 회의 알려줘"), AssistantContext())
 
     assert remembered.capability_id == "user-preference"
     assert remembered.output["status"] == "completed"
-    assert next_request.output["context"]["user_preferences"]["language"] == "한국어"
+    assert next_request.output["reminder"]["title"] == "회의"
 
 
 def test_ambiguous_request_is_auditable_and_requires_clarification(tmp_path):

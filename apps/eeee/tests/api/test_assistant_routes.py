@@ -62,6 +62,25 @@ def test_assistant_route_keeps_non_project_intent_out_of_project_creation(tmp_pa
     assert payload["project_profile"] is None
 
 
+def test_assistant_route_reuses_a_reminder_for_the_same_request_id(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    client = TestClient(create_app(settings))
+    request = {
+        "text": "내일 오후 3시에 팀 회의 알려줘",
+        "conversationId": "reminder-idempotency",
+        "requestId": "reminder-request-1",
+    }
+
+    first = client.post("/api/assistant/route", json=request)
+    retry = client.post("/api/assistant/route", json=request)
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert first.json()["status"] == "completed"
+    assert retry.json()["status"] == "completed"
+    assert first.json()["reminder"]["id"] == retry.json()["reminder"]["id"]
+
+
 def test_assistant_route_returns_clarification_for_ambiguous_intent(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     client = TestClient(create_app(settings))

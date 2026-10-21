@@ -14,7 +14,7 @@ from app.assistant.router import CapabilityRouter
 from app.config import Settings
 from app.contracts import ApprovalState, EventEnvelope, ExecutionEnvelope, ExecutionError, ExecutionStatus, LocalEventBus, SideEffectLevel
 from app.coordinator.service import Coordinator
-from app.kernel.capabilities import CapabilityOutcome, EnvelopeContext, GeneralConversationCapability, LocalPlanningCapability, ProjectExecutionCapability, UserPreferenceCapability
+from app.kernel.capabilities import CapabilityOutcome, EnvelopeContext, GeneralConversationCapability, LocalPlanningCapability, LocalSecretaryCapability, ProjectExecutionCapability, UserPreferenceCapability
 from app.memory.store import MemoryStore
 from app.memory.context import MemoryContextCompiler
 from app.project_runtime.provisioner import ProjectProvisioner
@@ -70,7 +70,9 @@ class KernelService:
                     workspace_root=settings.workspace_root,
                     chatgpt_web_enabled=chatgpt_web_enabled,
                 )
-            elif descriptor.id in {"personal-secretary", "knowledge-documents", "presence"}:
+            elif descriptor.id == "personal-secretary":
+                handler = LocalSecretaryCapability(descriptor, store=store)
+            elif descriptor.id in {"knowledge-documents", "presence"}:
                 handler = LocalPlanningCapability(descriptor)
             else:
                 continue
@@ -125,8 +127,14 @@ class KernelService:
                     return candidate
 
         if parent is None:
+            requested_request_id = request.context.get("requestId")
+            request_id = (
+                requested_request_id.strip()
+                if isinstance(requested_request_id, str) and requested_request_id.strip()
+                else f"assistant-request-{uuid4().hex}"
+            )
             parent = ExecutionEnvelope(
-                execution_id=f"execution-{uuid4().hex}", request_id=f"assistant-request-{uuid4().hex}",
+                execution_id=f"execution-{uuid4().hex}", request_id=request_id,
                 capability_id=capability_id, tool_id="eeee.route", actor="EEEE",
                 input={"request": request.model_dump(mode="json"), "context": context.model_dump(mode="json")},
                 side_effect_level=registered.descriptor.side_effect_level if registered else SideEffectLevel.NONE,

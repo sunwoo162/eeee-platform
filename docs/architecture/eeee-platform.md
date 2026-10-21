@@ -48,7 +48,7 @@ EEEE is the top-level personal assistant. The request is not assumed to be a dev
 |---|---|---|
 | 일정, 약속, 알림, 루틴 | `personal-secretary` | Google Calendar / local scheduler |
 | 앱, 서비스, 기능, 프로젝트 | `project-execution` | Project Runtime + ISEOL |
-| 문서, 정보, 요약, 검색 | `knowledge-documents` | local files / memory |
+| 문서, 정보, 요약, 검색 | `knowledge-documents` | local documents / memory |
 | 문서, 결정, 진행 기록 | `knowledge-documents` | Notion adapter |
 | 바탕화면, 휴대폰, 알림 | `presence` | Desktop widget / Mobile bridge |
 
@@ -68,6 +68,17 @@ Capabilities are registered through a descriptor and selected by the EEEE router
 8. Persist the profile, connector states, provenance, and idempotency keys in local SQLite.
 
 Low-risk inferred values can be filled automatically. High-impact values such as public messages, deletion, deployment, or external writes remain planned until policy and ClaimLatch approval allow them.
+
+## Local knowledge documents
+
+The `knowledge-documents` capability is local and bounded. Explicit commands such
+as `문서 저장해줘: 제목` followed by the document body, `문서 검색해줘: 검색어`,
+and `문서 요약해줘: 검색어` persist, search, or summarize text in the same local
+SQLite database used by EEEE. Document records are separate from user/project
+memory and conversation turns. Search results and deterministic summaries include
+the document ID and content hash as a source reference; an unavailable language
+model never becomes a fabricated summary. Empty or ambiguous document commands
+return a blocked clarification instead of selecting a project execution lane.
 
 ## ISEOL project-execution loop
 

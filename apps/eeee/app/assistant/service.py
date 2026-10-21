@@ -58,6 +58,10 @@ class AssistantRouteResult(BaseModel):
     plugin_output: dict[str, object] | None = Field(default=None, alias="pluginOutput")
     reminder: dict[str, str] | None = None
     reminders: list[dict[str, str]] = Field(default_factory=list)
+    document: dict[str, object] | None = None
+    documents: list[dict[str, object]] = Field(default_factory=list)
+    summary: str | None = None
+    sources: list[dict[str, object]] = Field(default_factory=list)
     approval_required: bool = Field(default=False, alias="approvalRequired")
     approval_capability_id: str | None = Field(default=None, alias="approvalCapabilityId")
     approval_plugin_id: str | None = Field(default=None, alias="approvalPluginId")
@@ -284,6 +288,10 @@ class AssistantService:
             plugin_output=output.get("pluginOutput") if isinstance(output.get("pluginOutput"), dict) else None,
             reminder=output.get("reminder") if isinstance(output.get("reminder"), dict) else None,
             reminders=output.get("reminders", []) if isinstance(output.get("reminders", []), list) else [],
+            document=output.get("document") if isinstance(output.get("document"), dict) else None,
+            documents=output.get("documents", []) if isinstance(output.get("documents", []), list) else [],
+            summary=output.get("summary") if isinstance(output.get("summary"), str) else None,
+            sources=output.get("sources", []) if isinstance(output.get("sources", []), list) else [],
             approval_required=output.get("approvalRequired") is True,
             approval_capability_id=output.get("approvalCapabilityId"),
             approval_plugin_id=output.get("approvalPluginId"),

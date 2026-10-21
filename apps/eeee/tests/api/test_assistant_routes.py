@@ -81,6 +81,31 @@ def test_assistant_route_reuses_a_reminder_for_the_same_request_id(tmp_path) -> 
     assert first.json()["reminder"]["id"] == retry.json()["reminder"]["id"]
 
 
+def test_assistant_route_runs_local_document_save_and_search(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    client = TestClient(create_app(settings))
+
+    saved = client.post(
+        "/api/assistant/route",
+        json={
+            "text": "문서 저장해줘: 배포 체크리스트\n테스트 통과 후 배포한다.",
+            "conversationId": "knowledge-api",
+        },
+    )
+    found = client.post(
+        "/api/assistant/route",
+        json={"text": "문서 검색해줘: 배포", "conversationId": "knowledge-api"},
+    )
+
+    assert saved.status_code == 200
+    assert saved.json()["status"] == "completed"
+    assert saved.json()["document"]["title"] == "배포 체크리스트"
+    assert found.status_code == 200
+    assert found.json()["status"] == "completed"
+    assert found.json()["documents"][0]["id"] == saved.json()["document"]["id"]
+    assert found.json()["sources"][0]["contentHash"]
+
+
 def test_assistant_route_returns_clarification_for_ambiguous_intent(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     client = TestClient(create_app(settings))

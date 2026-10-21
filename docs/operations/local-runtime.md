@@ -71,6 +71,25 @@ status, independent QA status, evidence IDs, and troubleshooting references.
 Korean is the default UI language; the language selector switches the launcher
 and existing workbench labels to English.
 
+### Local document commands
+
+EEEE keeps local knowledge documents separate from conversation history and
+verified long-term memory. Use the assistant route with an explicit command:
+
+```text
+문서 저장해줘: 배포 체크리스트
+테스트 통과 후 배포한다.
+
+문서 검색해줘: 배포
+문서 요약해줘: 배포
+```
+
+The document is stored in the configured EEEE SQLite database, scoped to the
+conversation ID. Search and summary responses return source metadata including
+the document ID and content hash. A document command without a title/body or
+search target is blocked for clarification; EEEE does not claim that an
+unconfigured external document provider performed the work.
+
 Long project requests return a durable `jobId` and planned `projectId`
 immediately. The worker stores the project identity in the job input and uses
 it again after restart or retry, so a partially provisioned project is resumed

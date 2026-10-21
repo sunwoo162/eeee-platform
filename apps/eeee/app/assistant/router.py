@@ -79,6 +79,18 @@ class CapabilityRouter:
             )
 
         normalized = _normalize(request.raw_text)
+        if _is_explicit_knowledge_command(normalized):
+            documents = self.registry.resolve("knowledge-documents")
+            return CapabilitySelection(
+                status="selected",
+                capability_id=documents.descriptor.id,
+                candidates=[CapabilityCandidate(
+                    capability_id=documents.descriptor.id,
+                    score=100,
+                    reasons=["explicit local document command"],
+                )],
+                reasons=["explicit local document command"],
+            )
         if _is_informational_capability_question(normalized):
             fallback = self.registry.resolve("general-conversation")
             return CapabilitySelection(
@@ -229,6 +241,14 @@ def _is_informational_capability_question(normalized: str) -> bool:
         "build", "create", "implement", "develop", "generate",
     )
     return not any(marker in normalized for marker in action_markers)
+
+
+def _is_explicit_knowledge_command(normalized: str) -> bool:
+    """Give an explicit document command precedence over broad project words."""
+    return re.match(
+        r"^(?:문서\s*)?(?:저장|검색|찾아|조회|보여|요약)(?:해줘|해|하기|줘)?(?:\s*[:：]|\s*$)",
+        normalized,
+    ) is not None
 
 
 def _action_intent_bonus(capability_id: str, normalized: str) -> int:

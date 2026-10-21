@@ -13,6 +13,8 @@ from uuid import uuid4
 from app.assistant.models import AssistantContext, AssistantRequest, CapabilityDescriptor, CapabilityPlan
 from app.assistant.secretary import PersonalSecretary, SecretaryContext
 from app.assistant.reminders import ReminderStore, parse_reminder
+from app.knowledge.service import KnowledgeService
+from app.knowledge.store import KnowledgeStore
 from app.agent.protocol import AgentRequest, AgentRuntime
 from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
 from app.config import Settings
@@ -126,6 +128,49 @@ class LocalSecretaryCapability:
             "message": f"{reminder.title} 일정을 {reminder.due_at.strftime('%m월 %d일 %H:%M')}로 저장했어.",
             "reminder": reminder.as_dict(),
         })
+
+
+class KnowledgeDocumentsCapability:
+    """Run bounded local document commands without promoting them to memory."""
+
+    def __init__(self, descriptor, *, store: SQLiteStore) -> None:
+        self.descriptor = descriptor
+        self.service = KnowledgeService(KnowledgeStore(store.path))
+
+    def plan(self, request: AssistantRequest, context: AssistantContext) -> CapabilityPlan:
+        return CapabilityPlan(
+            capability_id=self.descriptor.id,
+            summary=request.raw_text,
+            inputs={
+                "text": request.raw_text,
+                "scope": context.conversation_id,
+            },
+            side_effect_level=self.descriptor.side_effect_level,
+            requires_approval=False,
+        )
+
+    def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
+        result = self.service.handle(
+            str(plan.inputs.get("text", "")),
+            scope=str(plan.inputs.get("scope", "desktop-default")),
+        )
+        output = {
+            "status": result.status,
+            "capabilityStatus": result.status,
+            "message": result.message,
+            "document": result.document,
+            "documents": result.documents,
+            "summary": result.summary,
+            "sources": result.sources,
+        }
+        if result.error_code is not None:
+            output["errorCode"] = result.error_code
+            return CapabilityOutcome(
+                output,
+                ExecutionStatus.BLOCKED,
+                ExecutionError(code=result.error_code, message=result.message),
+            )
+        return CapabilityOutcome(output)
 
 
 class GeneralConversationCapability:

@@ -23,6 +23,38 @@ class NotionDocumentAdapter(Protocol):
     def append_revision(self, page_id: str, revision: str, lines: list[str]) -> None: ...
 
 
+class PluginPlatformNotionAdapter:
+    """Use the connected Notion plugin for trusted project-document writes."""
+
+    def __init__(self, platform: object, user_id: str = "local-user") -> None:
+        self.platform = platform
+        self.user_id = user_id
+
+    def is_available(self) -> bool:
+        connected = self.platform.connected_connector_ids(
+            self.user_id,
+            required_permissions={"notion": {"pages.write"}},
+        )
+        return "notion" in connected
+
+    def create_project_page(self, profile: ProjectProfile, lines: list[str]) -> NotionPageRef:
+        result = self.platform.invoke_connector_action(
+            self.user_id,
+            "notion",
+            "create_project_page",
+            {"profile": profile.model_dump(mode="json", by_alias=True), "lines": lines},
+        )
+        return _page_ref(result)
+
+    def append_revision(self, page_id: str, revision: str, lines: list[str]) -> None:
+        self.platform.invoke_connector_action(
+            self.user_id,
+            "notion",
+            "append_revision",
+            {"pageId": page_id, "revision": revision, "lines": lines},
+        )
+
+
 class ProjectDocumentService:
     """Synchronize a Project Runtime profile into Notion after trust verification."""
 
@@ -39,7 +71,7 @@ class ProjectDocumentService:
         self.event_publisher = event_publisher
 
     def sync(self, profile: ProjectProfile) -> ProjectDocumentSyncResult:
-        if self.notion is None:
+        if self.notion is None or not _is_available(self.notion):
             result = ProjectDocumentSyncResult(
                 status="awaiting_configuration",
                 project_id=profile.project_id,
@@ -166,6 +198,18 @@ def _document_record(
         content_hash=content_hash,
         synced_at=datetime.now(timezone.utc),
     )
+
+
+def _page_ref(value: object) -> NotionPageRef:
+    if not isinstance(value, dict) or not isinstance(value.get("id"), str) or not value["id"].strip():
+        raise RuntimeError("Notion connector returned an invalid page reference")
+    url = value.get("url")
+    return NotionPageRef(id=value["id"], url=url if isinstance(url, str) else None)
+
+
+def _is_available(adapter: object) -> bool:
+    checker = getattr(adapter, "is_available", None)
+    return bool(checker()) if callable(checker) else True
 
 
 def _document_lines(profile: ProjectProfile) -> list[str]:

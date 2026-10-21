@@ -54,7 +54,7 @@ from app.project_runtime.provisioner import ProjectProvisioner
 from app.project_runtime.iseol_bridge import IseolPlanBridge
 from app.planning.service import PlanningService
 from app.project_runtime.connectors import build_default_connectors
-from app.project_runtime.documents import ProjectDocumentService
+from app.project_runtime.documents import PluginPlatformNotionAdapter, ProjectDocumentService
 from app.project_runtime.evidence import ProjectEvidenceService
 from app.project_view.service import ProjectViewService
 from app.plugins.host import PluginHost
@@ -208,7 +208,9 @@ def create_app(
         connectors=build_default_connectors(configured=configured_connectors),
         configured_connector_ids=lambda: {
             *configured_connectors,
-            *plugin_platform.connected_connector_ids("local-user"),
+            *plugin_platform.connected_connector_ids(
+                "local-user", required_permissions={"notion": {"pages.write"}}
+            ),
         },
         iseol_bridge=IseolPlanBridge(timeout=app_settings.command_timeout_seconds),
     )
@@ -266,7 +268,12 @@ def create_app(
             base_url=app_settings.notion_api_base,
             api_version=app_settings.notion_api_version,
         )
-    project_documents = ProjectDocumentService(store, configured_notion, trust_gate, mobile_bridge.publish)
+    project_documents = ProjectDocumentService(
+        store,
+        configured_notion or PluginPlatformNotionAdapter(plugin_platform),
+        trust_gate,
+        mobile_bridge.publish,
+    )
     project_evidence = ProjectEvidenceService(store, trust_gate, mobile_bridge.publish)
     application.state.coordinator = coordinator
     application.state.activity_ledger = activity_ledger

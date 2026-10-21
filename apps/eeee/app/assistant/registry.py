@@ -18,32 +18,41 @@ class CapabilityRegistry:
 
     def __init__(self) -> None:
         self._capabilities: dict[str, RegisteredCapability] = {}
-        self._dynamic_provider: Callable[[], list[CapabilityDescriptor]] | None = None
+        self._dynamic_provider: Callable[..., list[CapabilityDescriptor]] | None = None
 
     def register(self, descriptor: CapabilityDescriptor, handler: Any) -> None:
         if descriptor.id in self._capabilities:
             raise ValueError(f"Capability already registered: {descriptor.id}")
         self._capabilities[descriptor.id] = RegisteredCapability(descriptor, handler)
 
-    def list(self) -> list[CapabilityDescriptor]:
+    def list(self, user_id: str = "local-user") -> list[CapabilityDescriptor]:
         descriptors = [item.descriptor for item in self._capabilities.values()]
-        if self._dynamic_provider is not None:
-            descriptors.extend(self._dynamic_provider())
+        descriptors.extend(self._dynamic(user_id))
         return descriptors
 
-    def resolve(self, capability_id: str) -> RegisteredCapability:
+    def resolve(self, capability_id: str, user_id: str = "local-user") -> RegisteredCapability:
         try:
             return self._capabilities[capability_id]
         except KeyError as exc:
-            if self._dynamic_provider is not None:
-                for descriptor in self._dynamic_provider():
-                    if descriptor.id == capability_id:
-                        return RegisteredCapability(descriptor, None)
+            for descriptor in self._dynamic(user_id):
+                if descriptor.id == capability_id:
+                    return RegisteredCapability(descriptor, None)
             raise KeyError(f"Unknown capability: {capability_id}") from exc
 
-    def set_dynamic_provider(self, provider: Callable[[], list[CapabilityDescriptor]] | None) -> None:
+    def set_dynamic_provider(self, provider: Callable[..., list[CapabilityDescriptor]] | None) -> None:
         """Project ephemeral capabilities such as currently healthy plugins."""
         self._dynamic_provider = provider
+
+    def _dynamic(self, user_id: str) -> list[CapabilityDescriptor]:
+        if self._dynamic_provider is None:
+            return []
+        try:
+            return list(self._dynamic_provider(user_id))
+        except TypeError as with_user:
+            try:
+                return list(self._dynamic_provider())
+            except TypeError:
+                raise with_user
 
     def bind(self, capability_id: str, handler: Any) -> None:
         """Attach a runtime implementation while retaining the registered policy."""

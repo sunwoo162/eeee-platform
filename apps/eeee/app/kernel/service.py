@@ -89,7 +89,9 @@ class KernelService:
         except KeyError:
             selection = CapabilitySelection(status="needs_clarification", reasons=["Unknown capability"])
         capability_id = selection.capability_id or request.requested_capability or "assistant-routing"
-        registered = self.router.registry.resolve(selection.capability_id) if selection.capability_id else None
+        user_id = request.context.get("userId", "local-user")
+        user_id = user_id if isinstance(user_id, str) and user_id.strip() else "local-user"
+        registered = self.router.registry.resolve(selection.capability_id, user_id) if selection.capability_id else None
         required_approval = registered is not None and registered.descriptor.approval_level != "none"
         approved = request.context.get("approved") is True
         approval_request_id = request.context.get("approvalRequestId")
@@ -224,14 +226,14 @@ class KernelService:
             handler = registered.handler
             if handler is None:
                 platform_capability_ids = {
-                    item.id for item in self.plugin_platform.capabilities("local-user")
+                    item.id for item in self.plugin_platform.capabilities(user_id)
                 } if self.plugin_platform is not None else set()
                 if (
                     self.plugin_platform is not None
                     and selection.capability_id in platform_capability_ids
                 ):
                     platform_execution = self.plugin_platform.invoke(
-                        "local-user", selection.capability_id,
+                        user_id, selection.capability_id,
                         {
                             "text": request.raw_text,
                             "context": request.context,

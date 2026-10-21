@@ -413,7 +413,10 @@ def create_app(
     plugin_host = PluginHost(store, execution_store=kernel.executions)
     kernel.plugin_host = plugin_host
     capability_router.registry.set_dynamic_provider(
-        lambda: [*plugin_host.routing_capabilities(), *plugin_platform.capabilities()]
+        lambda user_id="local-user": [
+            *plugin_host.routing_capabilities(),
+            *plugin_platform.capabilities(user_id),
+        ]
     )
     application.state.plugin_host = plugin_host
     application.state.plugin_platform = plugin_platform

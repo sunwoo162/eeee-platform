@@ -63,8 +63,10 @@ class CapabilityRouter:
         self.plugin_status_provider = plugin_status_provider
 
     def select(self, request: AssistantRequest) -> CapabilitySelection:
+        user_id = request.context.get("userId", "local-user")
+        user_id = user_id if isinstance(user_id, str) and user_id.strip() else "local-user"
         if request.requested_capability is not None:
-            registered = self.registry.resolve(request.requested_capability)
+            registered = self.registry.resolve(request.requested_capability, user_id)
             return CapabilitySelection(
                 status="selected",
                 capability_id=registered.descriptor.id,
@@ -80,7 +82,7 @@ class CapabilityRouter:
 
         normalized = _normalize(request.raw_text)
         if _is_explicit_knowledge_command(normalized):
-            documents = self.registry.resolve("knowledge-documents")
+            documents = self.registry.resolve("knowledge-documents", user_id)
             return CapabilitySelection(
                 status="selected",
                 capability_id=documents.descriptor.id,
@@ -92,7 +94,7 @@ class CapabilityRouter:
                 reasons=["explicit local document command"],
             )
         if _is_informational_capability_question(normalized):
-            fallback = self.registry.resolve("general-conversation")
+            fallback = self.registry.resolve("general-conversation", user_id)
             return CapabilitySelection(
                 status="selected",
                 capability_id=fallback.descriptor.id,
@@ -104,7 +106,7 @@ class CapabilityRouter:
                 reasons=["informational capability question"],
             )
         candidates: list[CapabilityCandidate] = []
-        for descriptor in self.registry.list():
+        for descriptor in self.registry.list(user_id):
             matched = [phrase for phrase in descriptor.trigger_phrases if _contains(normalized, phrase)]
             specific_matches = [
                 phrase for phrase in matched
@@ -137,7 +139,7 @@ class CapabilityRouter:
                 required_plugin_id=plugin_id,
                 required_plugin_name=plugin_name,
                 required_plugin_permissions=permissions,
-                suggested_action=self._plugin_suggested_action(plugin_id, plugin_name),
+                suggested_action=self._plugin_suggested_action(plugin_id, plugin_name, user_id),
             )
         if not candidates:
             if any(
@@ -150,7 +152,7 @@ class CapabilityRouter:
                         score=0,
                         reasons=["no trigger matched"],
                     )
-                    for descriptor in self.registry.list()
+                        for descriptor in self.registry.list(user_id)
                 ]
                 return CapabilitySelection(
                     status="needs_clarification",
@@ -177,7 +179,7 @@ class CapabilityRouter:
                         score=0,
                         reasons=["no trigger matched"],
                     )
-                    for descriptor in self.registry.list()
+                    for descriptor in self.registry.list(user_id)
                 ]
             return CapabilitySelection(
                 status="needs_clarification",
@@ -193,11 +195,14 @@ class CapabilityRouter:
             reasons=winner.reasons,
         )
 
-    def _plugin_suggested_action(self, plugin_id: str, plugin_name: str) -> str:
+    def _plugin_suggested_action(self, plugin_id: str, plugin_name: str, user_id: str) -> str:
         status = "not_installed"
         if self.plugin_status_provider is not None:
             try:
-                status = self.plugin_status_provider(plugin_id)
+                try:
+                    status = self.plugin_status_provider(plugin_id, user_id)  # type: ignore[misc]
+                except TypeError:
+                    status = self.plugin_status_provider(plugin_id)
             except (KeyError, RuntimeError):
                 status = "not_installed"
         if status == "not_installed":

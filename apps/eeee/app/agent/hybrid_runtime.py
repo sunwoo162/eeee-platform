@@ -8,6 +8,13 @@ from app.agent.protocol import AgentRequest, AgentResult, AgentRuntime
 from app.agent.provider_policy import ProviderPolicy
 
 
+def _current_user_request(prompt: str) -> str:
+    for marker in ("현재 사용자 요청:", "사용자 요청:"):
+        if marker in prompt:
+            return prompt.rsplit(marker, 1)[1].strip()[:2_000]
+    return prompt.strip()[:2_000]
+
+
 class HybridAssistantRuntime:
     """Use local reasoning first for chat and Web reasoning for deep work."""
 
@@ -16,18 +23,26 @@ class HybridAssistantRuntime:
         *,
         local: AgentRuntime | None = None,
         web: AgentRuntime | None = None,
+        builtin: AgentRuntime | None = None,
         policy: ProviderPolicy | None = None,
     ) -> None:
         self.local = local
         self.web = web
+        self.builtin = builtin
         self.policy = policy or ProviderPolicy()
 
     def run(self, request: AgentRequest) -> AgentResult:
         decision = self.policy.choose(
-            request.prompt,
-            local_available=self.local is not None,
-            web_available=self.web is not None,
+            _current_user_request(request.prompt),
+            local_available=_provider_is_available(self.local),
+            web_available=_provider_is_available(self.web),
+            builtin_available=self.builtin is not None,
         )
+        if decision.provider == "builtin":
+            assert self.builtin is not None
+            return _annotate(
+                self.builtin.run(request), "builtin", decision.reason
+            )
         if decision.provider == "unavailable":
             return AgentResult(
                 status="unavailable", summary="EEEE AI provider is unavailable",
@@ -38,6 +53,12 @@ class HybridAssistantRuntime:
         fallback = self.web if decision.provider == "local" else self.local
         assert primary is not None
         response = primary.run(request)
+        if response.status == "unavailable" and self.builtin is not None and decision.reason in {
+            "simple_request", "web_primary"
+        }:
+            return _annotate(
+                self.builtin.run(request), "builtin", "builtin_fallback"
+            )
         # A routine turn must never silently jump to the slow Web/GPT lane
         # just because the local model had a transient failure.  The user
         # chose the hybrid contract: Web is for complex work, not a hidden
@@ -50,6 +71,19 @@ class HybridAssistantRuntime:
             return _annotate(response, decision.provider, decision.reason)
         fallback_response = fallback.run(request)
         return _annotate(fallback_response, "web" if decision.provider == "local" else "local", "provider_fallback")
+
+
+def _provider_is_available(provider: AgentRuntime | None) -> bool:
+    if provider is None:
+        return False
+    status_method = getattr(provider, "status", None)
+    if not callable(status_method):
+        return True
+    try:
+        status = status_method()
+    except Exception:
+        return False
+    return getattr(status, "status", None) == "ready"
 
 
 def _annotate(response: AgentResult, provider: str, reason: str) -> AgentResult:
@@ -95,6 +129,15 @@ class FastLocalConversationRuntime:
         normalized = re.sub(
             r"\s+", " ", self._current_request(request.prompt).casefold()
         ).strip()
+        if not ProviderPolicy.is_builtin_eligible(normalized):
+            return AgentResult(
+                status="unavailable",
+                summary="",
+                events=[{"type": "provider.unavailable", "provider": "builtin"}],
+                changed_files=[],
+                test_commands=[],
+                error="builtin provider supports only bounded basic conversation",
+            )
         for phrases, response in self._RESPONSES:
             if any(phrase in normalized for phrase in phrases):
                 return AgentResult(
@@ -103,23 +146,6 @@ class FastLocalConversationRuntime:
                     events=[{"type": "local.fast-conversation", "provider": "builtin"}],
                     changed_files=[], test_commands=[], error=None,
                 )
-        contextual_responses = (
-            (("회의", "미팅"), "좋아, 회의 정리부터 도와줄게. 메모를 보내주면 핵심 내용과 할 일을 나눠서 정리할게."),
-            (("점심", "저녁", "메뉴", "먹을까"), "점심 메뉴를 같이 골라보자. 먹고 싶은 종류나 피하고 싶은 재료를 말해줘."),
-            (("일정", "약속", "캘린더"), "일정으로 정리해둘게. 날짜와 시간을 알려주면 놓치지 않게 다음 행동까지 정리할게."),
-            (("기억", "기억해"), "응, 앞으로 비슷한 상황에서 참고할 수 있도록 안전한 내용만 기억할게. 무엇을 기억하면 될까?"),
-        )
-        for phrases, response in contextual_responses:
-            if any(phrase in normalized for phrase in phrases):
-                return AgentResult(
-                    status="completed",
-                    summary=response,
-                    events=[{"type": "local.fast-conversation", "provider": "builtin"}],
-                    changed_files=[], test_commands=[], error=None,
-                )
-        # Keep ordinary conversation local and immediate. Complex work is
-        # routed to the Web/ISEOL lane by ProviderPolicy; an unknown casual
-        # sentence must not unexpectedly open a slow Web conversation.
         return AgentResult(
             status="completed",
             summary="응, 듣고 있어. 지금 하려는 일이나 궁금한 점을 한 문장으로 말해주면 바로 같이 정리할게.",
@@ -129,7 +155,4 @@ class FastLocalConversationRuntime:
 
     @staticmethod
     def _current_request(prompt: str) -> str:
-        marker = "현재 사용자 요청:"
-        if marker in prompt:
-            return prompt.rsplit(marker, 1)[1].strip()[:2_000]
-        return prompt.strip()[:2_000]
+        return _current_user_request(prompt)

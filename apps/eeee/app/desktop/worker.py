@@ -2,24 +2,51 @@
 
 from collections.abc import Callable
 from threading import Event
+from uuid import uuid4
 
 
 class ConversationWorker:
     """Synchronous Core conversation operation for a background task runner."""
 
-    def __init__(self, client, session) -> None:
+    def __init__(self, client, session=None) -> None:
         self.client = client
         self.session = session
 
-    def run_turn(self, text: str) -> dict[str, object]:
-        request = self.session.submit(text)
+    def run_turn(
+        self,
+        text: str,
+        *,
+        conversation_id: str | None = None,
+        client_message_id: str | None = None,
+    ) -> dict[str, object]:
+        create_conversation = getattr(self.client, "create_conversation", None)
+        submit_turn = getattr(self.client, "submit_turn", None)
+        if not callable(create_conversation) or not callable(submit_turn):
+            # Keep the old duck-typed test adapter working. Production clients
+            # implement both methods and never enter this compatibility path.
+            request = self.session.submit(text)
+            events = list(self.client.stream_request_events(request["requestId"]))
+            self.session.apply_events(request, events)
+            return {
+                "request": request,
+                "events": events,
+                "state": self.session.state,
+                "messages": list(self.session.messages),
+            }
+        value = text.strip()
+        if not value:
+            raise ValueError("conversation text must not be empty")
+        if conversation_id is None:
+            conversation = create_conversation()
+            conversation_id = str(conversation["id"])
+        client_message_id = client_message_id or f"desktop-{uuid4().hex}"
+        request = submit_turn(conversation_id, value, client_message_id)
         events = list(self.client.stream_request_events(request["requestId"]))
-        self.session.apply_events(request, events)
         return {
             "request": request,
             "events": events,
-            "state": self.session.state,
-            "messages": list(self.session.messages),
+            "conversationId": conversation_id,
+            "content": value,
         }
 
 

@@ -173,6 +173,41 @@ class ConversationSession:
             return self.messages
         return self.open(self.conversation_id)
 
+    def prepare_turn(self, text: str) -> dict[str, object]:
+        value = text.strip()
+        if not value:
+            raise ValueError("conversation text must not be empty")
+        self.draft = value
+        self.state = "submitting"
+        return {
+            "conversationId": self.conversation_id,
+            "clientMessageId": f"desktop-{uuid4().hex}",
+            "content": value,
+        }
+
+    def commit_turn(
+        self,
+        submission: dict[str, object],
+        request: dict[str, object],
+        events: list[dict[str, object]],
+        *,
+        conversation_id: str | None = None,
+    ) -> None:
+        if conversation_id:
+            self.conversation_id = conversation_id
+        request_id = request.get("requestId")
+        if isinstance(request_id, str):
+            self.request_id = request_id
+        content = submission.get("content")
+        if isinstance(content, str):
+            self.messages.append({"role": "user", "content": content, "status": "completed"})
+        self.state = "streaming"
+        self.draft = ""
+        self.apply_events(request, events)
+
+    def mark_error(self) -> None:
+        self.state = "error"
+
     def submit(self, text: str) -> dict[str, object]:
         value = text.strip()
         if not value:

@@ -128,8 +128,25 @@ class AssistantChatWindow:
                 self.input.setFocus()
                 self._hide_timer.start()
 
-            def _render_conversation_result(self, result: dict[str, object]):
-                messages = result.get("messages")
+            def _render_conversation_result(
+                self,
+                result: dict[str, object],
+                submission: dict[str, object],
+            ):
+                request = result.get("request")
+                events = result.get("events")
+                if isinstance(request, dict) and isinstance(events, list):
+                    self.session.commit_turn(
+                        submission,
+                        request,
+                        events,
+                        conversation_id=(
+                            result.get("conversationId")
+                            if isinstance(result.get("conversationId"), str)
+                            else None
+                        ),
+                    )
+                messages = self.session.messages
                 answer = None
                 if isinstance(messages, list):
                     for message in reversed(messages):
@@ -148,17 +165,23 @@ class AssistantChatWindow:
                     self.on_result(result)
 
             def _submit_conversation(self, text: str):
+                submission = self.session.prepare_turn(text)
                 self._show_bubble(text)
                 self.send.setEnabled(False)
                 self.input.setEnabled(False)
 
                 def operation():
-                    return self.conversation_worker.run_turn(text)
+                    return self.conversation_worker.run_turn(
+                        submission["content"],
+                        conversation_id=submission["conversationId"],
+                        client_message_id=submission["clientMessageId"],
+                    )
 
                 def success(result):
-                    self._render_conversation_result(result)
+                    self._render_conversation_result(result, submission)
 
                 def failure(error):
+                    self.session.mark_error()
                     self.send.setEnabled(True)
                     self.input.setEnabled(True)
                     self.input.setText(self.session.draft)

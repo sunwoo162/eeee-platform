@@ -74,6 +74,57 @@ def test_assistant_route_returns_clarification_for_ambiguous_intent(tmp_path) ->
     assert payload["project_id"] is None
 
 
+def test_assistant_route_uses_builtin_fallback_when_web_is_unavailable(tmp_path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+        chatgpt_web_enabled=True,
+        chatgpt_web_bridge_url="http://127.0.0.1:1",
+        ollama_model=None,
+    )
+    application = create_app(settings)
+    client = TestClient(application)
+
+    response = client.post(
+        "/api/assistant/route",
+        json={"text": "안녕", "conversationId": "builtin-fallback"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["provider"] == "builtin"
+    assert "안녕" in payload["message"]
+    assert application.state.coordinator.memory.recent_conversation_turns(
+        "builtin-fallback"
+    ) == [
+        {"role": "user", "content": "안녕"},
+        {"role": "assistant", "content": payload["message"]},
+    ]
+
+
+def test_assistant_route_keeps_complex_request_blocked_without_provider(tmp_path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+        chatgpt_web_enabled=True,
+        chatgpt_web_bridge_url="http://127.0.0.1:1",
+        ollama_model=None,
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/api/assistant/route",
+        json={"text": "코드 작성해줘", "conversationId": "complex-fallback"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["provider"] is None
+    assert payload["response_verification"]["decision"] == "BLOCKED"
+
+
 def test_assistant_route_reports_missing_optional_plugin_without_creating_project(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
     client = TestClient(create_app(settings))

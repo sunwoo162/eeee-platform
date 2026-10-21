@@ -92,6 +92,16 @@ def build_conversation_router(
         selected_status = selected.status
         if selected.provider_name == "chatgpt_web":
             selected_status = "configured" if current_web_status == "ready" else "unavailable"
+        elif selected.provider_name == "ollama":
+            selected_status = (
+                "configured" if provider_status.status == "ready" else provider_status.status
+            )
+        fallback = selected.fallback
+        if fallback is not None:
+            fallback = {
+                **fallback,
+                "active": selected_status != "configured",
+            }
         return {
             "core": core_status,
             "ollama": {
@@ -105,6 +115,7 @@ def build_conversation_router(
                 "status": selected_status,
                 "model": selected.model,
                 "reason": selected.reason,
+                "fallback": fallback,
             },
             "providers": {
                 "ollama": {

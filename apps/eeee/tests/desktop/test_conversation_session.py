@@ -66,3 +66,32 @@ def test_session_reconnects_by_reloading_persisted_transcript():
 
     assert session.reconnect() == [{"role": "user", "content": "기록"}]
     assert session.state == "idle"
+
+
+def test_session_commits_worker_result_only_when_the_qt_callback_runs():
+    session = ConversationSession(FakeConversationClient())
+
+    submission = session.prepare_turn("콜백에서 반영")
+    assert session.state == "submitting"
+    assert session.messages == []
+
+    session.commit_turn(
+        submission,
+        {"requestId": "request-1"},
+        [{"eventType": "message.completed", "payload": {"content": "완료"}}],
+        conversation_id="conversation-1",
+    )
+
+    assert session.conversation_id == "conversation-1"
+    assert session.state == "answer"
+    assert [message["content"] for message in session.messages] == ["콜백에서 반영", "완료"]
+
+
+def test_session_marks_worker_failure_without_discarding_the_draft():
+    session = ConversationSession(FakeConversationClient())
+    session.prepare_turn("복원해야 해")
+
+    session.mark_error()
+
+    assert session.state == "error"
+    assert session.draft == "복원해야 해"

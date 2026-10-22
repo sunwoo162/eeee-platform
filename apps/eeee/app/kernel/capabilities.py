@@ -105,7 +105,11 @@ class LocalSecretaryCapability:
         return CapabilityPlan(
             capability_id=self.descriptor.id,
             summary=request.raw_text,
-            inputs={"text": request.raw_text, "conversationId": context.conversation_id},
+            inputs={
+                "text": request.raw_text,
+                "conversationId": context.conversation_id,
+                "userId": _request_user_id(request),
+            },
             side_effect_level=self.descriptor.side_effect_level,
             requires_approval=False,
         )
@@ -113,8 +117,11 @@ class LocalSecretaryCapability:
     def execute(self, plan: CapabilityPlan, envelope_context: EnvelopeContext) -> CapabilityOutcome:
         text = str(plan.inputs.get("text", "")).strip()
         conversation_id = str(plan.inputs.get("conversationId", "desktop-default"))
+        user_id = str(plan.inputs.get("userId", "local-user"))
         if any(marker in text for marker in ("보여줘", "보여", "확인", "목록", "뭐가", "뭐 있어")):
-            reminders = [item.as_dict() for item in self.reminders.list(conversation_id)]
+            reminders = [item.as_dict() for item in self.reminders.list(
+                conversation_id, user_id=user_id,
+            )]
             message = (
                 "등록된 일정이 없어."
                 if not reminders
@@ -135,7 +142,8 @@ class LocalSecretaryCapability:
                 ExecutionError(code="reminder_time_required", message="Reminder time is required"),
             )
         reminder = self.reminders.create(
-            conversation_id, draft, request_id=envelope_context.envelope.request_id,
+            conversation_id, draft, user_id=user_id,
+            request_id=envelope_context.envelope.request_id,
         )
         return CapabilityOutcome({
             "status": "completed", "capabilityStatus": "completed",

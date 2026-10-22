@@ -22,6 +22,7 @@ class Reminder:
     due_at: datetime
     status: str
     created_at: datetime
+    user_id: str = "local-user"
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -104,35 +105,46 @@ class ReminderStore:
         with self._connect() as connection:
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS assistant_reminders (
-                    id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT 'local-user',
+                    conversation_id TEXT NOT NULL,
                     request_id TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL, due_at TEXT NOT NULL, status TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )"""
             )
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS idx_assistant_reminders_due "
-                "ON assistant_reminders(conversation_id, status, due_at)"
-            )
             columns = {row["name"] for row in connection.execute(
                 "PRAGMA table_info(assistant_reminders)"
             ).fetchall()}
+            if "user_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE assistant_reminders ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local-user'"
+                )
+            connection.execute("DROP INDEX IF EXISTS idx_assistant_reminders_due")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_assistant_reminders_due "
+                "ON assistant_reminders(user_id, conversation_id, status, due_at)"
+            )
             if "request_id" not in columns:
                 connection.execute(
                     "ALTER TABLE assistant_reminders ADD COLUMN request_id TEXT NOT NULL DEFAULT ''"
                 )
+            connection.execute("DROP INDEX IF EXISTS idx_assistant_reminders_request")
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_reminders_request "
-                "ON assistant_reminders(conversation_id, request_id) WHERE request_id <> ''"
+                "ON assistant_reminders(user_id, conversation_id, request_id) WHERE request_id <> ''"
             )
 
-    def create(self, conversation_id: str, draft: ReminderDraft, *, request_id: str = "") -> Reminder:
+    def create(
+        self, conversation_id: str, draft: ReminderDraft, *,
+        user_id: str = "local-user", request_id: str = "",
+    ) -> Reminder:
         self.init()
         if request_id:
             with self._connect() as connection:
                 existing = connection.execute(
-                    "SELECT * FROM assistant_reminders WHERE conversation_id = ? AND request_id = ?",
-                    (conversation_id, request_id),
+                    "SELECT * FROM assistant_reminders WHERE user_id = ? "
+                    "AND conversation_id = ? AND request_id = ?",
+                    (user_id, conversation_id, request_id),
                 ).fetchone()
             if existing is not None:
                 return _from_row(existing)
@@ -140,14 +152,15 @@ class ReminderStore:
             id=f"reminder-{uuid4().hex}", conversation_id=conversation_id,
             title=draft.title, due_at=draft.due_at,
             status="scheduled", created_at=datetime.now(timezone.utc),
+            user_id=user_id,
         )
         try:
             with self._connect() as connection:
                 connection.execute(
                     "INSERT INTO assistant_reminders "
-                    "(id, conversation_id, request_id, title, due_at, status, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (reminder.id, reminder.conversation_id, request_id, reminder.title,
+                    "(id, user_id, conversation_id, request_id, title, due_at, status, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (reminder.id, reminder.user_id, reminder.conversation_id, request_id, reminder.title,
                      reminder.due_at.isoformat(), reminder.status, reminder.created_at.isoformat()),
                 )
         except sqlite3.IntegrityError:
@@ -155,21 +168,24 @@ class ReminderStore:
                 raise
             with self._connect() as connection:
                 existing = connection.execute(
-                    "SELECT * FROM assistant_reminders WHERE conversation_id = ? AND request_id = ?",
-                    (conversation_id, request_id),
+                    "SELECT * FROM assistant_reminders WHERE user_id = ? "
+                    "AND conversation_id = ? AND request_id = ?",
+                    (user_id, conversation_id, request_id),
                 ).fetchone()
             if existing is None:
                 raise
             return _from_row(existing)
         return reminder
 
-    def list(self, conversation_id: str, *, limit: int = 20) -> list[Reminder]:
+    def list(
+        self, conversation_id: str, *, user_id: str = "local-user", limit: int = 20,
+    ) -> list[Reminder]:
         self.init()
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM assistant_reminders WHERE conversation_id = ? "
+                "SELECT * FROM assistant_reminders WHERE user_id = ? AND conversation_id = ? "
                 "AND status = 'scheduled' ORDER BY due_at ASC LIMIT ?",
-                (conversation_id, limit),
+                (user_id, conversation_id, limit),
             ).fetchall()
         return [_from_row(row) for row in rows]
 
@@ -179,4 +195,5 @@ def _from_row(row: sqlite3.Row) -> Reminder:
         id=row["id"], conversation_id=row["conversation_id"], title=row["title"],
         due_at=datetime.fromisoformat(row["due_at"]), status=row["status"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        user_id=row["user_id"] if "user_id" in row.keys() else "local-user",
     )

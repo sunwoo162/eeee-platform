@@ -423,7 +423,7 @@ def create_app(
     application.state.oauth_broker = configured_oauth_broker
     application.state.oauth_configs = dict(configured_oauth_configs)
 
-    def mobile_snapshot(project_id: str | None) -> dict[str, object]:
+    def mobile_snapshot(project_id: str | None, user_id: str) -> dict[str, object]:
         snapshot: dict[str, object] = {
             "status": "ok",
             "transport": "desktop-bridge",
@@ -432,8 +432,10 @@ def create_app(
         }
         if project_id is not None:
             snapshot["projectId"] = project_id
-            snapshot["state"] = coordinator.get_state(project_id).model_dump(mode="json")
-            snapshot["projectProfile"] = store.get_project_profile(project_id).model_dump(mode="json")
+            snapshot["state"] = coordinator.get_state(project_id, user_id=user_id).model_dump(mode="json")
+            snapshot["projectProfile"] = store.get_project_profile(
+                project_id, user_id=user_id
+            ).model_dump(mode="json")
         return snapshot
 
     @application.exception_handler(ApprovalError)

@@ -971,7 +971,7 @@ def build_assistant_router(
 def build_mobile_router(
     bridge: MobileBridge,
     assistant: AssistantService,
-    snapshot_provider: Callable[[str | None], dict[str, object]],
+    snapshot_provider: Callable[[str | None, str], dict[str, object]],
     *,
     conversation_store: ConversationStore | None = None,
 ) -> APIRouter:
@@ -985,7 +985,9 @@ def build_mobile_router(
         if request.client is not None and request.client.host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
             raise HTTPException(status_code=403, detail="Pairing codes can only be issued from Desktop")
         try:
-            return bridge.issue_pairing_code()
+            return bridge.issue_pairing_code(
+                user_id=_plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+            )
         except MobileBridgeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -1001,8 +1003,8 @@ def build_mobile_router(
         project_id: str | None = Query(default=None, alias="projectId"),
         bridge_token: str | None = Header(default=None, alias="X-Gleave-Bridge-Token"),
     ) -> dict[str, object]:
-        _authorize_mobile(bridge, bridge_token)
-        return snapshot_provider(project_id)
+        device = _authorize_mobile(bridge, bridge_token)
+        return snapshot_provider(project_id, device["userId"])
 
     @router.get("/mobile/assistant/conversations")
     def list_mobile_assistant_conversations(
@@ -1014,7 +1016,7 @@ def build_mobile_router(
         ),
         bridge_token: str | None = Header(default=None, alias="X-Gleave-Bridge-Token"),
     ) -> list[dict[str, object]]:
-        _authorize_mobile(bridge, bridge_token)
+        device = _authorize_mobile(bridge, bridge_token)
         if canonical_conversations is None:
             raise HTTPException(status_code=503, detail="Canonical conversation store is unavailable")
         try:
@@ -1023,6 +1025,7 @@ def build_mobile_router(
                 limit=limit,
                 before_updated_at=before_updated_at,
                 before_conversation_id=before_conversation_id,
+                user_id=device["userId"],
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1034,12 +1037,13 @@ def build_mobile_router(
         before_id: int | None = Query(default=None, alias="beforeId", ge=1),
         bridge_token: str | None = Header(default=None, alias="X-Gleave-Bridge-Token"),
     ) -> dict[str, object]:
-        _authorize_mobile(bridge, bridge_token)
+        device = _authorize_mobile(bridge, bridge_token)
         if canonical_conversations is None:
             raise HTTPException(status_code=503, detail="Canonical conversation store is unavailable")
         try:
             return canonical_conversations.get_transcript(
-                conversation_id, limit=limit, before_sequence=before_id
+                conversation_id, limit=limit, before_sequence=before_id,
+                user_id=device["userId"],
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1060,6 +1064,7 @@ def build_mobile_router(
                 approved=payload.approved,
                 approval_request_id=payload.approval_request_id,
                 request_id=payload.request_id,
+                user_id=device["userId"],
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1082,8 +1087,8 @@ def build_mobile_router(
         cursor: int = Query(default=0, ge=0),
         bridge_token: str | None = Header(default=None, alias="X-Gleave-Bridge-Token"),
     ) -> dict[str, object]:
-        _authorize_mobile(bridge, bridge_token)
-        return bridge.events_after(cursor)
+        device = _authorize_mobile(bridge, bridge_token)
+        return bridge.events_after(cursor, user_id=device["userId"])
 
     @router.get("/mobile/events/stream")
     async def mobile_event_stream(
@@ -1091,7 +1096,7 @@ def build_mobile_router(
         cursor: int = Query(default=0, ge=0),
         bridge_token: str | None = Header(default=None, alias="X-Gleave-Bridge-Token"),
     ) -> StreamingResponse:
-        _authorize_mobile(bridge, bridge_token)
+        device = _authorize_mobile(bridge, bridge_token)
 
         async def generate() -> object:
             current = cursor
@@ -1099,7 +1104,7 @@ def build_mobile_router(
             while asyncio.get_running_loop().time() < deadline:
                 if await request.is_disconnected():
                     break
-                batch = bridge.events_after(current)
+                batch = bridge.events_after(current, user_id=device["userId"])
                 events = batch["events"]
                 if events:
                     for event in events:
@@ -1292,7 +1297,9 @@ def build_desktop_router(
     def desktop_pairing_code(request: Request) -> dict[str, str]:
         _require_local_desktop(request)
         try:
-            return bridge.issue_pairing_code()
+            return bridge.issue_pairing_code(
+                user_id=_plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+            )
         except MobileBridgeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

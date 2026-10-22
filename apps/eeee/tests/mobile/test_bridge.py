@@ -1,4 +1,5 @@
 from app.mobile.bridge import MobileBridge, MobileBridgeError
+import sqlite3
 
 
 def test_mobile_pairing_persists_only_authorized_device_state(tmp_path) -> None:
@@ -11,6 +12,7 @@ def test_mobile_pairing_persists_only_authorized_device_state(tmp_path) -> None:
 
     assert device["deviceId"].startswith("mobile-")
     assert bridge.authorize(device["accessToken"])["deviceName"] == "Pixel test"
+    assert bridge.authorize(device["accessToken"])["userId"] == "local-user"
     assert bridge.status()["pairedDevices"] == 1
 
     reopened = MobileBridge(path)
@@ -24,6 +26,62 @@ def test_mobile_pairing_persists_only_authorized_device_state(tmp_path) -> None:
         assert "invalid or revoked" in str(exc)
     else:  # pragma: no cover - protects the authorization boundary
         raise AssertionError("revoked mobile tokens must not authorize")
+
+
+def test_mobile_pairing_binds_device_and_events_to_the_desktop_user(tmp_path) -> None:
+    bridge = MobileBridge(tmp_path / "state.sqlite3")
+    bridge.init()
+    pairing = bridge.issue_pairing_code(user_id="user-a")
+    device = bridge.pair(pairing["code"], "User A phone")
+
+    assert bridge.authorize(device["accessToken"])["userId"] == "user-a"
+    bridge.publish("private.event", {"userId": "user-a", "value": "visible"})
+    bridge.publish("private.event", {"userId": "user-b", "value": "hidden"})
+
+    events = bridge.events_after(0, user_id="user-a")["events"]
+
+    private_events = [event for event in events if event["kind"] == "private.event"]
+    assert [event["payload"]["value"] for event in private_events] == ["visible"]
+
+
+def test_mobile_bridge_migrates_legacy_devices_to_local_user(tmp_path) -> None:
+    path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE mobile_pairing (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                pairing_code_hash TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            CREATE TABLE mobile_devices (
+                device_id TEXT PRIMARY KEY,
+                device_name TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                revoked_at TEXT
+            );
+            CREATE TABLE mobile_events (
+                cursor INTEGER PRIMARY KEY,
+                kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+
+    bridge = MobileBridge(path)
+    bridge.init()
+
+    with sqlite3.connect(path) as connection:
+        pairing_columns = [row[1] for row in connection.execute(
+            "PRAGMA table_info(mobile_pairing)"
+        )]
+        device_columns = [row[1] for row in connection.execute(
+            "PRAGMA table_info(mobile_devices)"
+        )]
+    assert "user_id" in pairing_columns
+    assert "user_id" in device_columns
 
 
 def test_events_survive_desktop_restart_and_resume_from_cursor(tmp_path) -> None:

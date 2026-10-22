@@ -1,11 +1,15 @@
 import json
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.api.routes import build_assistant_router
 from app.main import create_app
+from app.memory.store import MemoryStore
 from app.plugins.connectors import ConnectorConnection, ConnectorHealth
 from app.plugins.credentials import MemoryCredentialStore
 from tests.api._helpers import wait_for_project_job
@@ -139,6 +143,31 @@ def test_legacy_assistant_history_is_isolated_by_user_header(tmp_path) -> None:
     assert client.get(
         "/api/assistant/conversations/scoped-history", headers=user_b
     ).status_code == 404
+
+
+def test_legacy_history_fallback_keeps_user_scope(tmp_path) -> None:
+    memory = MemoryStore(tmp_path / "memory.sqlite3")
+    memory.init()
+    memory.append_conversation_turn(
+        "fallback-history",
+        "user",
+        "사용자 A의 기록",
+        user_id="user-a",
+    )
+    service = SimpleNamespace(coordinator=SimpleNamespace(memory=memory))
+    application = FastAPI()
+    application.include_router(build_assistant_router(service, conversation_store=None))
+    client = TestClient(application)
+
+    user_a = client.get(
+        "/api/assistant/conversations", headers={"X-EEEE-User-Id": "user-a"}
+    )
+    user_b = client.get(
+        "/api/assistant/conversations", headers={"X-EEEE-User-Id": "user-b"}
+    )
+
+    assert [item["conversationId"] for item in user_a.json()] == ["fallback-history"]
+    assert user_b.json() == []
 
 
 def test_assistant_route_runs_local_document_save_and_search(tmp_path) -> None:

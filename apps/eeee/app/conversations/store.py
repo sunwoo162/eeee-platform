@@ -614,10 +614,16 @@ class ConversationStore:
             for row in reversed(rows)
         ]
 
-    def get_message(self, message_id: str) -> ConversationMessage:
+    def get_message(
+        self, message_id: str, *, user_id: str = "local-user"
+    ) -> ConversationMessage:
+        user_id = _normalise_user_id(user_id)
         with self.store._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM messages WHERE id = ?", (message_id,)
+                "SELECT messages.* FROM messages "
+                "JOIN conversations ON conversations.id = messages.conversation_id "
+                "WHERE messages.id = ? AND conversations.user_id = ?",
+                (message_id, user_id),
             ).fetchone()
         if row is None:
             raise KeyError(f"Message not found: {message_id}")

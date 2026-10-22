@@ -70,7 +70,9 @@ class ConversationService:
             conversation_id, client_message_id
         )
         if existing is not None:
-            existing_message = self.store.get_message(existing.user_message_id)
+            existing_message = self.store.get_message(
+                existing.user_message_id, user_id=user_id
+            )
             if existing_message.content != content:
                 raise ValueError("client_message_id was reused with different message content")
             return existing, False
@@ -263,8 +265,10 @@ class ConversationService:
         for _event in self.run_request(request_id):
             pass
 
-    def cancel_request(self, request_id: str) -> AssistantRequest:
-        request = self.store.get_request(request_id)
+    def cancel_request(
+        self, request_id: str, *, user_id: str = "local-user"
+    ) -> AssistantRequest:
+        request = self.store.get_request_for_user(request_id, user_id=user_id)
         cancel_event = self._cancel_events.setdefault(request_id, threading.Event())
         cancel_event.set()
         if request.state in {
@@ -281,11 +285,15 @@ class ConversationService:
             )
         return request
 
-    def retry_request(self, request_id: str) -> AssistantRequest:
-        original = self.store.get_request(request_id)
+    def retry_request(
+        self, request_id: str, *, user_id: str = "local-user"
+    ) -> AssistantRequest:
+        original = self.store.get_request_for_user(request_id, user_id=user_id)
         if original.state not in {RequestState.FAILED, RequestState.INTERRUPTED}:
             raise ValueError("Only failed or interrupted requests can be retried")
-        user_message = self.store.get_message(original.user_message_id)
+        user_message = self.store.get_message(
+            original.user_message_id, user_id=user_id
+        )
         retry_client_id = f"retry-{uuid4().hex}"
         request, _created = self.prepare_turn(
             original.conversation_id,
@@ -294,6 +302,7 @@ class ConversationService:
             parent_request_id=original.id,
             attempt=original.attempt + 1,
             user_message_id=original.user_message_id,
+            user_id=user_id,
         )
         return request
 

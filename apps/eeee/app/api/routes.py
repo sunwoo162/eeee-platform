@@ -862,7 +862,9 @@ def build_assistant_router(
                 )
             if before_updated_at is not None or before_conversation_id is not None:
                 raise ValueError("conversation pagination requires the canonical store")
-            return service.coordinator.memory.list_conversations(query=query, limit=limit)
+            return service.coordinator.memory.list_conversations(
+                query=query, limit=limit, user_id=user_id
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -881,7 +883,7 @@ def build_assistant_router(
                     conversation_id, user_id=user_id, limit=limit, before_sequence=before_id
                 )
             return service.coordinator.memory.get_conversation(
-                conversation_id, limit=limit, before_id=before_id
+                conversation_id, limit=limit, before_id=before_id, user_id=user_id
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

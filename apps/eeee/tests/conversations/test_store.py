@@ -79,6 +79,14 @@ def test_conversations_are_isolated_by_user_scope(tmp_path) -> None:
     with pytest.raises(KeyError):
         conversations.get_transcript(private.id, user_id="user-b")
 
+    assert conversations.recent_conversation_turns(
+        private.id, user_id="user-a"
+    ) == [
+        {"role": "user", "content": "사용자 A 질문"},
+        {"role": "assistant", "content": "사용자 A 답변"},
+    ]
+    assert conversations.recent_conversation_turns(private.id, user_id="user-b") == []
+
 
 def test_route_turn_creates_canonical_conversation_and_updates_background_reply(tmp_path) -> None:
     conversations = make_store(tmp_path)

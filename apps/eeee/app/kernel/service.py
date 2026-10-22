@@ -462,7 +462,9 @@ class KernelService:
         )
         conversation_id = str(request.context.get("conversationId") or "desktop-default")
         conversation_turns = (
-            self.conversation_store.recent_conversation_turns(conversation_id)
+            self.conversation_store.recent_conversation_turns(
+                conversation_id, user_id=user_id
+            )
             if self.conversation_store is not None
             else self.memory.recent_conversation_turns(conversation_id, user_id=user_id)
         )

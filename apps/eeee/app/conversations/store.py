@@ -590,17 +590,20 @@ class ConversationStore:
         return [_message_from_row(row) for row in rows]
 
     def recent_conversation_turns(
-        self, conversation_id: str, *, limit: int = 12
+        self, conversation_id: str, *, limit: int = 12, user_id: str = "local-user"
     ) -> list[dict[str, str]]:
         """Return bounded canonical transcript context in provider format."""
 
         if limit <= 0:
             return []
+        user_id = _normalise_user_id(user_id)
         with self.store._connect() as connection:
             rows = connection.execute(
-                "SELECT role, content FROM messages WHERE conversation_id = ? "
-                "ORDER BY sequence DESC LIMIT ?",
-                (conversation_id, limit),
+                "SELECT messages.role, messages.content FROM messages "
+                "JOIN conversations ON conversations.id = messages.conversation_id "
+                "WHERE messages.conversation_id = ? AND conversations.user_id = ? "
+                "ORDER BY messages.sequence DESC LIMIT ?",
+                (conversation_id, user_id, limit),
             ).fetchall()
         return [
             {"role": str(row["role"]), "content": str(row["content"])}

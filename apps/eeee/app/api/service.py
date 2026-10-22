@@ -99,6 +99,7 @@ class ApiFlowService:
             self.store.get_request(request_id),
             memory_ids=project_brief.retrieved_memory_ids,
             qa_baseline_ids=project_brief.qa_baseline_ids,
+            user_id=user_id,
         )
         run = self.store.create_run(request_id, str(workspace_path))
         self._record_legacy_request(

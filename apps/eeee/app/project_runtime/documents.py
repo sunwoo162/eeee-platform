@@ -90,7 +90,7 @@ class ProjectDocumentService:
 
         lines = _document_lines(profile)
         content_hash = _content_hash(lines)
-        existing = self._existing(profile.project_id)
+        existing = self._existing(profile.project_id, user_id=user_id)
         if existing is not None and existing.content_hash == content_hash:
             self._mark_connector_completed(profile, existing)
             result = ProjectDocumentSyncResult(
@@ -149,8 +149,11 @@ class ProjectDocumentService:
         self._publish("project.document.synced", profile, result, user_id=user_id)
         return result
 
-    def _existing(self, project_id: str) -> ProjectDocumentRecord | None:
+    def _existing(
+        self, project_id: str, *, user_id: str = "local-user"
+    ) -> ProjectDocumentRecord | None:
         try:
+            self.store.get_project(project_id, user_id=user_id)
             return self.store.get_project_document(project_id, "notion")
         except KeyError:
             return None

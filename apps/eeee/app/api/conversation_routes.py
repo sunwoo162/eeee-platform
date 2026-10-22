@@ -168,7 +168,10 @@ def build_conversation_router(
             user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
             service.store.get_conversation(conversation_id, user_id=user_id)
             messages = service.store.get_messages(
-                conversation_id, after_sequence=after_sequence, limit=limit
+                conversation_id,
+                after_sequence=after_sequence,
+                limit=limit,
+                user_id=user_id,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

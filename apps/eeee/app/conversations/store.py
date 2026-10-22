@@ -577,15 +577,19 @@ class ConversationStore:
         return int(row["message_count"] if row is not None else 0)
 
     def get_messages(
-        self, conversation_id: str, *, after_sequence: int = 0, limit: int = 100
+        self, conversation_id: str, *, after_sequence: int = 0, limit: int = 100,
+        user_id: str = "local-user",
     ) -> list[ConversationMessage]:
         if after_sequence < 0 or limit < 1:
             raise ValueError("after_sequence must be nonnegative and limit must be positive")
+        user_id = _normalise_user_id(user_id)
         with self.store._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM messages WHERE conversation_id = ? AND sequence > ? "
-                "ORDER BY sequence ASC LIMIT ?",
-                (conversation_id, after_sequence, limit),
+                "SELECT messages.* FROM messages "
+                "JOIN conversations ON conversations.id = messages.conversation_id "
+                "WHERE messages.conversation_id = ? AND conversations.user_id = ? "
+                "AND messages.sequence > ? ORDER BY messages.sequence ASC LIMIT ?",
+                (conversation_id, user_id, after_sequence, limit),
             ).fetchall()
         return [_message_from_row(row) for row in rows]
 

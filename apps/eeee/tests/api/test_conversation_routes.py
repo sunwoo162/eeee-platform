@@ -177,6 +177,28 @@ def test_v1_conversations_are_isolated_by_user_header(tmp_path) -> None:
     ).status_code == 404
 
 
+def test_v1_user_scoped_messages_are_returned_to_the_owner(tmp_path) -> None:
+    client = make_client(tmp_path)
+    user_a = {"X-EEEE-User-Id": "user-a"}
+    conversation = client.post(
+        "/v1/conversations", headers=user_a, json={"title": "사용자 A 기록"}
+    ).json()
+
+    submitted = client.post(
+        f"/v1/conversations/{conversation['id']}/turns",
+        headers=user_a,
+        json={"clientMessageId": "owner-message", "content": "내 기록"},
+    )
+
+    assert submitted.status_code == 202
+    messages = client.get(
+        f"/v1/conversations/{conversation['id']}/messages", headers=user_a
+    )
+
+    assert messages.status_code == 200
+    assert [item["content"] for item in messages.json()["items"]] == ["내 기록"]
+
+
 def test_v1_runtime_reports_ollama_model_readiness_separately_from_core_health(tmp_path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",

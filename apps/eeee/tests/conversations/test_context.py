@@ -140,6 +140,24 @@ def test_automatic_context_does_not_cross_conversation_memory_scope(tmp_path: Pa
     assert not any("첫 대화 전용 비밀 규칙" in content for content in contents)
 
 
+def test_context_builder_does_not_include_another_users_transcript(tmp_path: Path) -> None:
+    conversations, memory = _stores(tmp_path)
+    conversation = conversations.create_conversation("사용자 A 대화", user_id="user-a")
+    conversations.add_message(
+        conversation.id,
+        role=MessageRole.USER,
+        content="사용자 A의 비공개 내용",
+        status=MessageStatus.COMPLETED,
+        client_message_id="client-a",
+    )
+
+    context = ConversationContextBuilder(conversations, memory_store=memory).build(
+        conversation.id, user_id="user-b"
+    )
+
+    assert not any("사용자 A의 비공개 내용" in item["content"] for item in context)
+
+
 def test_explicit_memory_ids_skip_expired_records(tmp_path: Path) -> None:
     conversations, memory = _stores(tmp_path)
     conversation = conversations.create_conversation()

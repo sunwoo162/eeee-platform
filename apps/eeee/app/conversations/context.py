@@ -66,7 +66,9 @@ class ConversationContextBuilder:
 
         transcript: list[dict[str, str]] = []
         used = sum(len(item["content"]) for item in memory_items)
-        for message in reversed(self.store.get_messages(conversation_id, limit=500)):
+        for message in reversed(
+            self.store.get_messages(conversation_id, limit=500, user_id=user_id)
+        ):
             if not _is_usable_context_message(message):
                 continue
             item = {"role": message.role.value, "content": message.content}

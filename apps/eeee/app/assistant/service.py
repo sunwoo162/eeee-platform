@@ -478,10 +478,11 @@ class AssistantService:
         if memory_store is None:
             return
         memory_store.append_conversation_turn(
-            conversation_id, "user", user_text, request_id=request_id,
+            conversation_id, "user", user_text, request_id=request_id, user_id=user_id,
         )
         memory_store.append_conversation_turn(
-            conversation_id, "assistant", assistant_text, request_id=request_id,
+            conversation_id, "assistant", assistant_text,
+            request_id=request_id, user_id=user_id,
         )
 
     @staticmethod

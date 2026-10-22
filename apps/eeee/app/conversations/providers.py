@@ -74,6 +74,7 @@ class ChatGptWebConversationProvider:
                 workspace=self.workspace,
                 allowed_actions=[],
                 run_id=f"eeee-conversation-{uuid4().hex}",
+                user_id=user_id,
             )
         )
         if cancel_event is not None and cancel_event.is_set():

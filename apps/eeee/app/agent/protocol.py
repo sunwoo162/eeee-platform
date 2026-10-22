@@ -11,6 +11,7 @@ class AgentRequest:
     workspace: Path
     allowed_actions: list[str]
     run_id: str
+    user_id: str = "local-user"
 
 
 @dataclass(frozen=True)

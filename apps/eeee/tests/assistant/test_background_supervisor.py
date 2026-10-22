@@ -2,7 +2,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
+import pytest
+
 from app.assistant.background import BackgroundExecutionSupervisor
+from app.assistant.background import JobTransitionError
 from app.storage.sqlite import SQLiteStore
 
 
@@ -156,6 +159,64 @@ def test_running_job_can_be_paused_and_resumed_without_losing_input(tmp_path):
         assert job["input"] == {"text": "keep this"}
         assert job["result"] == {"message": "resumed result"}
         assert len(calls) == 2
+    finally:
+        release.set()
+        supervisor.shutdown()
+
+
+def test_cancelled_running_job_signals_operation_cancel_event(tmp_path):
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    supervisor = BackgroundExecutionSupervisor(store, max_workers=1)
+    started = Event()
+    observed_cancel = Event()
+
+    def operation(cancel_event):
+        started.set()
+        while not cancel_event.is_set():
+            time.sleep(0.01)
+        observed_cancel.set()
+        return {"message": "must not complete"}
+
+    try:
+        job_id = supervisor.submit("assistant-request-cancel-event", operation)
+        assert started.wait(timeout=3)
+        assert supervisor.cancel(job_id)["status"] == "cancelled"
+        assert observed_cancel.wait(timeout=3)
+        assert supervisor.get(job_id)["status"] == "cancelled"
+    finally:
+        supervisor.shutdown()
+
+
+def test_resume_does_not_schedule_duplicate_while_paused_operation_is_running(tmp_path):
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    supervisor = BackgroundExecutionSupervisor(store, max_workers=1)
+    started = Event()
+    release = Event()
+    calls = []
+
+    def operation():
+        calls.append("run")
+        started.set()
+        release.wait(timeout=3)
+        return {"message": "paused result"}
+
+    try:
+        job_id = supervisor.submit("assistant-request-no-duplicate-resume", operation)
+        assert started.wait(timeout=3)
+        assert supervisor.pause(job_id)["status"] == "paused"
+
+        with pytest.raises(JobTransitionError):
+            supervisor.resume(job_id)
+
+        assert calls == ["run"]
+        release.set()
+        supervisor._futures[job_id].result(timeout=3)
+        assert supervisor.get(job_id)["status"] == "paused"
+        assert supervisor.resume(job_id)["status"] in {"queued", "running", "completed"}
+        assert _wait_for(supervisor, job_id, "completed")["result"] == {"message": "paused result"}
+        assert calls == ["run", "run"]
     finally:
         release.set()
         supervisor.shutdown()

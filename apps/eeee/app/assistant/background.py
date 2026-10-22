@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from inspect import signature
 import json
-from threading import Lock
+from threading import Event, Lock
 from typing import Any
 from uuid import uuid4
 
@@ -36,6 +37,7 @@ class BackgroundExecutionSupervisor:
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="eeee-job")
         self._futures: dict[str, Future[None]] = {}
         self._operations: dict[str, Callable[[], dict[str, Any]]] = {}
+        self._cancel_events: dict[str, Event] = {}
         self._lock = Lock()
         self._owner_token = f"supervisor-{uuid4().hex}"
         self._lease_seconds = 300
@@ -52,6 +54,7 @@ class BackgroundExecutionSupervisor:
             return stored_job_id
         with self._lock:
             self._operations[job_id] = operation
+            self._cancel_events[job_id] = Event()
         future = self._pool.submit(self._run, job_id, operation)
         with self._lock:
             self._futures[job_id] = future
@@ -129,10 +132,12 @@ class BackgroundExecutionSupervisor:
 
     def pause(self, job_id: str, *, user_id: str | None = None) -> dict[str, object]:
         self.get(job_id, user_id=user_id)
+        self._signal_cancel(job_id)
         return self._transition(job_id, "paused", {"queued", "running", "paused"}, user_id=user_id)
 
     def cancel(self, job_id: str, *, user_id: str | None = None) -> dict[str, object]:
         self.get(job_id, user_id=user_id)
+        self._signal_cancel(job_id)
         return self._transition(
             job_id, "cancelled", {"queued", "running", "paused", "cancelled"}, user_id=user_id
         )
@@ -206,6 +211,7 @@ class BackgroundExecutionSupervisor:
             })
             with self._lock:
                 self._operations[row["job_id"]] = operation
+                self._cancel_events[row["job_id"]] = Event()
             future = self._pool.submit(self._run, row["job_id"], operation, True)
             with self._lock:
                 self._futures[row["job_id"]] = future
@@ -241,8 +247,11 @@ class BackgroundExecutionSupervisor:
         # unconditional write lets pause/cancel be overwritten by this worker.
         if not claimed and not self._claim_queued(job_id):
             return
+        cancel_event = self._cancel_event(job_id)
+        if cancel_event.is_set():
+            return
         try:
-            result = operation()
+            result = self._invoke_operation(operation, cancel_event)
         except Exception as exc:
             self._update_if_current(
                 job_id,
@@ -307,6 +316,12 @@ class BackgroundExecutionSupervisor:
                 f"Assistant job {job_id} cannot restart from {status}"
             )
         with self._lock:
+            future = self._futures.get(job_id)
+        if future is not None and not future.done():
+            raise JobTransitionError(
+                f"Assistant job {job_id} still has a running operation"
+            )
+        with self._lock:
             operation = self._operations.get(job_id)
         if operation is None and operation_factory is not None:
             operation = operation_factory(job)
@@ -327,6 +342,7 @@ class BackgroundExecutionSupervisor:
                 )
         with self._lock:
             self._operations[job_id] = operation
+            self._cancel_events[job_id] = Event()
         future = self._pool.submit(self._run, job_id, operation)
         with self._lock:
             self._futures[job_id] = future
@@ -340,6 +356,40 @@ class BackgroundExecutionSupervisor:
             if isinstance(value, str) and value.strip():
                 return value
         return "local-user"
+
+    def _signal_cancel(self, job_id: str) -> None:
+        with self._lock:
+            cancel_event = self._cancel_events.get(job_id)
+        if cancel_event is not None:
+            cancel_event.set()
+
+    def _cancel_event(self, job_id: str) -> Event:
+        with self._lock:
+            cancel_event = self._cancel_events.get(job_id)
+            if cancel_event is None:
+                cancel_event = Event()
+                self._cancel_events[job_id] = cancel_event
+            return cancel_event
+
+    @staticmethod
+    def _invoke_operation(
+        operation: Callable[..., dict[str, Any]], cancel_event: Event,
+    ) -> dict[str, Any]:
+        """Call old no-argument operations or cancellation-aware operations."""
+
+        try:
+            operation_signature = signature(operation)
+        except (TypeError, ValueError):
+            return operation()
+        try:
+            operation_signature.bind(cancel_event)
+        except TypeError:
+            try:
+                operation_signature.bind(cancel_event=cancel_event)
+            except TypeError:
+                return operation()
+            return operation(cancel_event=cancel_event)
+        return operation(cancel_event)
 
     def _update_if_current(
         self,

@@ -19,6 +19,16 @@ class FakeProvider:
         yield from self.chunks
 
 
+class UserAwareProvider(FakeProvider):
+    def __init__(self, chunks=None) -> None:
+        super().__init__(chunks)
+        self.user_ids = []
+
+    def stream(self, messages, *, cancel_event=None, user_id="local-user"):
+        self.user_ids.append(user_id)
+        yield from super().stream(messages, cancel_event=cancel_event)
+
+
 def make_service(tmp_path, provider):
     durable = SQLiteStore(tmp_path / "state.sqlite3")
     durable.init()
@@ -154,3 +164,19 @@ def test_conversation_service_retries_non_local_request_with_owner_scope(tmp_pat
 
     assert retried.parent_request_id == original.id
     assert retried.conversation_id == conversation.id
+
+
+def test_conversation_service_passes_owner_scope_to_user_aware_provider(tmp_path) -> None:
+    provider = UserAwareProvider(["사용자별 답변"])
+    store, service = make_service(tmp_path, provider)
+    conversation = store.create_conversation(user_id="user-a")
+    request, _created = service.prepare_turn(
+        conversation.id,
+        content="사용자 A의 요청",
+        client_message_id="user-a-provider",
+        user_id="user-a",
+    )
+
+    list(service.run_request(request.id))
+
+    assert provider.user_ids == ["user-a"]

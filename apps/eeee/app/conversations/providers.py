@@ -29,7 +29,10 @@ class UnavailableConversationProvider:
         self.provider_name = "unavailable"
         self.active_provider_name = "unavailable"
 
-    def stream(self, _messages, *, cancel_event: Event | None = None) -> Iterator[str]:
+    def stream(
+        self, _messages, *, cancel_event: Event | None = None,
+        user_id: str = "local-user",
+    ) -> Iterator[str]:
         if cancel_event is not None and cancel_event.is_set():
             raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
         raise ConversationProviderError(self.message, code=self.code)
@@ -60,6 +63,7 @@ class ChatGptWebConversationProvider:
         messages: list[dict[str, str]],
         *,
         cancel_event: Event | None = None,
+        user_id: str = "local-user",
     ) -> Iterator[str]:
         if cancel_event is not None and cancel_event.is_set():
             raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
@@ -111,6 +115,7 @@ class BuiltinConversationProvider:
         messages: list[dict[str, str]],
         *,
         cancel_event: Event | None = None,
+        user_id: str = "local-user",
     ) -> Iterator[str]:
         if cancel_event is not None and cancel_event.is_set():
             raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
@@ -170,6 +175,7 @@ class OllamaWithBuiltinFallbackProvider:
         messages: list[dict[str, str]],
         *,
         cancel_event: Event | None = None,
+        user_id: str = "local-user",
     ) -> Iterator[str]:
         if cancel_event is not None and cancel_event.is_set():
             raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
@@ -182,7 +188,9 @@ class OllamaWithBuiltinFallbackProvider:
             self.active_model = getattr(self.ollama, "model", None)
             yielded = False
             try:
-                for delta in self.ollama.stream(messages, cancel_event=cancel_event):
+                for delta in _stream_with_user_scope(
+                    self.ollama, messages, user_id=user_id, cancel_event=cancel_event
+                ):
                     yielded = True
                     yield delta
             except Exception as exc:
@@ -204,7 +212,9 @@ class OllamaWithBuiltinFallbackProvider:
             raise ConversationProviderError(message, code="assistant_provider_unavailable")
         self.active_provider_name = "builtin"
         self.active_model = getattr(self.builtin, "model", "bounded-runtime")
-        yield from self.builtin.stream(messages, cancel_event=cancel_event)
+        yield from _stream_with_user_scope(
+            self.builtin, messages, user_id=user_id, cancel_event=cancel_event
+        )
 
 
 class WebWithBuiltinFallbackProvider:
@@ -222,12 +232,15 @@ class WebWithBuiltinFallbackProvider:
         messages: list[dict[str, str]],
         *,
         cancel_event: Event | None = None,
+        user_id: str = "local-user",
     ) -> Iterator[str]:
         if _web_is_ready(self.runtime):
             self.active_provider_name = "chatgpt_web"
             self.active_model = getattr(self.web, "model", None)
             try:
-                yield from self.web.stream(messages, cancel_event=cancel_event)
+                yield from _stream_with_user_scope(
+                    self.web, messages, user_id=user_id, cancel_event=cancel_event
+                )
                 return
             except ConversationProviderError:
                 # The bounded builtin lane is a safe fallback for greetings
@@ -237,7 +250,9 @@ class WebWithBuiltinFallbackProvider:
                     raise
         self.active_provider_name = "builtin"
         self.active_model = getattr(self.builtin, "model", "bounded-runtime")
-        yield from self.builtin.stream(messages, cancel_event=cancel_event)
+        yield from _stream_with_user_scope(
+            self.builtin, messages, user_id=user_id, cancel_event=cancel_event
+        )
 
 
 @dataclass(frozen=True)
@@ -420,6 +435,25 @@ def _conversation_provider_error(exc: Exception) -> ConversationProviderError:
         str(exc) or "Ollama is unavailable",
         code=getattr(exc, "code", None) or "assistant_provider_unavailable",
     )
+
+
+def _stream_with_user_scope(
+    provider: Any,
+    messages: list[dict[str, str]],
+    *,
+    user_id: str,
+    cancel_event: Event | None,
+) -> Iterator[str]:
+    """Call a provider with user scope while supporting legacy adapters."""
+
+    try:
+        return provider.stream(
+            messages, cancel_event=cancel_event, user_id=user_id
+        )
+    except TypeError as exc:
+        if "user_id" not in str(exc):
+            raise
+        return provider.stream(messages, cancel_event=cancel_event)
 
 
 def _web_is_ready(web: Any, *, status: Any | None = None) -> bool:

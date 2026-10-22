@@ -23,8 +23,9 @@ class ConversationProvider(Protocol):
         messages: list[dict[str, str]],
         *,
         cancel_event: threading.Event | None = None,
+        user_id: str = "local-user",
     ) -> Iterator[str]:
-        """Yield assistant text deltas or raise a typed provider error."""
+        """Yield assistant text deltas within one user's model boundary."""
 
 
 class ConversationService:
@@ -110,11 +111,13 @@ class ConversationService:
         content: str,
         client_message_id: str,
         cancel_event: threading.Event | None = None,
+        user_id: str = "local-user",
     ) -> Iterator[AssistantEvent]:
         request, created = self.prepare_turn(
             conversation_id,
             content=content,
             client_message_id=client_message_id,
+            user_id=user_id,
         )
         if not created:
             yield from self.store.events_after(request.id)
@@ -152,7 +155,9 @@ class ConversationService:
             messages = self.context_builder.build(
                 conversation_id, user_id=conversation.user_id
             )
-            for delta in self.provider.stream(messages, cancel_event=cancel_event):
+            for delta in self._stream_provider(
+                messages, user_id=conversation.user_id, cancel_event=cancel_event
+            ):
                 if cancel_event.is_set():
                     raise ConversationCancelled()
                 if assistant is None:
@@ -260,6 +265,27 @@ class ConversationService:
             )
         finally:
             self._cancel_events.pop(request.id, None)
+
+    def _stream_provider(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        user_id: str,
+        cancel_event: threading.Event,
+    ) -> Iterator[str]:
+        """Pass user scope to new adapters while keeping old embedded ones usable."""
+
+        try:
+            return self.provider.stream(
+                messages, cancel_event=cancel_event, user_id=user_id
+            )
+        except TypeError as exc:
+            # Embedded providers written before the user-aware contract may
+            # not accept the new keyword. Their input is still limited to the
+            # owner's transcript, so keep them usable during migration.
+            if "user_id" not in str(exc):
+                raise
+            return self.provider.stream(messages, cancel_event=cancel_event)
 
     def consume_request(self, request_id: str) -> None:
         for _event in self.run_request(request_id):

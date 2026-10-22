@@ -115,3 +115,42 @@ def test_conversation_service_rejects_reused_client_id_with_different_content(tm
             content="다른 요청",
             client_message_id="same",
         )
+
+
+def test_conversation_service_replays_non_local_idempotent_turns(tmp_path) -> None:
+    store, service = make_service(tmp_path, FakeProvider(["답변"]))
+    conversation = store.create_conversation(user_id="user-a")
+
+    first, created = service.prepare_turn(
+        conversation.id,
+        content="사용자 A 요청",
+        client_message_id="user-a-client",
+        user_id="user-a",
+    )
+    second, replayed = service.prepare_turn(
+        conversation.id,
+        content="사용자 A 요청",
+        client_message_id="user-a-client",
+        user_id="user-a",
+    )
+
+    assert created is True
+    assert replayed is False
+    assert second.id == first.id
+
+
+def test_conversation_service_retries_non_local_request_with_owner_scope(tmp_path) -> None:
+    store, service = make_service(tmp_path, FakeProvider(["답변"]))
+    conversation = store.create_conversation(user_id="user-a")
+    original, _created = service.prepare_turn(
+        conversation.id,
+        content="재시도할 요청",
+        client_message_id="retry-client",
+        user_id="user-a",
+    )
+    store.transition_request(original.id, RequestState.FAILED, error_code="provider_failed")
+
+    retried = service.retry_request(original.id, user_id="user-a")
+
+    assert retried.parent_request_id == original.id
+    assert retried.conversation_id == conversation.id

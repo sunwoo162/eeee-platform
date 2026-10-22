@@ -90,7 +90,7 @@ class GrowthService:
             conversation = self.conversation_store.get_conversation(
                 conversation_id, user_id=user_id
             )
-            message = self.conversation_store.get_message(message_id)
+            message = self.conversation_store.get_message(message_id, user_id=user_id)
         except KeyError as exc:
             raise GrowthFeedbackError("feedback source conversation or message was not found") from exc
         if message.conversation_id != conversation.id:

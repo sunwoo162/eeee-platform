@@ -88,6 +88,21 @@ def test_conversations_are_isolated_by_user_scope(tmp_path) -> None:
     assert conversations.recent_conversation_turns(private.id, user_id="user-b") == []
 
 
+def test_message_lookup_is_isolated_by_user_scope(tmp_path) -> None:
+    conversations = make_store(tmp_path)
+    private = conversations.create_conversation("개인 기록", user_id="user-a")
+    message = conversations.add_message(
+        private.id,
+        role=MessageRole.USER,
+        content="사용자 A의 비공개 메시지",
+        status=MessageStatus.COMPLETED,
+    )
+
+    assert conversations.get_message(message.id, user_id="user-a") == message
+    with pytest.raises(KeyError):
+        conversations.get_message(message.id, user_id="user-b")
+
+
 def test_route_turn_creates_canonical_conversation_and_updates_background_reply(tmp_path) -> None:
     conversations = make_store(tmp_path)
 

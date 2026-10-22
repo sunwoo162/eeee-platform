@@ -257,7 +257,7 @@ def build_conversation_router(
         try:
             user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
             service.store.get_request_for_user(request_id, user_id=user_id)
-            request = service.cancel_request(request_id)
+            request = service.cancel_request(request_id, user_id=user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return TurnResponse(requestId=request.id, state=request.state.value)
@@ -267,7 +267,7 @@ def build_conversation_router(
         try:
             user_id = _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
             service.store.get_request_for_user(request_id, user_id=user_id)
-            request = service.retry_request(request_id)
+            request = service.retry_request(request_id, user_id=user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:

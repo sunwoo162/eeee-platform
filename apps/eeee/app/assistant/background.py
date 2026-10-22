@@ -30,6 +30,9 @@ class BackgroundExecutionSupervisor:
     successful one.
     """
 
+    _active_owner_tokens: set[str] = set()
+    _active_owner_tokens_lock = Lock()
+
     def __init__(self, store: SQLiteStore, *, max_workers: int = 1) -> None:
         if max_workers < 1:
             raise ValueError("max_workers must be positive")
@@ -41,6 +44,8 @@ class BackgroundExecutionSupervisor:
         self._lock = Lock()
         self._owner_token = f"supervisor-{uuid4().hex}"
         self._lease_seconds = 300
+        with self._active_owner_tokens_lock:
+            self._active_owner_tokens.add(self._owner_token)
 
     def submit(
         self, request_id: str, operation: Callable[[], dict[str, Any]],
@@ -174,18 +179,21 @@ class BackgroundExecutionSupervisor:
 
     def shutdown(self, *, wait: bool = True) -> None:
         self._pool.shutdown(wait=wait, cancel_futures=False)
+        if wait:
+            with self._active_owner_tokens_lock:
+                self._active_owner_tokens.discard(self._owner_token)
 
     def resume_pending(self, operation_factory: Callable[[dict[str, object]], Callable[[], dict[str, Any]]]) -> list[str]:
         now = _now()
         with self.store._connect() as connection:
             rows = connection.execute(
-                "SELECT job_id, request_id, input_json, status FROM assistant_jobs "
-                "WHERE status = 'queued' OR (status = 'running' AND "
-                "(lease_expires_at IS NULL OR lease_expires_at < ?)) ORDER BY created_at",
-                (now,),
+                "SELECT job_id, request_id, input_json, status, lease_owner FROM assistant_jobs "
+                "WHERE status IN ('queued', 'running') ORDER BY created_at",
             ).fetchall()
         resumed: list[str] = []
         for row in rows:
+            if row["status"] == "running" and self._running_owner_is_active(row["job_id"]):
+                continue
             input_data = json.loads(row["input_json"])
             lease_expires_at = self._lease_expiry()
             with self.store._connect() as connection:
@@ -197,12 +205,14 @@ class BackgroundExecutionSupervisor:
                         (self._owner_token, lease_expires_at, now, row["job_id"]),
                     )
                 else:
+                    owner = row["lease_owner"]
+                    owner_clause = "lease_owner IS NULL" if owner is None else "lease_owner = ?"
+                    owner_parameters: tuple[object, ...] = () if owner is None else (owner,)
                     cursor = connection.execute(
                         "UPDATE assistant_jobs SET status = 'running', lease_owner = ?, "
                         "lease_expires_at = ?, error = NULL, updated_at = ? "
-                        "WHERE job_id = ? AND status = 'running' AND "
-                        "(lease_expires_at IS NULL OR lease_expires_at < ?)",
-                        (self._owner_token, lease_expires_at, now, row["job_id"], now),
+                        "WHERE job_id = ? AND status = 'running' AND " + owner_clause,
+                        (self._owner_token, lease_expires_at, now, row["job_id"], *owner_parameters),
                     )
             if cursor.rowcount != 1:
                 continue
@@ -217,6 +227,17 @@ class BackgroundExecutionSupervisor:
                 self._futures[row["job_id"]] = future
             resumed.append(row["job_id"])
         return resumed
+
+    def _running_owner_is_active(self, job_id: str) -> bool:
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT lease_owner, lease_expires_at FROM assistant_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None or row["lease_owner"] is None:
+            return False
+        with self._active_owner_tokens_lock:
+            return row["lease_owner"] in self._active_owner_tokens
 
     def _lease_expiry(self) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=self._lease_seconds)).isoformat()

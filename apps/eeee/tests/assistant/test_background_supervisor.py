@@ -127,6 +127,33 @@ def test_pending_job_can_be_resumed_by_a_new_supervisor(tmp_path):
         second.shutdown()
 
 
+def test_restart_recovers_running_job_before_previous_lease_expires(tmp_path):
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.init()
+    first = BackgroundExecutionSupervisor(store, max_workers=1)
+    job_id = "assistant-job-restart-running"
+    try:
+        first._create(job_id, "assistant-request-restart-running", {"text": "resume now"})
+        with store._connect() as connection:
+            connection.execute(
+                "UPDATE assistant_jobs SET status = 'running', lease_owner = ?, "
+                "lease_expires_at = ? WHERE job_id = ?",
+                (first._owner_token, "2999-01-01T00:00:00+00:00", job_id),
+            )
+    finally:
+        first.shutdown()
+
+    second = BackgroundExecutionSupervisor(store, max_workers=1)
+    try:
+        resumed = second.resume_pending(
+            lambda job: lambda: {"message": job["input"]["text"]},
+        )
+        assert resumed == [job_id]
+        assert _wait_for(second, job_id, "completed")["result"] == {"message": "resume now"}
+    finally:
+        second.shutdown()
+
+
 def test_running_job_can_be_paused_and_resumed_without_losing_input(tmp_path):
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.init()

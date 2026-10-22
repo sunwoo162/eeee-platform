@@ -53,7 +53,7 @@ class ProjectProvisioner:
         intent: ProjectIntent | None = None,
         user_id: str = "local-user",
     ) -> ProjectProvisioningResult:
-        existing = self._existing_current_profile(project)
+        existing = self._existing_current_profile(project, user_id=user_id)
         if existing is not None:
             existing = self._refresh_pending_connectors(existing, user_id)
             self._create_scaffold(project.workspace, project.name, request, intent, existing.template_id)
@@ -229,9 +229,11 @@ class ProjectProvisioner:
         plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return str(plan_path)
 
-    def _existing_current_profile(self, project: Project) -> ProjectProfile | None:
+    def _existing_current_profile(
+        self, project: Project, *, user_id: str = "local-user"
+    ) -> ProjectProfile | None:
         try:
-            profile = self.store.get_project_profile(project.id)
+            profile = self.store.get_project_profile(project.id, user_id=user_id)
         except KeyError:
             return None
         if profile.project_revision != project.revision:

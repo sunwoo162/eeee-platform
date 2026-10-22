@@ -70,6 +70,28 @@ def test_project_provisioner_uses_the_request_user_plugin_connections(monkeypatc
     assert application.state.api_flow.project_provisioner.configured_connector_ids("user-b") == set()
 
 
+def test_legacy_request_provisioning_keeps_the_request_user_scope(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
+    application = create_app(Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces"))
+    calls = []
+
+    class _RecordingProvisioner:
+        def provision(self, *args, **kwargs):
+            calls.append(kwargs.get("user_id"))
+
+    application.state.api_flow.project_provisioner = _RecordingProvisioner()
+    with TestClient(application) as client:
+        response = client.post(
+            "/api/requests",
+            headers={"X-EEEE-User-Id": "user-a"},
+            json={"text": "Build a web app"},
+        )
+
+    assert response.status_code == 200
+    assert calls == ["user-a"]
+
+
 def test_unconfigured_project_lane_uses_provider_neutral_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)

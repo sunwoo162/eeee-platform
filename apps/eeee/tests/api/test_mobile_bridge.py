@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.project_runtime.models import ProjectProfile
 
 
 def test_mobile_controls_desktop_owned_assistant_and_receives_live_events(tmp_path) -> None:
@@ -147,3 +148,98 @@ def test_mobile_token_survives_desktop_restart(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["bridge"]["pairedDevices"] == 1
+
+
+def test_mobile_history_is_isolated_by_the_user_bound_to_the_pairing_code(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    client = TestClient(create_app(settings))
+
+    pairing_a = client.post(
+        "/api/desktop/pairing/code", headers={"X-EEEE-User-Id": "user-a"}
+    ).json()
+    token_a = client.post(
+        "/api/mobile/pair",
+        json={"pairingCode": pairing_a["code"], "deviceName": "User A phone"},
+    ).json()["accessToken"]
+    pairing_b = client.post(
+        "/api/desktop/pairing/code", headers={"X-EEEE-User-Id": "user-b"}
+    ).json()
+    token_b = client.post(
+        "/api/mobile/pair",
+        json={"pairingCode": pairing_b["code"], "deviceName": "User B phone"},
+    ).json()["accessToken"]
+
+    created = client.post(
+        "/api/mobile/assistant/route",
+        headers={"X-Gleave-Bridge-Token": token_a},
+        json={
+            "text": "내일 오후 3시에 사용자 A 회의 일정 등록해줘",
+            "conversationId": "same-mobile-conversation",
+        },
+    )
+    assert created.status_code == 200
+
+    hidden = client.get(
+        "/api/mobile/assistant/conversations",
+        headers={"X-Gleave-Bridge-Token": token_b},
+    )
+    visible = client.get(
+        "/api/mobile/assistant/conversations",
+        headers={"X-Gleave-Bridge-Token": token_a},
+    )
+
+    assert hidden.status_code == 200
+    assert visible.status_code == 200
+    assert hidden.json() == []
+    assert any(
+        item["conversationId"] == "same-mobile-conversation"
+        for item in visible.json()
+    )
+
+
+def test_mobile_project_state_is_isolated_by_the_pairing_user(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    client = TestClient(create_app(settings))
+    project = client.app.state.coordinator.create_project(
+        "mobile-private-project",
+        "User A project",
+        str(tmp_path / "workspaces" / "mobile-private-project"),
+        user_id="user-a",
+    )
+    client.app.state.coordinator.store.save_project_profile(ProjectProfile(
+        project_id=project.id,
+        project_revision=project.revision,
+        goal="User A project",
+        workspace=project.workspace,
+        capabilities=["project-execution"],
+    ))
+
+    pairing_a = client.post(
+        "/api/desktop/pairing/code", headers={"X-EEEE-User-Id": "user-a"}
+    ).json()
+    token_a = client.post(
+        "/api/mobile/pair",
+        json={"pairingCode": pairing_a["code"], "deviceName": "User A phone"},
+    ).json()["accessToken"]
+    pairing_b = client.post(
+        "/api/desktop/pairing/code", headers={"X-EEEE-User-Id": "user-b"}
+    ).json()
+    token_b = client.post(
+        "/api/mobile/pair",
+        json={"pairingCode": pairing_b["code"], "deviceName": "User B phone"},
+    ).json()["accessToken"]
+
+    visible = client.get(
+        "/api/mobile/state",
+        params={"projectId": project.id},
+        headers={"X-Gleave-Bridge-Token": token_a},
+    )
+    hidden = client.get(
+        "/api/mobile/state",
+        params={"projectId": project.id},
+        headers={"X-Gleave-Bridge-Token": token_b},
+    )
+
+    assert visible.status_code == 200
+    assert visible.json()["projectId"] == project.id
+    assert hidden.status_code == 404

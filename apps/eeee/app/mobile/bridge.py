@@ -49,14 +49,16 @@ class MobileBridge:
                 CREATE TABLE IF NOT EXISTS mobile_pairing (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     pairing_code_hash TEXT NOT NULL,
-                    expires_at TEXT NOT NULL
+                    expires_at TEXT NOT NULL,
+                    user_id TEXT NOT NULL DEFAULT 'local-user'
                 );
                 CREATE TABLE IF NOT EXISTS mobile_devices (
                     device_id TEXT PRIMARY KEY,
                     device_name TEXT NOT NULL,
                     token_hash TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL,
-                    revoked_at TEXT
+                    revoked_at TEXT,
+                    user_id TEXT NOT NULL DEFAULT 'local-user'
                 );
                 CREATE TABLE IF NOT EXISTS mobile_events (
                     cursor INTEGER PRIMARY KEY,
@@ -66,20 +68,39 @@ class MobileBridge:
                 );
                 """
             )
+            pairing_columns = {
+                row["name"] for row in connection.execute(
+                    "PRAGMA table_info(mobile_pairing)"
+                ).fetchall()
+            }
+            if "user_id" not in pairing_columns:
+                connection.execute(
+                    "ALTER TABLE mobile_pairing ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local-user'"
+                )
+            device_columns = {
+                row["name"] for row in connection.execute(
+                    "PRAGMA table_info(mobile_devices)"
+                ).fetchall()
+            }
+            if "user_id" not in device_columns:
+                connection.execute(
+                    "ALTER TABLE mobile_devices ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local-user'"
+                )
             self._cursor = connection.execute(
                 "SELECT COALESCE(MAX(cursor), 0) FROM mobile_events"
             ).fetchone()[0]
 
-    def issue_pairing_code(self) -> dict[str, str]:
+    def issue_pairing_code(self, *, user_id: str = "local-user") -> dict[str, str]:
         self._require_enabled()
+        user_id = _normalise_user_id(user_id)
         code = f"{secrets.randbelow(1_000_000):06d}"
         expires_at = _utc_now() + timedelta(seconds=self.pairing_ttl_seconds)
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO mobile_pairing (id, pairing_code_hash, expires_at) VALUES (1, ?, ?) "
+                "INSERT INTO mobile_pairing (id, pairing_code_hash, expires_at, user_id) VALUES (1, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET pairing_code_hash = excluded.pairing_code_hash, "
-                "expires_at = excluded.expires_at",
-                (_hash_secret(code), _iso(expires_at)),
+                "expires_at = excluded.expires_at, user_id = excluded.user_id",
+                (_hash_secret(code), _iso(expires_at), user_id),
             )
         return {"code": code, "expiresAt": _iso(expires_at)}
 
@@ -91,7 +112,7 @@ class MobileBridge:
             raise MobileBridgeError("Mobile device name is required")
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT pairing_code_hash, expires_at FROM mobile_pairing WHERE id = 1"
+                "SELECT pairing_code_hash, expires_at, user_id FROM mobile_pairing WHERE id = 1"
             ).fetchone()
             if row is None or not hmac.compare_digest(row["pairing_code_hash"], _hash_secret(pairing_code)):
                 raise MobileBridgeError("Invalid mobile pairing code")
@@ -100,11 +121,21 @@ class MobileBridge:
             device_id = "mobile-" + uuid4().hex
             token = secrets.token_urlsafe(32)
             connection.execute(
-                "INSERT INTO mobile_devices (device_id, device_name, token_hash, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (device_id, device_name.strip(), _hash_secret(token), _iso(_utc_now())),
+                "INSERT INTO mobile_devices (device_id, device_name, token_hash, created_at, user_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    device_id, device_name.strip(), _hash_secret(token), _iso(_utc_now()),
+                    row["user_id"] or "local-user",
+                ),
             )
-        self.publish("mobile.paired", {"deviceId": device_id, "deviceName": device_name.strip()})
+        self.publish(
+            "mobile.paired",
+            {
+                "deviceId": device_id,
+                "deviceName": device_name.strip(),
+                "userId": row["user_id"] or "local-user",
+            },
+        )
         return {"deviceId": device_id, "deviceName": device_name.strip(), "accessToken": token}
 
     def authorize(self, token: str | None) -> dict[str, str]:
@@ -113,21 +144,32 @@ class MobileBridge:
             raise MobileBridgeError("Mobile bridge token is required")
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT device_id, device_name, token_hash FROM mobile_devices WHERE revoked_at IS NULL"
+                "SELECT device_id, device_name, token_hash, user_id "
+                "FROM mobile_devices WHERE revoked_at IS NULL"
             ).fetchall()
         token_hash = _hash_secret(token)
         for row in rows:
             if hmac.compare_digest(row["token_hash"], token_hash):
-                return {"deviceId": row["device_id"], "deviceName": row["device_name"]}
+                return {
+                    "deviceId": row["device_id"],
+                    "deviceName": row["device_name"],
+                    "userId": row["user_id"] or "local-user",
+                }
         raise MobileBridgeError("Mobile bridge token is invalid or revoked")
 
     def revoke(self, device_id: str) -> None:
         with self._connect() as connection:
+            row = connection.execute(
+                "SELECT user_id FROM mobile_devices WHERE device_id = ?", (device_id,)
+            ).fetchone()
             connection.execute(
                 "UPDATE mobile_devices SET revoked_at = ? WHERE device_id = ?",
                 (_iso(_utc_now()), device_id),
             )
-        self.publish("mobile.revoked", {"deviceId": device_id})
+        self.publish(
+            "mobile.revoked",
+            {"deviceId": device_id, "userId": row["user_id"] if row else "local-user"},
+        )
 
     def publish(self, kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -158,7 +200,9 @@ class MobileBridge:
                 self._events = self._events[-self.event_limit :]
             return event
 
-    def events_after(self, cursor: int = 0) -> dict[str, Any]:
+    def events_after(
+        self, cursor: int = 0, *, user_id: str | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             try:
                 with self._connect() as connection:
@@ -184,8 +228,20 @@ class MobileBridge:
                     }
                     for row in rows
                 ]
+                if user_id is not None:
+                    user_id = _normalise_user_id(user_id)
+                    events = [
+                        event for event in events
+                        if event["payload"].get("userId", "local-user") == user_id
+                    ]
             except sqlite3.OperationalError:
                 events = [event for event in self._events if event["cursor"] > cursor]
+                if user_id is not None:
+                    user_id = _normalise_user_id(user_id)
+                    events = [
+                        event for event in events
+                        if event["payload"].get("userId", "local-user") == user_id
+                    ]
                 oldest_cursor = int(self._events[0]["cursor"]) if self._events else None
             return {
                 "cursor": self._cursor,
@@ -230,3 +286,10 @@ def _iso(value: datetime) -> str:
 
 def _parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+
+def _normalise_user_id(value: str) -> str:
+    user_id = value.strip()
+    if not user_id:
+        raise MobileBridgeError("Mobile bridge user ID is required")
+    return user_id

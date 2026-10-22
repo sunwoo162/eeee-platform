@@ -37,6 +37,42 @@ def test_chatgpt_web_runtime_returns_bridge_response_and_keeps_conversation(monk
     assert calls[1][1]["conversationRef"] == "conv-1"
 
 
+def test_chatgpt_web_runtime_keeps_conversation_refs_per_user(monkeypatch, tmp_path):
+    calls = []
+    responses = iter(("conv-a", "conv-b", "conv-a"))
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            ref = next(responses)
+            return {"status": "completed", "message": "ok", "conversationRef": ref}
+
+    def post(_url, **kwargs):
+        calls.append(kwargs["json"])
+        return Response()
+
+    monkeypatch.setattr(httpx, "post", post)
+    state_path = tmp_path / "chatgpt-assistant-conversation.json"
+    runtime = ChatGptWebRuntime(
+        "http://127.0.0.1:47831",
+        conversation_state_path=state_path,
+    )
+
+    runtime.run(AgentRequest("첫 사용자 요청", Path("."), [], "run-a-1", user_id="user-a"))
+    runtime.run(AgentRequest("두 번째 사용자 요청", Path("."), [], "run-b-1", user_id="user-b"))
+    runtime.run(AgentRequest("첫 사용자 후속 요청", Path("."), [], "run-a-2", user_id="user-a"))
+
+    assert [call["userId"] for call in calls] == ["user-a", "user-b", "user-a"]
+    assert calls[0]["conversationRef"] is None
+    assert calls[1]["conversationRef"] is None
+    assert calls[2]["conversationRef"] == "conv-a"
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {
+        "conversations": {"user-a": "conv-a", "user-b": "conv-b"}
+    }
+
+
 def test_chatgpt_web_runtime_serializes_shared_conversation_turns(monkeypatch):
     active = 0
     maximum = 0
@@ -325,6 +361,34 @@ def test_chatgpt_web_runtime_restores_conversation_ref_from_local_state(monkeypa
     assert calls[0]["conversationRef"] == "persisted-conv"
 
 
+def test_chatgpt_web_runtime_migrates_legacy_state_to_local_user(monkeypatch, tmp_path):
+    calls = []
+    state_path = tmp_path / "chatgpt-assistant-conversation.json"
+    state_path.write_text(json.dumps({"conversationRef": "legacy-conv"}), encoding="utf-8")
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "completed", "message": "이어갈게!", "conversationRef": "legacy-conv"}
+
+    def fake_post(_url, **kwargs):
+        calls.append(kwargs["json"])
+        return FakeResponse()
+
+    monkeypatch.setattr("app.agent.chatgpt_web_runtime.httpx.post", fake_post)
+    runtime = ChatGptWebRuntime(
+        "http://127.0.0.1:47831",
+        conversation_state_path=state_path,
+    )
+
+    runtime.run(AgentRequest("기존 대화 이어가기", Path("."), [], "run-legacy"))
+
+    assert calls[0]["userId"] == "local-user"
+    assert calls[0]["conversationRef"] == "legacy-conv"
+
+
 def test_chatgpt_web_runtime_persists_only_conversation_ref_after_success(monkeypatch, tmp_path):
     state_path = tmp_path / "nested" / "conversation.json"
 
@@ -344,7 +408,9 @@ def test_chatgpt_web_runtime_persists_only_conversation_ref_after_success(monkey
     result = runtime.run(AgentRequest("기억 이어가기", Path("."), [], "run-save"))
 
     assert result.status == "completed"
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {"conversationRef": "conv-saved"}
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {
+        "conversations": {"local-user": "conv-saved"}
+    }
 
 
 def test_chatgpt_web_runtime_clears_persisted_ref_on_auth_failure(monkeypatch, tmp_path):

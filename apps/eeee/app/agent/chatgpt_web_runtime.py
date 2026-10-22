@@ -47,9 +47,7 @@ class ChatGptWebRuntime:
         self.profile_path = profile_path
         self.conversation_state_path = conversation_state_path
         self._turn_lock = Lock()
-        self.conversation_ref: str | None = (
-            None if fresh_conversation else self._load_conversation_ref()
-        )
+        self._conversation_refs = self._load_conversation_refs()
 
     def status(self) -> ChatGptWebStatus:
         """Check the bridge health without opening a browser or sending a prompt."""
@@ -91,13 +89,16 @@ class ChatGptWebRuntime:
             return self._run_locked(request)
 
     def _run_locked(self, request: AgentRequest) -> AgentResult:
-        new_conversation = self.fresh_conversation
+        user_id = _normalize_user_id(request.user_id)
+        conversation_ref = self._conversation_refs.get(user_id)
+        new_conversation = self.fresh_conversation and conversation_ref is None
         body = {
             "text": request.prompt,
-            "conversationRef": self.conversation_ref,
+            "conversationRef": conversation_ref,
             "newConversation": new_conversation,
             "mode": self.mode,
             "runId": request.run_id,
+            "userId": user_id,
             "profile": load_profile(self.profile_path),
         }
         payload: object | None = None
@@ -127,8 +128,7 @@ class ChatGptWebRuntime:
                     marker in detail.lower()
                     for marker in ("auth", "login", "sign-in", "locator-missing", "composer")
                 ):
-                    self.conversation_ref = None
-                    self._clear_conversation_ref()
+                    self._clear_conversation_ref(user_id)
                     detail = "ChatGPT 로그인이 필요해. 브라우저에서 로그인하면 EEEE가 이어서 응답할 수 있어."
                 return AgentResult(
                     status="unavailable",
@@ -189,8 +189,8 @@ class ChatGptWebRuntime:
             )
         conversation_ref = payload.get("conversationRef")
         if isinstance(conversation_ref, str) and conversation_ref:
-            self.conversation_ref = conversation_ref
-            self._persist_conversation_ref(conversation_ref)
+            self._conversation_refs[user_id] = conversation_ref
+            self._persist_conversation_refs()
         # A specialist may need several structured turns. Only its first turn
         # should create an isolated conversation; continuations stay in that
         # conversation so the bridge can attribute pending responses safely.
@@ -199,31 +199,40 @@ class ChatGptWebRuntime:
             status="completed", summary=message.strip(), events=[{
                 "type": "chatgpt.web.response",
                 "message": message.strip(),
-                "conversationRef": self.conversation_ref,
+                "conversationRef": conversation_ref,
             }], changed_files=[], test_commands=[], error=None,
         )
 
-    def _load_conversation_ref(self) -> str | None:
+    def _load_conversation_refs(self) -> dict[str, str]:
         path = self.conversation_state_path
         if path is None or not path.is_file():
-            return None
+            return {}
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
-            return None
-        value = payload.get("conversationRef") if isinstance(payload, dict) else None
-        if isinstance(value, str) and 0 < len(value) <= 512:
-            return value
-        return None
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        legacy = payload.get("conversationRef")
+        if isinstance(legacy, str) and 0 < len(legacy) <= 512:
+            return {"local-user": legacy}
+        conversations = payload.get("conversations")
+        if not isinstance(conversations, dict):
+            return {}
+        return {
+            _normalize_user_id(str(user_id)): value
+            for user_id, value in list(conversations.items())[:128]
+            if isinstance(value, str) and 0 < len(value) <= 512
+        }
 
-    def _persist_conversation_ref(self, value: str) -> None:
+    def _persist_conversation_refs(self) -> None:
         path = self.conversation_state_path
-        if path is None or not value or len(value) > 512:
+        if path is None:
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
-                json.dumps({"conversationRef": value}, ensure_ascii=False),
+                json.dumps({"conversations": self._conversation_refs}, ensure_ascii=False),
                 encoding="utf-8",
             )
         except OSError:
@@ -231,12 +240,16 @@ class ChatGptWebRuntime:
             # is temporarily unavailable (read-only media, locked profile, ...).
             return
 
-    def _clear_conversation_ref(self) -> None:
+    def _clear_conversation_ref(self, user_id: str) -> None:
         path = self.conversation_state_path
+        self._conversation_refs.pop(user_id, None)
         if path is None:
             return
         try:
-            path.unlink(missing_ok=True)
+            if self._conversation_refs:
+                self._persist_conversation_refs()
+            else:
+                path.unlink(missing_ok=True)
         except OSError:
             return
 
@@ -246,3 +259,8 @@ class ChatGptWebRuntime:
             status="failed", summary="ChatGPT Web request failed", events=[],
             changed_files=[], test_commands=[], error=message, error_code=error_code,
         )
+
+
+def _normalize_user_id(value: str) -> str:
+    normalized = value.strip() or "local-user"
+    return normalized[:256]

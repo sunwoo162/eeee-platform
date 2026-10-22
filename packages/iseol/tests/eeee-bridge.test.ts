@@ -26,10 +26,19 @@ test("bridge includes bounded EEEE profile guidance in assistant prompts", async
 
 test("bridge clears stale conversation state after a browser failure", async () => {
   const source = await readFile(new URL("../src/chatgpt-web/eeee-bridge.ts", import.meta.url), "utf8");
-  assert.match(source, /state\.conversationRef = undefined/);
+  assert.match(source, /state\.conversationRefs\.delete\(userId\(input\.userId\)\)/);
   assert.match(source, /probeBrowser/);
   assert.match(source, /connected: browserStatus !== "lost"/);
-  assert.match(source, /conversationActive: Boolean\(state\.conversationRef\)/);
+  assert.match(source, /conversationActive: state\.conversationRefs\.size > 0/);
+});
+
+test("bridge keys persistent ChatGPT conversations by the authenticated EEEE user", async () => {
+  const source = await readFile(new URL("../src/chatgpt-web/eeee-bridge.ts", import.meta.url), "utf8");
+  assert.match(source, /userId\?: unknown/);
+  assert.match(source, /conversationRefs: Map<string, string>/);
+  assert.match(source, /input\.userId/);
+  assert.match(source, /state\.conversationRefs\.get\(currentUserId\)/);
+  assert.match(source, /state\.conversationRefs\.set\(currentUserId, withTurn\.conversationRef\)/);
 });
 
 test("bridge bounds specialist turns separately from normal conversation", async () => {

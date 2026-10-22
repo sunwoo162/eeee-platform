@@ -17,6 +17,7 @@ import type { PlaywrightBrowserRoots } from "./playwright-browser-config.js";
 type ChatRequest = {
   text?: unknown;
   conversationRef?: unknown;
+  userId?: unknown;
   newConversation?: unknown;
   mode?: unknown;
   runId?: unknown;
@@ -25,7 +26,7 @@ type ChatRequest = {
 
 type BridgeState = {
   adapter: ChatGptWebBrowserAdapter;
-  conversationRef?: string;
+  conversationRefs: Map<string, string>;
 };
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -69,6 +70,11 @@ function text(value: unknown, label: string): string {
 function optionalRef(value: unknown): string | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   return text(value, "conversationRef");
+}
+
+function userId(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "local-user";
+  return text(value, "userId").slice(0, 256);
 }
 
 function profileLines(profile: unknown): string[] {
@@ -148,9 +154,12 @@ function sessionFor(input: ChatRequest, conversationRef?: string): WebWorkerSess
 
 async function chat(state: BridgeState, input: ChatRequest): Promise<Record<string, unknown>> {
   const userText = text(input.text, "text");
+  const currentUserId = userId(input.userId);
   const fresh = input.newConversation === true;
   const mode = input.mode === "agent" ? "agent" : "assistant";
-  const requestedRef = fresh ? undefined : optionalRef(input.conversationRef) ?? state.conversationRef;
+  const requestedRef = fresh
+    ? undefined
+    : optionalRef(input.conversationRef) ?? state.conversationRefs.get(currentUserId);
   const session = sessionFor(input, requestedRef);
   const prompt = promptFor(userText, session.runId, mode, input.profile);
   const opened = await state.adapter.openOrResumeSession(session, {
@@ -208,11 +217,11 @@ async function chat(state: BridgeState, input: ChatRequest): Promise<Record<stri
   // caller after a recoverable turn race; do not close the CDP-owned page
   // here because some Chromium CDP sessions disconnect when that page is
   // closed and recreated.
-  state.conversationRef = withTurn.conversationRef;
+  state.conversationRefs.set(currentUserId, withTurn.conversationRef);
   return {
     status: "completed",
     message,
-    conversationRef: state.conversationRef,
+    conversationRef: withTurn.conversationRef,
   };
 }
 
@@ -240,7 +249,10 @@ export async function startEeeeChatGptWebBridge(options: { host?: string; port?:
   const cwd = process.cwd();
   const runtime = await resolveChatGptWebBridgeRuntime(process.env, roots(process.env, cwd));
   if (!runtime.config.enabled || !runtime.driver) throw new Error("ChatGPT Web bridge is not configured");
-  const state: BridgeState = { adapter: (await import("./production-browser-adapter.js")).createProductionChatGptWebAdapter(runtime.driver) };
+  const state: BridgeState = {
+    adapter: (await import("./production-browser-adapter.js")).createProductionChatGptWebAdapter(runtime.driver),
+    conversationRefs: new Map(),
+  };
   // One persistent ChatGPT page is shared by the EEEE assistant.  Concurrent
   // sends can otherwise overwrite the pending baseline/conversation identity:
   // ChatGPT receives both prompts, but neither caller can reliably attribute
@@ -260,7 +272,7 @@ export async function startEeeeChatGptWebBridge(options: { host?: string; port?:
         // specific failure, so discard the stale bridge identity and acquire
         // one canonical page again exactly once.
         if (!isRecoverableTurnRace(error)) throw error;
-        state.conversationRef = undefined;
+        state.conversationRefs.delete(userId(input.userId));
         return await chat(state, { ...input, newConversation: true });
       }
     } finally {
@@ -268,6 +280,7 @@ export async function startEeeeChatGptWebBridge(options: { host?: string; port?:
     }
   };
   const server = createServer(async (request, response) => {
+    let currentInput: ChatRequest | undefined;
     try {
       const pathname = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`).pathname;
       if (request.method === "GET" && pathname === "/health") {
@@ -280,17 +293,17 @@ export async function startEeeeChatGptWebBridge(options: { host?: string; port?:
           service: "chatgpt-web-bridge",
           connected: browserStatus !== "lost",
           browserStatus,
-          conversationActive: Boolean(state.conversationRef),
+          conversationActive: state.conversationRefs.size > 0,
         });
       }
       if (request.method !== "POST" || pathname !== "/chat") return json(response, 404, { error: "not found" });
-      const input = JSON.parse(await readBody(request)) as ChatRequest;
-      return json(response, 200, await queuedChat(input));
+      currentInput = JSON.parse(await readBody(request)) as ChatRequest;
+      return json(response, 200, await queuedChat(currentInput));
     } catch (error) {
       // Discard the stale conversation identity after any failed turn. The
       // bridge itself remains reachable so the next request can establish a
       // fresh session instead of being mistaken for an idle dead process.
-      state.conversationRef = undefined;
+      state.conversationRefs.delete(userId(currentInput?.userId));
       const message = error instanceof Error ? error.message : "ChatGPT Web bridge failed";
       const failureClass = typeof error === "object" && error !== null && "failureClass" in error
         ? (error as { failureClass?: unknown }).failureClass

@@ -141,6 +141,8 @@ def build_conversation_router(
                 "personal_llm": {
                     "status": personal_status.status if personal_status is not None else "not_configured",
                     "model": personal_status.model if personal_status is not None else None,
+                    "errorCode": personal_status.error_code if personal_status is not None else None,
+                    "message": personal_status.message if personal_status is not None else None,
                 },
             },
             "capabilities": capabilities.snapshot() if capabilities is not None else {},

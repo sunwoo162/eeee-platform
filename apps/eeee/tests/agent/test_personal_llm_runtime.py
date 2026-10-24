@@ -137,6 +137,29 @@ def test_chat_rejects_a_response_for_another_user() -> None:
     assert error.value.code == "personal_llm_user_scope_mismatch"
 
 
+def test_chat_rejects_a_response_missing_typed_fields() -> None:
+    runtime = PersonalLlmRuntime(
+        base_url="http://personal.test",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "requestId": "request-1",
+                    "modelVersion": "qwen2.5-0.5b-instruct+lora",
+                    "status": "completed",
+                    "text": "답변",
+                },
+                request=request,
+            )
+        ),
+    )
+
+    with pytest.raises(PersonalLlmRuntimeError) as error:
+        runtime.chat([], user_id="user-a", request_id="request-1", conversation_id="conversation-1")
+
+    assert error.value.code == "personal_llm_invalid_response"
+
+
 def test_chat_maps_timeout() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("generation timed out", request=request)

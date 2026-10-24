@@ -284,6 +284,8 @@ def test_v1_runtime_reports_personal_llm_status_and_model(tmp_path) -> None:
     assert payload["providers"]["personal_llm"] == {
         "status": "ready",
         "model": personal.model,
+        "errorCode": None,
+        "message": None,
     }
     assert payload["conversationProvider"]["name"] == "personal_llm"
     assert payload["conversationProvider"]["status"] == "configured"

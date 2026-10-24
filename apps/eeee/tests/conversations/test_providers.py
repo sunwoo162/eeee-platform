@@ -169,7 +169,7 @@ def test_auto_prefers_ready_personal_llm_over_web() -> None:
     assert selection.provider_name == "personal_llm"
     assert list(
         selection.provider.stream(
-            [],
+            [{"role": "user", "content": "안녕"}],
             user_id="local-user",
             request_id="request-1",
             conversation_id="conversation-1",
@@ -196,6 +196,40 @@ def test_unavailable_personal_llm_never_silently_selects_web() -> None:
 
     assert error.value.code == "personal_llm_unavailable"
     assert web.requests == []
+
+
+def test_personal_llm_provider_filters_unsupported_context_roles_and_bounds_messages() -> None:
+    personal = FakePersonalLlm()
+    selection = build_conversation_provider(
+        "personal_llm",
+        personal_llm=personal,
+        ollama=None,
+        web=None,
+    )
+
+    with pytest.raises(ConversationProviderError) as error:
+        list(
+            selection.provider.stream(
+                [{"role": "tool", "content": "internal result"}],
+                user_id="user-a",
+                request_id="request-1",
+                conversation_id="conversation-1",
+            )
+        )
+
+    assert error.value.code == "personal_llm_invalid_request"
+    assert personal.calls == []
+
+    assert list(
+        selection.provider.stream(
+            [{"role": "user", "content": str(index)} for index in range(101)],
+            user_id="user-a",
+            request_id="request-2",
+            conversation_id="conversation-1",
+        )
+    ) == ["Personal LLM 답변"]
+    assert len(personal.calls[0]["messages"]) == 100
+    assert personal.calls[0]["messages"][0] == {"role": "user", "content": "1"}
 
 
 def test_explicit_web_gpt_does_not_fallback_to_ollama() -> None:

@@ -56,7 +56,9 @@ personal service process and does not copy its adapter artifacts or database.
 If `/health` or `/v1/model/status` is unavailable, the EEEE provider state is
 `unavailable`/`model_missing` and a generation failure remains a failed or
 cancelled conversation. EEEE does not silently forward that conversation to
-ChatGPT Web. Only the existing bounded builtin policy may answer a basic turn.
+ChatGPT Web. The `/health` call verifies process liveness; EEEE's readiness and
+model identity come from `/v1/model/status`. Only the existing bounded builtin
+policy may answer a basic turn.
 
 ChatGPT Web remains an explicit alternative. Set
 `EEEE_CONVERSATION_PROVIDER=chatgpt_web`, enable the bridge, and use a

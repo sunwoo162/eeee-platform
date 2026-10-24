@@ -3,9 +3,10 @@ from __future__ import annotations
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 class PersonalLlmRuntimeError(RuntimeError):
@@ -22,6 +23,28 @@ class PersonalLlmStatus:
     model: str | None
     error_code: str | None = None
     message: str | None = None
+
+
+class _PersonalLlmChatResponse(BaseModel):
+    """Strict local copy of the wire-level response shape."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    request_id: str = Field(alias="requestId", min_length=1, max_length=128)
+    model_version: str = Field(alias="modelVersion", min_length=1, max_length=128)
+    profile_revision: int = Field(alias="profileRevision", ge=0)
+    text: str = Field(default="", max_length=16_000)
+    intent: str = Field(min_length=1, max_length=128)
+    style_applied: bool = Field(alias="styleApplied")
+    memory_used: list[str] = Field(default_factory=list, alias="memoryUsed")
+    confidence: float = Field(ge=0, le=1)
+    action_proposal: dict[str, Any] | None = Field(default=None, alias="actionProposal")
+    needs_user_confirmation: bool = Field(alias="needsUserConfirmation")
+    status: Literal["completed", "failed"]
+    # The current service binds users on the request header/body and does not
+    # echo userId. Accepting this optional diagnostic field lets us reject an
+    # out-of-scope response if a future adapter includes it.
+    user_id: str | None = Field(default=None, alias="userId", max_length=128)
 
 
 class PersonalLlmRuntime:
@@ -168,43 +191,34 @@ class PersonalLlmRuntime:
                 "Personal LLM response must be an object",
                 code="personal_llm_invalid_response",
             )
-        response_request_id = data.get("requestId")
-        if response_request_id != request_id:
+        try:
+            typed_response = _PersonalLlmChatResponse.model_validate(data)
+        except ValidationError as exc:
+            raise PersonalLlmRuntimeError(
+                "Personal LLM response does not match its typed contract",
+                code="personal_llm_invalid_response",
+            ) from exc
+        if typed_response.request_id != request_id:
             raise PersonalLlmRuntimeError(
                 "Personal LLM response request ID does not match",
                 code="personal_llm_invalid_response",
             )
-        response_user_id = data.get("userId")
-        if response_user_id is not None and response_user_id != user_id:
+        if typed_response.user_id is not None and typed_response.user_id != user_id:
             raise PersonalLlmRuntimeError(
                 "Personal LLM response user ID does not match",
                 code="personal_llm_user_scope_mismatch",
             )
-        model_version = data.get("modelVersion")
-        response_status = data.get("status")
-        if not isinstance(model_version, str) or not model_version.strip():
-            raise PersonalLlmRuntimeError(
-                "Personal LLM response model version is missing",
-                code="personal_llm_invalid_response",
-            )
-        if response_status != "completed":
-            intent = data.get("intent")
+        if typed_response.status != "completed":
             code = (
-                f"personal_llm_{intent}"
-                if isinstance(intent, str) and intent.strip()
+                f"personal_llm_{typed_response.intent}"
+                if typed_response.intent.strip()
                 else "personal_llm_failed"
             )
             raise PersonalLlmRuntimeError(
                 "Personal LLM request did not complete",
                 code=code,
             )
-        text = data.get("text")
-        if not isinstance(text, str):
-            raise PersonalLlmRuntimeError(
-                "Personal LLM response text must be a string",
-                code="personal_llm_invalid_response",
-            )
-        answer = text.strip()
+        answer = typed_response.text.strip()
         if not answer:
             raise PersonalLlmRuntimeError(
                 "Personal LLM returned an empty response",

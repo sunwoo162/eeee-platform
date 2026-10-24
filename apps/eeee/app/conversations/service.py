@@ -42,6 +42,7 @@ class ConversationService:
         self.provider = provider
         self.context_builder = context_builder or ConversationContextBuilder(store)
         self._cancel_events: dict[str, threading.Event] = {}
+        self._request_state_lock = threading.RLock()
         self._accepting = True
 
     def set_accepting(self, accepting: bool) -> None:
@@ -216,16 +217,18 @@ class ConversationService:
                 request = self.store.transition_request(
                     request.id, RequestState.STREAMING
                 )
-            if cancel_event.is_set():
-                raise ConversationCancelled()
-            self.store.update_message(
-                assistant.id,
-                content=collected,
-                status=MessageStatus.COMPLETED,
-                provider=_active_provider_name(self.provider),
-                model=_active_provider_model(self.provider),
-            )
-            request = self.store.transition_request(request.id, RequestState.COMPLETED)
+            with self._request_state_lock:
+                current = self.store.get_request(request.id)
+                if cancel_event.is_set() or current.state == RequestState.CANCELLED:
+                    raise ConversationCancelled()
+                self.store.update_message(
+                    assistant.id,
+                    content=collected,
+                    status=MessageStatus.COMPLETED,
+                    provider=_active_provider_name(self.provider),
+                    model=_active_provider_model(self.provider),
+                )
+                request = self.store.transition_request(request.id, RequestState.COMPLETED)
             yield self.store.append_event(
                 request.id,
                 "message.completed",
@@ -233,33 +236,38 @@ class ConversationService:
             )
         except Exception as exc:
             error_code = getattr(exc, "code", "conversation_failed")
-            cancelled = error_code in {"conversation_cancelled", "ollama_cancelled"}
-            if assistant is None:
-                assistant = self.store.add_message(
-                    conversation_id,
-                    role=MessageRole.ASSISTANT,
-                    content="",
-                    status=MessageStatus.CANCELLED if cancelled else MessageStatus.FAILED,
-                    request_id=request.id,
-                    provider=_active_provider_name(self.provider),
-                    model=_active_provider_model(self.provider),
-                    error_code=error_code,
+            with self._request_state_lock:
+                current = self.store.get_request(request.id)
+                cancelled = (
+                    error_code in {"conversation_cancelled", "ollama_cancelled"}
+                    or cancel_event.is_set()
+                    or current.state == RequestState.CANCELLED
                 )
-            else:
-                self.store.update_message(
-                    assistant.id,
-                    content=collected,
-                    status=MessageStatus.CANCELLED if cancelled else MessageStatus.FAILED,
-                    provider=_active_provider_name(self.provider),
-                    model=_active_provider_model(self.provider),
-                    error_code=error_code,
-                )
-            current = self.store.get_request(request.id)
-            if current.state not in terminal_states:
-                target = RequestState.CANCELLED if cancelled else RequestState.FAILED
-                self.store.transition_request(
-                    request.id, target, error_code=error_code
-                )
+                if assistant is None:
+                    assistant = self.store.add_message(
+                        conversation_id,
+                        role=MessageRole.ASSISTANT,
+                        content="",
+                        status=MessageStatus.CANCELLED if cancelled else MessageStatus.FAILED,
+                        request_id=request.id,
+                        provider=_active_provider_name(self.provider),
+                        model=_active_provider_model(self.provider),
+                        error_code=error_code,
+                    )
+                else:
+                    self.store.update_message(
+                        assistant.id,
+                        content=collected,
+                        status=MessageStatus.CANCELLED if cancelled else MessageStatus.FAILED,
+                        provider=_active_provider_name(self.provider),
+                        model=_active_provider_model(self.provider),
+                        error_code=error_code,
+                    )
+                if current.state not in terminal_states:
+                    target = RequestState.CANCELLED if cancelled else RequestState.FAILED
+                    self.store.transition_request(
+                        request.id, target, error_code=error_code
+                    )
             yield self.store.append_event(
                 request.id,
                 "request.cancelled" if cancelled else "request.failed",
@@ -317,22 +325,23 @@ class ConversationService:
     def cancel_request(
         self, request_id: str, *, user_id: str = "local-user"
     ) -> AssistantRequest:
-        request = self.store.get_request_for_user(request_id, user_id=user_id)
-        cancel_event = self._cancel_events.setdefault(request_id, threading.Event())
-        cancel_event.set()
-        if request.state in {
-            RequestState.RECEIVED,
-            RequestState.PERSISTED_USER_MESSAGE,
-            RequestState.CLASSIFIED,
-            RequestState.GENERATING,
-            RequestState.STREAMING,
-            RequestState.EXECUTING,
-        }:
-            request = self.store.transition_request(request_id, RequestState.CANCELLED)
-            self.store.append_event(
-                request_id, "request.cancelled", {"requestId": request_id}
-            )
-        return request
+        with self._request_state_lock:
+            request = self.store.get_request_for_user(request_id, user_id=user_id)
+            cancel_event = self._cancel_events.setdefault(request_id, threading.Event())
+            cancel_event.set()
+            if request.state in {
+                RequestState.RECEIVED,
+                RequestState.PERSISTED_USER_MESSAGE,
+                RequestState.CLASSIFIED,
+                RequestState.GENERATING,
+                RequestState.STREAMING,
+                RequestState.EXECUTING,
+            }:
+                request = self.store.transition_request(request_id, RequestState.CANCELLED)
+                self.store.append_event(
+                    request_id, "request.cancelled", {"requestId": request_id}
+                )
+            return request
 
     def retry_request(
         self, request_id: str, *, user_id: str = "local-user"

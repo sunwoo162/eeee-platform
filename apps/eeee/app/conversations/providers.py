@@ -141,9 +141,15 @@ class PersonalLlmConversationProvider:
             raise ConversationProviderError(
                 "개인화 LLM 요청 식별자가 없어.", code="personal_llm_invalid_request"
             )
+        personal_messages = _prepare_personal_llm_messages(messages)
+        if not personal_messages:
+            raise ConversationProviderError(
+                "개인화 LLM에 보낼 대화 context가 없어.",
+                code="personal_llm_invalid_request",
+            )
         try:
             answer = self.runtime.chat(
-                messages,
+                personal_messages,
                 user_id=user_id,
                 request_id=request_id,
                 conversation_id=conversation_id,
@@ -697,6 +703,22 @@ def _last_user_message(messages: list[dict[str, str]]) -> str:
         if message.get("role") == "user" and message.get("content", "").strip():
             return message["content"].strip()
     return ""
+
+
+def _prepare_personal_llm_messages(
+    messages: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Fit EEEE context to the personal service's typed ChatMessage limits."""
+
+    allowed_roles = {"system", "user", "assistant"}
+    normalized = [
+        {"role": message["role"], "content": message["content"]}
+        for message in messages
+        if message.get("role") in allowed_roles
+        and isinstance(message.get("content"), str)
+        and message["content"].strip()
+    ]
+    return normalized[-100:]
 
 
 def _render_builtin_prompt(messages: list[dict[str, str]]) -> str:

@@ -105,7 +105,10 @@ Copy `.env.example` to `.env` when environment configuration is needed.
 | `EXECUTION_MODE` | `demo` or deterministic `workspace_verify` | `demo` |
 | `COMMAND_TIMEOUT_SECONDS` | Maximum duration of a verification command | `120` |
 | `MAX_COMMAND_OUTPUT_CHARS` | Output limit recorded per command | `8000` |
-| `EEEE_CONVERSATION_PROVIDER` | General conversation provider: `chatgpt_web` by default; `ollama` is an explicit migration/debug override | `chatgpt_web` |
+| `EEEE_CONVERSATION_PROVIDER` | General conversation provider: `personal_llm` by default; `chatgpt_web` and `ollama` are explicit alternatives | `personal_llm` |
+| `EEEE_PERSONAL_LLM_BASE_URL` | Loopback personal LLM `/v1/chat` service URL | `http://127.0.0.1:8765` |
+| `EEEE_PERSONAL_LLM_CONNECT_TIMEOUT_SECONDS` | Personal LLM connection timeout | `3` |
+| `EEEE_PERSONAL_LLM_GENERATION_TIMEOUT_SECONDS` | Personal LLM generation timeout | `120` |
 | `EEEE_OLLAMA_BASE_URL` | Ollama endpoint for local conversation generation | `http://127.0.0.1:11434` |
 | `EEEE_OLLAMA_MODEL` | Ollama model used by the local provider | empty |
 | `CHATGPT_WEB_ENABLED` | Enables the optional ChatGPT Web bridge | `false` |
@@ -132,10 +135,39 @@ runtime is not configured. The pinned `openhands-sdk` and `openhands-tools`
 versions are installed together because the distributions are released as a
 matched pair.
 
-Ollama is not part of the active EEEE assistant path. The legacy local-agent
-path can still be enabled explicitly for migration/debugging by setting
-`EEEE_CONVERSATION_PROVIDER=ollama`, but a missing Web GPT bridge never falls
-back to it.
+The completed `eeee-personal-llm` service is the default EEEE conversation
+provider. It runs as a separate local process and owns its model registry,
+active adapter, profile store, and memory store. EEEE sends only the bounded
+conversation context, request ID, conversation ID, and user ID to its loopback
+`/v1/chat` contract; it does not copy model files or databases into this
+repository.
+
+Start the personal LLM service first, using the active adapter configured in
+that repository:
+
+```powershell
+Set-Location C:\Users\user\Documents\eeee-personal-llm-project
+personal-llm
+```
+
+Confirm readiness before starting EEEE:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8765/health
+Invoke-RestMethod http://127.0.0.1:8765/v1/model/status
+```
+
+Then start EEEE with `EEEE_CONVERSATION_PROVIDER=personal_llm` (the default).
+If the service is unavailable, timed out, or returns an invalid response, EEEE
+records a failed conversation response and does not silently send that
+conversation to ChatGPT Web. The bounded builtin response is used only where
+the existing basic-turn fallback policy permits it.
+
+ChatGPT Web and Ollama remain available as explicit alternatives. Set
+`EEEE_CONVERSATION_PROVIDER=chatgpt_web` for the authenticated Web bridge, or
+`EEEE_CONVERSATION_PROVIDER=ollama` with `EEEE_OLLAMA_MODEL` for a local Ollama
+debug lane. Neither provider is selected implicitly after a personal LLM
+failure.
 
 For that explicit legacy path, install Ollama separately, pull a local model,
 and configure `EEEE_OLLAMA_MODEL` (or the equivalent `OLLAMA_MODEL` setting):
@@ -153,11 +185,14 @@ workspace boundaries, command execution, evidence, QA, and ClaimLatch gates.
 ### Conversation provider and growth memory
 
 The general conversation path uses one provider contract. EEEE uses the
-ChatGPT Web adapter as its active assistant brain. `chatgpt_web` is the default
-and `auto` is retained only as a migration alias that also refuses to fall back
-to Ollama. Set `ollama` only for an explicit local migration/debug run; normal
-Web GPT failures remain visible instead of silently switching models.
-`GET /v1/runtime` exposes the selected provider and readiness of both providers.
+loopback personal LLM adapter by default and records `personal_llm` plus the
+reported `modelVersion` on assistant messages. `GET /v1/runtime` exposes the
+selected provider and the current readiness/model status for `personal_llm`,
+`chatgpt_web`, and `ollama`.
+
+The first integration slice sends `profileRevision=0` and an empty
+`approvedMemoryIds` list. Profile and memory synchronization remains owned by
+the independent personal LLM service and is intentionally a later contract.
 
 User feedback is stored separately from assistant memory. Submit a rating to
 `POST /api/memory/feedback`; it is retained as a redacted feedback ledger entry

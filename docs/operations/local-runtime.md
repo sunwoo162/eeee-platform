@@ -25,20 +25,44 @@ process and relaunch; the lock is released automatically during normal shutdown.
 
 ## EEEE general conversation engine
 
-EEEE uses the ISEOL ChatGPT Web bridge for general conversation when
-`CHATGPT_WEB_ENABLED=true` and `CHATGPT_WEB_BRIDGE_URL` points to the loopback
-bridge. The bridge owns a dedicated persistent browser profile and the user
-logs into ChatGPT Web once in that profile; EEEE never receives the profile's
-cookies, passwords, or tokens. The browser adapter checks authentication,
-conversation identity, response extraction, and ChatGPT usage-limit states.
+The default general conversation provider is the separately running
+`eeee-personal-llm` loopback service. Start it from its own repository so its
+active registry adapter and SQLite profile/memory store remain independent from
+EEEE:
 
-This is browser-session usage, not an OpenAI API integration: it does not add
-API token billing, but it still consumes the user's ChatGPT plan allowance and
-can be blocked by that plan's limits. If the bridge is enabled but unavailable,
-EEEE returns a blocked connection state instead of pretending that a fixed
-fallback response came from GPT. When the bridge is disabled, the local
-deterministic fallback is only a development mode and is not a live GPT
-conversation.
+```powershell
+Set-Location C:\Users\user\Documents\eeee-personal-llm-project
+personal-llm
+Invoke-RestMethod http://127.0.0.1:8765/health
+Invoke-RestMethod http://127.0.0.1:8765/v1/model/status
+```
+
+Then start EEEE with the default or explicit setting:
+
+```powershell
+$env:EEEE_CONVERSATION_PROVIDER = "personal_llm"
+$env:EEEE_PERSONAL_LLM_BASE_URL = "http://127.0.0.1:8765"
+Set-Location <gleave-repository>\apps\eeee
+python -m app.main
+```
+
+EEEE calls only the personal service's typed `/v1/chat` boundary. It passes the
+conversation context, EEEE request ID, conversation ID, and user ID in both
+`userId` and `X-Personal-User-Id`; the first slice uses
+`profileRevision=0` and `approvedMemoryIds=[]`. The response's
+`modelVersion` is retained as message provenance. EEEE does not manage the
+personal service process and does not copy its adapter artifacts or database.
+
+If `/health` or `/v1/model/status` is unavailable, the EEEE provider state is
+`unavailable`/`model_missing` and a generation failure remains a failed or
+cancelled conversation. EEEE does not silently forward that conversation to
+ChatGPT Web. Only the existing bounded builtin policy may answer a basic turn.
+
+ChatGPT Web remains an explicit alternative. Set
+`EEEE_CONVERSATION_PROVIDER=chatgpt_web`, enable the bridge, and use a
+dedicated browser profile. The bridge owns that profile and EEEE never receives
+its cookies, passwords, or tokens. Ollama is also an explicit alternative via
+`EEEE_CONVERSATION_PROVIDER=ollama` and `EEEE_OLLAMA_MODEL`.
 
 For automatic local startup, set `CHATGPT_WEB_ENABLED=true`,
 `CHATGPT_WEB_AUTOSTART=true`, and choose a dedicated profile directory in

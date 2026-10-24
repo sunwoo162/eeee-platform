@@ -318,7 +318,7 @@ def _plugin_registration_payload(registration: object) -> dict[str, object]:
 
 def _plugin_user_id(request: Request, header: str | None) -> str:
     _require_local_desktop(request)
-    user_id = header or "local-user"
+    user_id = (header or "local-user").casefold()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,120}", user_id):
         raise HTTPException(status_code=400, detail="Plugin user scope is invalid")
     return user_id

@@ -711,13 +711,18 @@ def _prepare_personal_llm_messages(
     """Fit EEEE context to the personal service's typed ChatMessage limits."""
 
     allowed_roles = {"system", "user", "assistant"}
-    normalized = [
-        {"role": message["role"], "content": message["content"]}
-        for message in messages
-        if message.get("role") in allowed_roles
-        and isinstance(message.get("content"), str)
-        and message["content"].strip()
-    ]
+    normalized: list[dict[str, str]] = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role not in allowed_roles or not isinstance(content, str) or not content.strip():
+            continue
+        if len(content) > 16_000:
+            raise ConversationProviderError(
+                "개인화 LLM context의 한 메시지가 너무 길어.",
+                code="personal_llm_invalid_request",
+            )
+        normalized.append({"role": role, "content": content})
     return normalized[-100:]
 
 

@@ -251,3 +251,18 @@ def test_conversation_service_does_not_persist_a_late_cancelled_response(tmp_pat
     assert [message.content for message in persisted] == ["취소된 요청", ""]
     assert persisted[-1].status == MessageStatus.CANCELLED
     assert not any(event.event_type == "message.completed" for event in events)
+
+
+def test_conversation_service_does_not_recreate_cancel_event_for_terminal_request(tmp_path) -> None:
+    store, service = make_service(tmp_path, FakeProvider(["답변"]))
+    conversation = store.create_conversation()
+    request, _created = service.prepare_turn(
+        conversation.id,
+        content="완료된 요청",
+        client_message_id="terminal-cancel",
+    )
+
+    list(service.run_request(request.id))
+    service.cancel_request(request.id)
+
+    assert request.id not in service._cancel_events

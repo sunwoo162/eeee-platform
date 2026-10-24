@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
 class PersonalLlmRuntimeError(RuntimeError):
@@ -25,6 +25,22 @@ class PersonalLlmStatus:
     message: str | None = None
 
 
+class _PersonalLlmActionProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    kind: str = Field(min_length=1, max_length=64)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    requires_confirmation: bool = Field(default=True, alias="requiresConfirmation")
+
+    @field_validator("parameters")
+    @classmethod
+    def reject_executable_parameters(cls, value: dict[str, Any]) -> dict[str, Any]:
+        forbidden = {"command", "executable", "script", "shell"}
+        if forbidden.intersection(key.casefold() for key in value):
+            raise ValueError("action parameters must not contain executable fields")
+        return value
+
+
 class _PersonalLlmChatResponse(BaseModel):
     """Strict local copy of the wire-level response shape."""
 
@@ -36,9 +52,11 @@ class _PersonalLlmChatResponse(BaseModel):
     text: str = Field(default="", max_length=16_000)
     intent: str = Field(min_length=1, max_length=128)
     style_applied: bool = Field(alias="styleApplied")
-    memory_used: list[str] = Field(default_factory=list, alias="memoryUsed")
+    memory_used: list[str] = Field(default_factory=list, alias="memoryUsed", max_length=100)
     confidence: float = Field(ge=0, le=1)
-    action_proposal: dict[str, Any] | None = Field(default=None, alias="actionProposal")
+    action_proposal: _PersonalLlmActionProposal | None = Field(
+        default=None, alias="actionProposal"
+    )
     needs_user_confirmation: bool = Field(alias="needsUserConfirmation")
     status: Literal["completed", "failed"]
     # The current service binds users on the request header/body and does not

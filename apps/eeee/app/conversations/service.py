@@ -327,9 +327,7 @@ class ConversationService:
     ) -> AssistantRequest:
         with self._request_state_lock:
             request = self.store.get_request_for_user(request_id, user_id=user_id)
-            cancel_event = self._cancel_events.setdefault(request_id, threading.Event())
-            cancel_event.set()
-            if request.state in {
+            if request.state not in {
                 RequestState.RECEIVED,
                 RequestState.PERSISTED_USER_MESSAGE,
                 RequestState.CLASSIFIED,
@@ -337,10 +335,13 @@ class ConversationService:
                 RequestState.STREAMING,
                 RequestState.EXECUTING,
             }:
-                request = self.store.transition_request(request_id, RequestState.CANCELLED)
-                self.store.append_event(
-                    request_id, "request.cancelled", {"requestId": request_id}
-                )
+                return request
+            cancel_event = self._cancel_events.setdefault(request_id, threading.Event())
+            cancel_event.set()
+            request = self.store.transition_request(request_id, RequestState.CANCELLED)
+            self.store.append_event(
+                request_id, "request.cancelled", {"requestId": request_id}
+            )
             return request
 
     def retry_request(

@@ -160,6 +160,37 @@ def test_chat_rejects_a_response_missing_typed_fields() -> None:
     assert error.value.code == "personal_llm_invalid_response"
 
 
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"memoryUsed": ["memory"] * 101},
+        {
+            "actionProposal": {
+                "kind": "send",
+                "parameters": {"command": "unsafe"},
+                "requiresConfirmation": True,
+            }
+        },
+    ],
+)
+def test_chat_rejects_invalid_nested_typed_fields(extra: dict[str, object]) -> None:
+    runtime = PersonalLlmRuntime(
+        base_url="http://personal.test",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json=_chat_response(**extra),
+                request=request,
+            )
+        ),
+    )
+
+    with pytest.raises(PersonalLlmRuntimeError) as error:
+        runtime.chat([], user_id="user-a", request_id="request-1", conversation_id="conversation-1")
+
+    assert error.value.code == "personal_llm_invalid_response"
+
+
 def test_chat_maps_timeout() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("generation timed out", request=request)

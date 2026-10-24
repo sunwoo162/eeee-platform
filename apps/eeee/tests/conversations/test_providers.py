@@ -231,6 +231,18 @@ def test_personal_llm_provider_filters_unsupported_context_roles_and_bounds_mess
     assert len(personal.calls[0]["messages"]) == 100
     assert personal.calls[0]["messages"][0] == {"role": "user", "content": "1"}
 
+    with pytest.raises(ConversationProviderError) as error:
+        list(
+            selection.provider.stream(
+                [{"role": "user", "content": "x" * 16_001}],
+                user_id="user-a",
+                request_id="request-3",
+                conversation_id="conversation-1",
+            )
+        )
+
+    assert error.value.code == "personal_llm_invalid_request"
+
 
 def test_explicit_web_gpt_does_not_fallback_to_ollama() -> None:
     selection = build_conversation_provider(

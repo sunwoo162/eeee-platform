@@ -217,6 +217,22 @@ def test_v1_user_scoped_messages_are_returned_to_the_owner(tmp_path) -> None:
     assert [item["content"] for item in messages.json()["items"]] == ["내 기록"]
 
 
+def test_v1_user_scope_is_canonicalized_for_personal_provider(tmp_path) -> None:
+    client = make_client(tmp_path)
+
+    conversation = client.post(
+        "/v1/conversations",
+        headers={"X-EEEE-User-Id": "User-A"},
+        json={"title": "정규화된 사용자"},
+    ).json()
+
+    assert conversation["user_id"] == "user-a"
+    assert client.get(
+        "/v1/conversations",
+        headers={"X-EEEE-User-Id": "user-a"},
+    ).json()["items"][0]["id"] == conversation["id"]
+
+
 def test_v1_runtime_reports_ollama_model_readiness_separately_from_core_health(tmp_path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",

@@ -78,6 +78,14 @@ EEE가 보유한 conversation context를 다음처럼 개인화 LLM `ChatRequest
 
 개인화 adapter 자체의 학습된 말투는 그대로 사용하고, 대화의 최신 context와 EEEE 사용자 경계는 EEEE가 제공한다. 별도 profile/memory 동기화는 후속 범위로 남긴다.
 
+개인화 LLM의 현재 `ChatResponse`에는 `userId` echo 필드가 없다. 따라서
+응답의 사용자 binding은 loopback 서비스가 요청 body의 `userId`와
+`X-Personal-User-Id`를 비교·검증하는 경계를 authoritative하게 사용한다.
+EEEE는 API user ID를 canonical form으로 만든 뒤 두 위치에 같은 값을 보내고,
+응답 `requestId`를 원 요청과 비교한다. 향후 응답에 선택적 `userId`가 포함되면
+불일치 응답은 즉시 거부한다. 별도 response-user 증명 필드를 추가하는 것은
+개인화 LLM contract 변경 범위다.
+
 ### 응답과 provenance
 
 - `ChatResponse.status=completed`이고 `text`가 비어 있지 않을 때만 답변을 기록한다.
@@ -116,7 +124,7 @@ EEE가 보유한 conversation context를 다음처럼 개인화 LLM `ChatRequest
 1. 설정 없이도 기존 test suite가 깨지지 않고, 명시적 기존 provider 선택이 유지된다.
 2. 개인화 LLM status가 ready이면 EEEE selection이 `personal_llm`과 model version을 표시한다.
 3. 실제 POST payload에 context, request ID, conversation ID, 사용자 header가 정확히 포함된다.
-4. 다른 사용자 ID가 개인화 LLM 경계를 넘지 않는다.
+4. canonical user ID가 request body와 personal-user header에 동일하게 들어가며, 다른 사용자 ID가 개인화 LLM 경계를 넘지 않는다.
 5. timeout/connection failure/HTTP 오류/잘못된 응답/빈 답변은 assistant 성공 메시지를 만들지 않는다.
 6. cancel 요청 이후 늦게 도착한 응답은 저장되지 않는다.
 7. 개인화 LLM adapter를 fake server로 검증하고, 실제 loopback 서버가 실행 가능한 경우 health/status/chat smoke를 수행한다.

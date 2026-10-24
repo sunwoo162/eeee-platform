@@ -266,3 +266,18 @@ def test_conversation_service_does_not_recreate_cancel_event_for_terminal_reques
     service.cancel_request(request.id)
 
     assert request.id not in service._cancel_events
+
+
+def test_conversation_service_does_not_keep_event_for_prestart_cancel(tmp_path) -> None:
+    store, service = make_service(tmp_path, FakeProvider(["답변"]))
+    conversation = store.create_conversation()
+    request, _created = service.prepare_turn(
+        conversation.id,
+        content="시작 전 취소",
+        client_message_id="prestart-cancel",
+    )
+
+    cancelled = service.cancel_request(request.id)
+
+    assert cancelled.state == RequestState.CANCELLED
+    assert request.id not in service._cancel_events

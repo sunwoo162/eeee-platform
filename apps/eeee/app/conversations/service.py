@@ -336,6 +336,17 @@ class ConversationService:
                 RequestState.EXECUTING,
             }:
                 return request
+            if request.state in {
+                RequestState.RECEIVED,
+                RequestState.PERSISTED_USER_MESSAGE,
+                RequestState.CLASSIFIED,
+            }:
+                self._cancel_events.pop(request_id, None)
+                request = self.store.transition_request(request_id, RequestState.CANCELLED)
+                self.store.append_event(
+                    request_id, "request.cancelled", {"requestId": request_id}
+                )
+                return request
             cancel_event = self._cancel_events.setdefault(request_id, threading.Event())
             cancel_event.set()
             request = self.store.transition_request(request_id, RequestState.CANCELLED)

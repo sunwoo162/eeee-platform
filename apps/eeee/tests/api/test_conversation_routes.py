@@ -18,6 +18,18 @@ class FakeProvider:
         yield from self.chunks
 
 
+class FakePersonalRuntime:
+    model = "qwen2.5-0.5b-instruct+lora"
+
+    def status(self):
+        return SimpleNamespace(
+            status="ready",
+            model=self.model,
+            error_code=None,
+            message=None,
+        )
+
+
 def make_client(tmp_path, provider=None) -> TestClient:
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspace")
     return TestClient(create_app(settings, conversation_provider=provider or FakeProvider()))
@@ -87,6 +99,9 @@ def test_v1_default_turn_uses_builtin_fallback_and_persists_messages(tmp_path) -
         workspace_root=tmp_path / "workspace",
         chatgpt_web_enabled=True,
         chatgpt_web_bridge_url="http://127.0.0.1:1",
+        personal_llm_base_url="http://127.0.0.1:1",
+        personal_llm_connect_timeout_seconds=0.1,
+        personal_llm_generation_timeout_seconds=0.1,
         ollama_model=None,
     )
     client = TestClient(create_app(settings))
@@ -118,6 +133,9 @@ def test_v1_complex_turn_stays_failed_without_provider(tmp_path) -> None:
         workspace_root=tmp_path / "workspace",
         chatgpt_web_enabled=True,
         chatgpt_web_bridge_url="http://127.0.0.1:1",
+        personal_llm_base_url="http://127.0.0.1:1",
+        personal_llm_connect_timeout_seconds=0.1,
+        personal_llm_generation_timeout_seconds=0.1,
         ollama_model=None,
     )
     client = TestClient(create_app(settings))
@@ -216,6 +234,60 @@ def test_v1_runtime_reports_ollama_model_readiness_separately_from_core_health(t
     assert runtime.json()["core"]["status"] == "ready"
     assert runtime.json()["ollama"]["status"] == "model_missing"
     assert runtime.json()["conversationProvider"]["name"] == "injected"
+
+
+def test_create_app_constructs_personal_llm_runtime(tmp_path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspace",
+        personal_llm_base_url="http://personal.test:8765",
+        personal_llm_connect_timeout_seconds=0.2,
+        personal_llm_generation_timeout_seconds=0.2,
+    )
+
+    application = create_app(settings, conversation_provider=FakeProvider())
+
+    assert application.state.personal_llm_runtime.base_url == "http://personal.test:8765"
+
+
+def test_v1_runtime_reports_personal_llm_status_and_model(tmp_path) -> None:
+    from app.api.conversation_routes import build_conversation_router
+    from app.conversations.providers import build_conversation_provider
+    from app.conversations.service import ConversationService
+    from app.conversations.store import ConversationStore
+    from app.storage.sqlite import SQLiteStore
+    from fastapi import FastAPI
+
+    personal = FakePersonalRuntime()
+    store = SQLiteStore(tmp_path / "personal-runtime.sqlite3")
+    store.init()
+    service = ConversationService(ConversationStore(store), provider=FakeProvider())
+    selection = build_conversation_provider(
+        "personal_llm",
+        personal_llm=personal,
+        ollama=None,
+        web=None,
+    )
+    application = FastAPI()
+    application.include_router(
+        build_conversation_router(
+            service,
+            ollama=OllamaRuntime(base_url="http://127.0.0.1:11434", model=None),
+            personal_llm=personal,
+            provider_selection=selection,
+        )
+    )
+    client = TestClient(application)
+
+    payload = client.get("/v1/runtime").json()
+
+    assert payload["providers"]["personal_llm"] == {
+        "status": "ready",
+        "model": personal.model,
+    }
+    assert payload["conversationProvider"]["name"] == "personal_llm"
+    assert payload["conversationProvider"]["status"] == "configured"
+    assert payload["conversationProvider"]["model"] == personal.model
 
 
 def test_v1_runtime_labels_active_builtin_fallback_and_keeps_ollama_unavailable(

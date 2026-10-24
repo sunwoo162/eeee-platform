@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent.ollama_runtime import OllamaRuntime
+from app.agent.personal_llm_runtime import PersonalLlmRuntime
 from app.api.routes import _plugin_user_id
 from app.conversations.models import RequestState
 from app.conversations.providers import ConversationProviderSelection
@@ -58,6 +59,7 @@ def build_conversation_router(
     service: ConversationService,
     *,
     ollama: OllamaRuntime,
+    personal_llm: PersonalLlmRuntime | None = None,
     provider_selection: ConversationProviderSelection | None = None,
     web_configured: bool = False,
     web_status: str | None = None,
@@ -72,6 +74,7 @@ def build_conversation_router(
     @router.get("/runtime")
     def runtime_status() -> dict[str, object]:
         provider_status = ollama.status()
+        personal_status = personal_llm.status() if personal_llm is not None else None
         current_web_status = _current_web_status(web_status, web_status_provider)
         lifecycle_status = lifecycle.state.value if lifecycle is not None else "ready"
         # Test clients created without a lifespan context retain the historical
@@ -97,6 +100,15 @@ def build_conversation_router(
             selected_status = (
                 "configured" if provider_status.status == "ready" else provider_status.status
             )
+        elif selected.provider_name == "personal_llm":
+            selected_status = (
+                "configured"
+                if personal_status is not None and personal_status.status == "ready"
+                else personal_status.status if personal_status is not None else "unavailable"
+            )
+        selected_model = selected.model
+        if selected.provider_name == "personal_llm" and personal_status is not None:
+            selected_model = personal_status.model or selected.model
         fallback = selected.fallback
         if fallback is not None:
             fallback = {
@@ -114,7 +126,7 @@ def build_conversation_router(
             "conversationProvider": {
                 "name": selected.provider_name,
                 "status": selected_status,
-                "model": selected.model,
+                "model": selected_model,
                 "reason": selected.reason,
                 "fallback": fallback,
             },
@@ -125,6 +137,10 @@ def build_conversation_router(
                 },
                 "chatgpt_web": {
                     "status": current_web_status or ("configured" if web_configured else "not_configured"),
+                },
+                "personal_llm": {
+                    "status": personal_status.status if personal_status is not None else "not_configured",
+                    "model": personal_status.model if personal_status is not None else None,
                 },
             },
             "capabilities": capabilities.snapshot() if capabilities is not None else {},

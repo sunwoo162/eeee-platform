@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.agent.local_runtime import LocalAgentRuntime, LocalConversationRuntime, OllamaBackend
 from app.agent.local_model_discovery import discover_fast_local_model, discover_local_model
 from app.agent.ollama_runtime import OllamaRuntime
+from app.agent.personal_llm_runtime import PersonalLlmRuntime
 from app.agent.protocol import AgentRuntime
 from app.activity.store import ActivityLedger
 from app.agent.lazy_runtime import LazyAgentRuntime
@@ -104,6 +105,11 @@ def create_app(
         generation_timeout_seconds=app_settings.ollama_generation_timeout_seconds,
         context_tokens=app_settings.ollama_context_tokens,
     )
+    personal_llm_runtime = PersonalLlmRuntime(
+        base_url=app_settings.personal_llm_base_url,
+        connect_timeout_seconds=app_settings.personal_llm_connect_timeout_seconds,
+        generation_timeout_seconds=app_settings.personal_llm_generation_timeout_seconds,
+    )
     web_runtime: AgentRuntime | None = None
     if app_settings.chatgpt_web_enabled and app_settings.chatgpt_web_bridge_url:
         web_runtime = ChatGptWebRuntime(
@@ -120,6 +126,7 @@ def create_app(
             app_settings.conversation_provider,
             ollama=ollama_runtime,
             web=web_runtime,
+            personal_llm=personal_llm_runtime,
             workspace=app_settings.workspace_root,
             context_tokens=app_settings.ollama_context_tokens,
             web_status=web_runtime_status,
@@ -284,6 +291,7 @@ def create_app(
     application.state.project_documents = project_documents
     application.state.project_evidence = project_evidence
     application.state.ollama_runtime = ollama_runtime
+    application.state.personal_llm_runtime = personal_llm_runtime
     application.state.chatgpt_web_runtime = web_runtime
     application.state.conversation_provider_selection = provider_selection
     application.state.conversation_store = conversation_store
@@ -338,9 +346,8 @@ def create_app(
         runtime = web_agent_runtime
     if runtime is None:
         runtime = HybridAssistantRuntime(web=None)
-    # Ordinary EEEE conversation is Web GPT-backed. The local lane can only
-    # be opted into explicitly for migration/debugging and is never selected
-    # by default or by a missing Web bridge fallback.
+    # The ordinary EEEE conversation lane uses the selected conversation
+    # provider. Personal LLM, Web GPT, and Ollama remain separate lanes.
     if ollama_legacy_enabled and local_conversation_model_name:
         local_general_runtime = LocalConversationRuntime(
             backend=OllamaBackend(
@@ -357,8 +364,8 @@ def create_app(
         web=active_web_runtime,
         builtin=FastLocalConversationRuntime(),
     )
-    # The same Web GPT brain handles project execution when connected. The
-    # injected runtime remains available for tests and controlled embedding.
+    # Project execution keeps its existing runtime boundary; conversation
+    # generation is selected independently above.
     project_agent_runtime = runtime
     api_flow = ApiFlowService(
         coordinator,
@@ -455,6 +462,7 @@ def create_app(
         build_conversation_router(
             conversation_service,
             ollama=ollama_runtime,
+            personal_llm=personal_llm_runtime,
             provider_selection=provider_selection,
             web_configured=web_runtime is not None,
             web_status=getattr(web_runtime_status, "status", None),

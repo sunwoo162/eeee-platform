@@ -64,6 +64,13 @@ class _PersonalLlmChatResponse(BaseModel):
     # out-of-scope response if a future adapter includes it.
     user_id: str | None = Field(default=None, alias="userId", max_length=128)
 
+    @field_validator("memory_used")
+    @classmethod
+    def reject_blank_memory_ids(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise ValueError("memory IDs must not be blank")
+        return value
+
 
 class PersonalLlmRuntime:
     """Synchronous adapter for the independent personal-LLM loopback service."""

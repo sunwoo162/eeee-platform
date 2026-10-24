@@ -164,6 +164,7 @@ def test_chat_rejects_a_response_missing_typed_fields() -> None:
     "extra",
     [
         {"memoryUsed": ["memory"] * 101},
+        {"memoryUsed": [""]},
         {
             "actionProposal": {
                 "kind": "send",

@@ -73,9 +73,27 @@ class Settings(BaseSettings):
     local_model: str | None = None
     local_conversation_model: str | None = None
     local_model_timeout_seconds: float = 120.0
-    conversation_provider: Literal["auto", "chatgpt_web", "ollama"] = Field(
-        default="chatgpt_web",
+    conversation_provider: Literal["auto", "personal_llm", "chatgpt_web", "ollama"] = Field(
+        default="personal_llm",
         validation_alias=AliasChoices("EEEE_CONVERSATION_PROVIDER", "CONVERSATION_PROVIDER"),
+    )
+    personal_llm_base_url: str = Field(
+        default="http://127.0.0.1:8765",
+        validation_alias=AliasChoices("EEEE_PERSONAL_LLM_BASE_URL", "PERSONAL_LLM_BASE_URL"),
+    )
+    personal_llm_connect_timeout_seconds: float = Field(
+        default=3.0,
+        validation_alias=AliasChoices(
+            "EEEE_PERSONAL_LLM_CONNECT_TIMEOUT_SECONDS",
+            "PERSONAL_LLM_CONNECT_TIMEOUT_SECONDS",
+        ),
+    )
+    personal_llm_generation_timeout_seconds: float = Field(
+        default=120.0,
+        validation_alias=AliasChoices(
+            "EEEE_PERSONAL_LLM_GENERATION_TIMEOUT_SECONDS",
+            "PERSONAL_LLM_GENERATION_TIMEOUT_SECONDS",
+        ),
     )
     ollama_base_url: str = Field(
         default="http://127.0.0.1:11434",
@@ -167,6 +185,16 @@ class Settings(BaseSettings):
     def validate_ollama_timeouts(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("Ollama timeouts must be positive")
+        return value
+
+    @field_validator(
+        "personal_llm_connect_timeout_seconds",
+        "personal_llm_generation_timeout_seconds",
+    )
+    @classmethod
+    def validate_personal_llm_timeouts(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Personal LLM timeouts must be positive")
         return value
 
     @field_validator("ollama_context_tokens")

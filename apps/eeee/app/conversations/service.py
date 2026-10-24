@@ -24,6 +24,8 @@ class ConversationProvider(Protocol):
         *,
         cancel_event: threading.Event | None = None,
         user_id: str = "local-user",
+        request_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> Iterator[str]:
         """Yield assistant text deltas within one user's model boundary."""
 
@@ -156,7 +158,11 @@ class ConversationService:
                 conversation_id, user_id=conversation.user_id
             )
             for delta in self._stream_provider(
-                messages, user_id=conversation.user_id, cancel_event=cancel_event
+                messages,
+                user_id=conversation.user_id,
+                request_id=request.id,
+                conversation_id=conversation_id,
+                cancel_event=cancel_event,
             ):
                 if cancel_event.is_set():
                     raise ConversationCancelled()
@@ -271,21 +277,38 @@ class ConversationService:
         messages: list[dict[str, str]],
         *,
         user_id: str,
+        request_id: str,
+        conversation_id: str,
         cancel_event: threading.Event,
     ) -> Iterator[str]:
-        """Pass user scope to new adapters while keeping old embedded ones usable."""
+        """Pass request scope while keeping old embedded adapters usable."""
 
         try:
             return self.provider.stream(
-                messages, cancel_event=cancel_event, user_id=user_id
+                messages,
+                cancel_event=cancel_event,
+                user_id=user_id,
+                request_id=request_id,
+                conversation_id=conversation_id,
             )
         except TypeError as exc:
             # Embedded providers written before the user-aware contract may
             # not accept the new keyword. Their input is still limited to the
             # owner's transcript, so keep them usable during migration.
-            if "user_id" not in str(exc):
+            if not any(
+                name in str(exc) for name in ("request_id", "conversation_id", "user_id")
+            ):
                 raise
-            return self.provider.stream(messages, cancel_event=cancel_event)
+            try:
+                return self.provider.stream(
+                    messages,
+                    cancel_event=cancel_event,
+                    user_id=user_id,
+                )
+            except TypeError as legacy_exc:
+                if "user_id" not in str(legacy_exc):
+                    raise
+                return self.provider.stream(messages, cancel_event=cancel_event)
 
     def consume_request(self, request_id: str) -> None:
         for _event in self.run_request(request_id):

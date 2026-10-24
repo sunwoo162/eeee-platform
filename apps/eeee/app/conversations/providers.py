@@ -32,6 +32,8 @@ class UnavailableConversationProvider:
     def stream(
         self, _messages, *, cancel_event: Event | None = None,
         user_id: str = "local-user",
+        request_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> Iterator[str]:
         if cancel_event is not None and cancel_event.is_set():
             raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
@@ -64,6 +66,8 @@ class ChatGptWebConversationProvider:
         *,
         cancel_event: Event | None = None,
         user_id: str = "local-user",
+        request_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> Iterator[str]:
         if cancel_event is not None and cancel_event.is_set():
             raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
@@ -101,6 +105,116 @@ class ChatGptWebConversationProvider:
         yield answer
 
 
+class PersonalLlmConversationProvider:
+    """Adapt the typed loopback personal LLM contract to EEEE's stream API."""
+
+    provider_name = "personal_llm"
+
+    def __init__(self, runtime: Any) -> None:
+        self.runtime = runtime
+        self.active_provider_name = self.provider_name
+        self.active_model = getattr(runtime, "model", None)
+
+    def stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        cancel_event: Event | None = None,
+        user_id: str = "local-user",
+        request_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> Iterator[str]:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
+        status, has_status_method = _provider_status(self.runtime)
+        ready = not has_status_method or getattr(status, "status", None) == "ready"
+        self.active_provider_name = self.provider_name
+        self.active_model = (
+            getattr(status, "model", None) or getattr(self.runtime, "model", None)
+        )
+        if not ready:
+            raise ConversationProviderError(
+                getattr(status, "message", None) or "개인화 LLM에 연결할 수 없어.",
+                code=getattr(status, "error_code", None) or "personal_llm_unavailable",
+            )
+        if not request_id or not conversation_id:
+            raise ConversationProviderError(
+                "개인화 LLM 요청 식별자가 없어.", code="personal_llm_invalid_request"
+            )
+        try:
+            answer = self.runtime.chat(
+                messages,
+                user_id=user_id,
+                request_id=request_id,
+                conversation_id=conversation_id,
+                cancel_event=cancel_event,
+            )
+        except Exception as exc:
+            raise _conversation_provider_error(exc) from exc
+        if cancel_event is not None and cancel_event.is_set():
+            raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
+        if not isinstance(answer, str) or not answer.strip():
+            raise ConversationProviderError(
+                "개인화 LLM이 빈 답변을 반환했어.", code="provider_empty_response"
+            )
+        yield answer
+
+
+class PersonalLlmWithBuiltinFallbackProvider:
+    """Keep the personal LLM selected while allowing bounded local fallback."""
+
+    def __init__(
+        self,
+        personal_llm: PersonalLlmConversationProvider,
+        builtin: BuiltinConversationProvider,
+        *,
+        policy: ProviderPolicy | None = None,
+    ) -> None:
+        self.personal_llm = personal_llm
+        self.builtin = builtin
+        self.policy = policy or ProviderPolicy()
+        self.active_provider_name = "personal_llm"
+        self.active_model = personal_llm.active_model
+
+    def stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        cancel_event: Event | None = None,
+        user_id: str = "local-user",
+        request_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> Iterator[str]:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
+        current = _last_user_message(messages)
+        try:
+            yield from _stream_with_user_scope(
+                self.personal_llm,
+                messages,
+                user_id=user_id,
+                request_id=request_id,
+                conversation_id=conversation_id,
+                cancel_event=cancel_event,
+            )
+            self.active_provider_name = self.personal_llm.active_provider_name
+            self.active_model = self.personal_llm.active_model
+            return
+        except ConversationProviderError:
+            if not self.policy.is_builtin_eligible(current):
+                raise
+        self.active_provider_name = "builtin"
+        self.active_model = getattr(self.builtin, "model", "bounded-runtime")
+        yield from _stream_with_user_scope(
+            self.builtin,
+            messages,
+            user_id=user_id,
+            request_id=request_id,
+            conversation_id=conversation_id,
+            cancel_event=cancel_event,
+        )
+
+
 class BuiltinConversationProvider:
     """Serve only the bounded, provider-free conversation contract."""
 
@@ -117,6 +231,8 @@ class BuiltinConversationProvider:
         *,
         cancel_event: Event | None = None,
         user_id: str = "local-user",
+        request_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> Iterator[str]:
         if cancel_event is not None and cancel_event.is_set():
             raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
@@ -177,6 +293,8 @@ class OllamaWithBuiltinFallbackProvider:
         *,
         cancel_event: Event | None = None,
         user_id: str = "local-user",
+        request_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> Iterator[str]:
         if cancel_event is not None and cancel_event.is_set():
             raise ConversationProviderError("대화 요청이 취소됐어.", code="conversation_cancelled")
@@ -190,7 +308,12 @@ class OllamaWithBuiltinFallbackProvider:
             yielded = False
             try:
                 for delta in _stream_with_user_scope(
-                    self.ollama, messages, user_id=user_id, cancel_event=cancel_event
+                    self.ollama,
+                    messages,
+                    user_id=user_id,
+                    request_id=request_id,
+                    conversation_id=conversation_id,
+                    cancel_event=cancel_event,
                 ):
                     yielded = True
                     yield delta
@@ -214,7 +337,12 @@ class OllamaWithBuiltinFallbackProvider:
         self.active_provider_name = "builtin"
         self.active_model = getattr(self.builtin, "model", "bounded-runtime")
         yield from _stream_with_user_scope(
-            self.builtin, messages, user_id=user_id, cancel_event=cancel_event
+            self.builtin,
+            messages,
+            user_id=user_id,
+            request_id=request_id,
+            conversation_id=conversation_id,
+            cancel_event=cancel_event,
         )
 
 
@@ -234,13 +362,20 @@ class WebWithBuiltinFallbackProvider:
         *,
         cancel_event: Event | None = None,
         user_id: str = "local-user",
+        request_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> Iterator[str]:
         if _web_is_ready(self.runtime):
             self.active_provider_name = "chatgpt_web"
             self.active_model = getattr(self.web, "model", None)
             try:
                 yield from _stream_with_user_scope(
-                    self.web, messages, user_id=user_id, cancel_event=cancel_event
+                    self.web,
+                    messages,
+                    user_id=user_id,
+                    request_id=request_id,
+                    conversation_id=conversation_id,
+                    cancel_event=cancel_event,
                 )
                 return
             except ConversationProviderError:
@@ -252,7 +387,12 @@ class WebWithBuiltinFallbackProvider:
         self.active_provider_name = "builtin"
         self.active_model = getattr(self.builtin, "model", "bounded-runtime")
         yield from _stream_with_user_scope(
-            self.builtin, messages, user_id=user_id, cancel_event=cancel_event
+            self.builtin,
+            messages,
+            user_id=user_id,
+            request_id=request_id,
+            conversation_id=conversation_id,
+            cancel_event=cancel_event,
         )
 
 
@@ -271,14 +411,22 @@ def build_conversation_provider(
     *,
     ollama: Any | None,
     web: Any | None,
+    personal_llm: Any | None = None,
     workspace: Path | None = None,
     context_tokens: int = 8192,
     web_status: Any | None = None,
     builtin: Any | None = None,
 ) -> ConversationProviderSelection:
     normalized = mode.strip().lower()
-    if normalized not in {"auto", "ollama", "chatgpt_web"}:
+    if normalized not in {"auto", "personal_llm", "ollama", "chatgpt_web"}:
         raise ValueError(f"Unsupported conversation provider: {mode}")
+
+    if normalized == "personal_llm":
+        return _personal_llm_selection(
+            personal_llm,
+            reason="explicit_personal_llm",
+            builtin=builtin,
+        )
 
     if normalized == "chatgpt_web":
         if web is None:
@@ -332,6 +480,13 @@ def build_conversation_provider(
             builtin=builtin,
         )
 
+    if personal_llm is not None:
+        return _personal_llm_selection(
+            personal_llm,
+            reason="auto_selected_personal_llm_provider",
+            builtin=builtin,
+        )
+
     if web is not None:
         web_ready = _web_is_ready(web, status=web_status)
         web_provider = ChatGptWebConversationProvider(
@@ -371,6 +526,58 @@ def build_conversation_provider(
         provider_name="chatgpt_web",
         status="unavailable",
         reason="auto_selected_web_provider_but_not_ready",
+    )
+
+
+def _personal_llm_selection(
+    personal_llm: Any | None,
+    *,
+    reason: str,
+    builtin: Any | None = None,
+) -> ConversationProviderSelection:
+    if personal_llm is None:
+        if builtin is not None:
+            return ConversationProviderSelection(
+                provider=builtin,
+                provider_name="builtin",
+                status="configured",
+                reason=f"{reason}_not_configured_builtin_fallback",
+            )
+        return ConversationProviderSelection(
+            provider=UnavailableConversationProvider(
+                code="personal_llm_unavailable",
+                message="개인화 LLM 연결이 필요해. 먼저 개인화 LLM 서비스를 실행해줘.",
+            ),
+            provider_name="personal_llm",
+            status="unavailable",
+            reason=f"{reason}_not_configured",
+        )
+    status, has_status_method = _provider_status(personal_llm)
+    ready = not has_status_method or getattr(status, "status", None) == "ready"
+    status_name = "configured" if ready else getattr(status, "status", None) or "unavailable"
+    provider = PersonalLlmConversationProvider(personal_llm)
+    wrapped = (
+        PersonalLlmWithBuiltinFallbackProvider(provider, builtin)
+        if builtin is not None
+        else provider
+    )
+    return ConversationProviderSelection(
+        provider=wrapped,
+        provider_name="personal_llm",
+        status=status_name,
+        model=getattr(status, "model", None) or getattr(personal_llm, "model", None),
+        reason=(
+            reason
+            if ready
+            else f"{reason}_unavailable_builtin_fallback"
+            if builtin is not None
+            else f"{reason}_unavailable"
+        ),
+        fallback=(
+            {"name": "builtin", "scope": "basic_only"}
+            if builtin is not None
+            else None
+        ),
     )
 
 
@@ -443,18 +650,33 @@ def _stream_with_user_scope(
     messages: list[dict[str, str]],
     *,
     user_id: str,
+    request_id: str | None,
+    conversation_id: str | None,
     cancel_event: Event | None,
 ) -> Iterator[str]:
-    """Call a provider with user scope while supporting legacy adapters."""
+    """Call a provider with request scope while supporting legacy adapters."""
 
     try:
         return provider.stream(
-            messages, cancel_event=cancel_event, user_id=user_id
+            messages,
+            cancel_event=cancel_event,
+            user_id=user_id,
+            request_id=request_id,
+            conversation_id=conversation_id,
         )
     except TypeError as exc:
-        if "user_id" not in str(exc):
+        if not any(name in str(exc) for name in ("request_id", "conversation_id", "user_id")):
             raise
-        return provider.stream(messages, cancel_event=cancel_event)
+        try:
+            return provider.stream(
+                messages,
+                cancel_event=cancel_event,
+                user_id=user_id,
+            )
+        except TypeError as legacy_exc:
+            if "user_id" not in str(legacy_exc):
+                raise
+            return provider.stream(messages, cancel_event=cancel_event)
 
 
 def _web_is_ready(web: Any, *, status: Any | None = None) -> bool:

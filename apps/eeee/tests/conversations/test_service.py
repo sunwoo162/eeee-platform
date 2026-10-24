@@ -29,6 +29,37 @@ class UserAwareProvider(FakeProvider):
         yield from super().stream(messages, cancel_event=cancel_event)
 
 
+class RequestAwareProvider(FakeProvider):
+    def __init__(self, chunks=None) -> None:
+        super().__init__(chunks)
+        self.scopes = []
+
+    def stream(
+        self,
+        messages,
+        *,
+        cancel_event=None,
+        user_id="local-user",
+        request_id=None,
+        conversation_id=None,
+    ):
+        self.scopes.append(
+            {
+                "user_id": user_id,
+                "request_id": request_id,
+                "conversation_id": conversation_id,
+            }
+        )
+        yield from super().stream(messages, cancel_event=cancel_event)
+
+
+class LateCancelProvider(FakeProvider):
+    def stream(self, messages, *, cancel_event=None, user_id="local-user"):
+        if cancel_event is not None:
+            cancel_event.set()
+        yield "late response"
+
+
 def make_service(tmp_path, provider):
     durable = SQLiteStore(tmp_path / "state.sqlite3")
     durable.init()
@@ -180,3 +211,43 @@ def test_conversation_service_passes_owner_scope_to_user_aware_provider(tmp_path
     list(service.run_request(request.id))
 
     assert provider.user_ids == ["user-a"]
+
+
+def test_conversation_service_passes_request_and_conversation_scope(tmp_path) -> None:
+    provider = RequestAwareProvider(["사용자별 답변"])
+    store, service = make_service(tmp_path, provider)
+    conversation = store.create_conversation(user_id="user-a")
+    request, _created = service.prepare_turn(
+        conversation.id,
+        content="사용자 A의 요청",
+        client_message_id="user-a-request-scope",
+        user_id="user-a",
+    )
+
+    list(service.run_request(request.id))
+
+    assert provider.scopes == [
+        {
+            "user_id": "user-a",
+            "request_id": request.id,
+            "conversation_id": conversation.id,
+        }
+    ]
+
+
+def test_conversation_service_does_not_persist_a_late_cancelled_response(tmp_path) -> None:
+    store, service = make_service(tmp_path, LateCancelProvider())
+    conversation = store.create_conversation()
+    request, _created = service.prepare_turn(
+        conversation.id,
+        content="취소된 요청",
+        client_message_id="late-cancel",
+    )
+
+    events = list(service.run_request(request.id))
+
+    persisted = store.get_messages(conversation.id)
+    assert store.get_request(request.id).state == RequestState.CANCELLED
+    assert [message.content for message in persisted] == ["취소된 요청", ""]
+    assert persisted[-1].status == MessageStatus.CANCELLED
+    assert not any(event.event_type == "message.completed" for event in events)

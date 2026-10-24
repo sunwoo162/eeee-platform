@@ -85,6 +85,33 @@ class FakeBuiltin:
         yield "builtin 답변"
 
 
+class FakePersonalLlm:
+    model = "qwen2.5-0.5b-instruct+lora"
+
+    def __init__(self, *, ready: bool = True) -> None:
+        self.ready = ready
+        self.calls: list[dict[str, object]] = []
+
+    def status(self):
+        return SimpleNamespace(
+            status="ready" if self.ready else "unavailable",
+            model=self.model if self.ready else None,
+            error_code=None if self.ready else "personal_llm_unavailable",
+            message=None if self.ready else "personal LLM down",
+        )
+
+    def chat(self, messages, *, user_id, request_id, conversation_id, cancel_event=None):
+        self.calls.append(
+            {
+                "messages": messages,
+                "user_id": user_id,
+                "request_id": request_id,
+                "conversation_id": conversation_id,
+            }
+        )
+        return "Personal LLM 답변"
+
+
 def test_auto_selects_web_gpt_when_bridge_is_configured() -> None:
     web = FakeWebRuntime()
 
@@ -100,6 +127,75 @@ def test_auto_selects_web_gpt_when_bridge_is_configured() -> None:
         {"role": "user", "content": "오늘 할 일을 정리해줘"},
     ])) == ["Web GPT 답변"]
     assert "오늘 할 일을 정리해줘" in web.requests[0].prompt
+
+
+def test_explicit_personal_llm_selects_ready_runtime_and_preserves_scope() -> None:
+    personal = FakePersonalLlm()
+
+    selection = build_conversation_provider(
+        "personal_llm",
+        personal_llm=personal,
+        ollama=FakeOllama(),
+        web=FakeWebRuntime(),
+    )
+
+    assert selection.provider_name == "personal_llm"
+    assert selection.status == "configured"
+    assert selection.model == personal.model
+    assert list(
+        selection.provider.stream(
+            [{"role": "user", "content": "안녕"}],
+            user_id="user-a",
+            request_id="request-1",
+            conversation_id="conversation-1",
+        )
+    ) == ["Personal LLM 답변"]
+    assert personal.calls[0]["user_id"] == "user-a"
+    assert personal.calls[0]["request_id"] == "request-1"
+    assert personal.calls[0]["conversation_id"] == "conversation-1"
+
+
+def test_auto_prefers_ready_personal_llm_over_web() -> None:
+    personal = FakePersonalLlm()
+    web = FakeWebRuntime()
+
+    selection = build_conversation_provider(
+        "auto",
+        personal_llm=personal,
+        ollama=FakeOllama(),
+        web=web,
+    )
+
+    assert selection.provider_name == "personal_llm"
+    assert list(
+        selection.provider.stream(
+            [],
+            user_id="local-user",
+            request_id="request-1",
+            conversation_id="conversation-1",
+        )
+    ) == ["Personal LLM 답변"]
+    assert web.requests == []
+
+
+def test_unavailable_personal_llm_never_silently_selects_web() -> None:
+    personal = FakePersonalLlm(ready=False)
+    web = FakeWebRuntime()
+
+    selection = build_conversation_provider(
+        "auto",
+        personal_llm=personal,
+        ollama=FakeOllama(),
+        web=web,
+    )
+
+    assert selection.provider_name == "personal_llm"
+    assert selection.status == "unavailable"
+    with pytest.raises(ConversationProviderError) as error:
+        list(selection.provider.stream([]))
+
+    assert error.value.code == "personal_llm_unavailable"
+    assert web.requests == []
 
 
 def test_explicit_web_gpt_does_not_fallback_to_ollama() -> None:

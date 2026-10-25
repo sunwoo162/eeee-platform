@@ -5,7 +5,11 @@ from app.main import create_app
 
 
 def test_legacy_assistant_route_projects_terminal_request_and_events(tmp_path):
-    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        workspace_root=tmp_path / "workspaces",
+        conversation_provider="chatgpt_web",
+    )
     client = TestClient(create_app(settings))
 
     response = client.post(
@@ -40,6 +44,7 @@ def test_legacy_assistant_route_projects_blocked_result_as_failed_request(tmp_pa
     settings = Settings(
         data_dir=tmp_path / "data",
         workspace_root=tmp_path / "workspaces",
+        conversation_provider="chatgpt_web",
         chatgpt_web_enabled=True,
         chatgpt_web_bridge_url="http://127.0.0.1:1",
         ollama_model=None,

@@ -11,6 +11,7 @@ from app.agent.local_runtime import LocalAgentRuntime, LocalConversationRuntime,
 from app.agent.local_model_discovery import discover_fast_local_model, discover_local_model
 from app.agent.ollama_runtime import OllamaRuntime
 from app.agent.personal_llm_runtime import PersonalLlmRuntime
+from app.agent.conversation_runtime import ConversationProviderAgentRuntime
 from app.agent.protocol import AgentRuntime
 from app.activity.store import ActivityLedger
 from app.agent.lazy_runtime import LazyAgentRuntime
@@ -310,9 +311,9 @@ def create_app(
             assistant_supervisor.shutdown()
 
     application.router.lifespan_context = application_lifespan
-    # Ollama is an explicit migration/debug lane only. EEEE's active
-    # assistant brain is Web GPT; it must not silently discover or start a
-    # local model and then route ordinary conversation through it.
+    # Ollama is an explicit migration/debug lane only. Ordinary conversation
+    # uses the selected provider above; project execution remains a separate
+    # runtime and must not silently hijack the chat lane.
     ollama_legacy_enabled = app_settings.conversation_provider == "ollama"
     local_model_name = None
     local_conversation_model_name = None
@@ -359,11 +360,16 @@ def create_app(
     else:
         local_general_runtime = None
     active_web_runtime = None if ollama_legacy_enabled else web_runtime
-    general_runtime: AgentRuntime = HybridAssistantRuntime(
-        local=local_general_runtime,
-        web=active_web_runtime,
-        builtin=FastLocalConversationRuntime(),
-    )
+    if provider_selection is not None and provider_selection.provider_name == "personal_llm":
+        general_runtime: AgentRuntime = ConversationProviderAgentRuntime(
+            provider_selection.provider
+        )
+    else:
+        general_runtime = HybridAssistantRuntime(
+            local=local_general_runtime,
+            web=active_web_runtime,
+            builtin=FastLocalConversationRuntime(),
+        )
     # Project execution keeps its existing runtime boundary; conversation
     # generation is selected independently above.
     project_agent_runtime = runtime

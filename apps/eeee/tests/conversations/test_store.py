@@ -88,6 +88,34 @@ def test_conversations_are_isolated_by_user_scope(tmp_path) -> None:
     assert conversations.recent_conversation_turns(private.id, user_id="user-b") == []
 
 
+def test_recent_conversation_turns_omit_non_completed_messages(tmp_path) -> None:
+    conversations = make_store(tmp_path)
+    conversation = conversations.create_conversation("실패 기록 제외")
+    conversations.add_message(
+        conversation.id,
+        role=MessageRole.USER,
+        content="이전 질문",
+        status=MessageStatus.COMPLETED,
+    )
+    conversations.add_message(
+        conversation.id,
+        role=MessageRole.ASSISTANT,
+        content="실패 안내 문구",
+        status=MessageStatus.FAILED,
+    )
+    conversations.add_message(
+        conversation.id,
+        role=MessageRole.USER,
+        content="새 질문",
+        status=MessageStatus.COMPLETED,
+    )
+
+    assert conversations.recent_conversation_turns(conversation.id) == [
+        {"role": "user", "content": "이전 질문"},
+        {"role": "user", "content": "새 질문"},
+    ]
+
+
 def test_message_lookup_is_isolated_by_user_scope(tmp_path) -> None:
     conversations = make_store(tmp_path)
     private = conversations.create_conversation("개인 기록", user_id="user-a")

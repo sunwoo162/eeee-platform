@@ -606,8 +606,9 @@ class ConversationStore:
                 "SELECT messages.role, messages.content FROM messages "
                 "JOIN conversations ON conversations.id = messages.conversation_id "
                 "WHERE messages.conversation_id = ? AND conversations.user_id = ? "
+                "AND messages.status = ? "
                 "ORDER BY messages.sequence DESC LIMIT ?",
-                (conversation_id, user_id, limit),
+                (conversation_id, user_id, MessageStatus.COMPLETED.value, limit),
             ).fetchall()
         return [
             {"role": str(row["role"]), "content": str(row["content"])}

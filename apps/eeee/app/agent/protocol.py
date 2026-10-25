@@ -12,6 +12,7 @@ class AgentRequest:
     allowed_actions: list[str]
     run_id: str
     user_id: str = "local-user"
+    conversation_id: str | None = None
 
 
 @dataclass(frozen=True)

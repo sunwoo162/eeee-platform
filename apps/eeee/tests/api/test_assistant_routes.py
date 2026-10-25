@@ -240,6 +240,7 @@ def test_assistant_route_uses_builtin_fallback_when_web_is_unavailable(tmp_path)
     settings = Settings(
         data_dir=tmp_path / "data",
         workspace_root=tmp_path / "workspaces",
+        conversation_provider="chatgpt_web",
         chatgpt_web_enabled=True,
         chatgpt_web_bridge_url="http://127.0.0.1:1",
         ollama_model=None,
@@ -274,6 +275,7 @@ def test_assistant_route_keeps_complex_request_blocked_without_provider(tmp_path
     settings = Settings(
         data_dir=tmp_path / "data",
         workspace_root=tmp_path / "workspaces",
+        conversation_provider="chatgpt_web",
         chatgpt_web_enabled=True,
         chatgpt_web_bridge_url="http://127.0.0.1:1",
         ollama_model=None,

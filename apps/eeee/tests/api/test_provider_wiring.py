@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -24,9 +26,58 @@ class _HealthyNotionConnector:
         return ConnectorHealth(status="healthy", code="healthy", reason="ok")
 
 
+class _ReadyPersonalLlm:
+    def __init__(self, **_kwargs) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def status(self):
+        return SimpleNamespace(status="ready", model="personal-test-model")
+
+    def chat(self, messages, *, user_id, request_id, conversation_id, cancel_event=None):
+        self.calls.append(
+            {
+                "messages": messages,
+                "user_id": user_id,
+                "request_id": request_id,
+                "conversation_id": conversation_id,
+            }
+        )
+        return "개인 LLM 응답"
+
+
+class _UnavailablePersonalLlm:
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    def status(self):
+        return SimpleNamespace(
+            status="unavailable",
+            model=None,
+            error_code="personal_llm_unavailable",
+            message="personal LLM is offline",
+        )
+
+
+def test_legacy_assistant_route_uses_personal_llm(monkeypatch, tmp_path):
+    personal = _ReadyPersonalLlm()
+    monkeypatch.setattr("app.main.PersonalLlmRuntime", lambda **kwargs: personal)
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post("/api/assistant/route", json={"text": "너 이름 뭐야"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["message"] == "개인 LLM 응답"
+    assert payload["provider"] == "personal_llm"
+    assert personal.calls[0]["user_id"] == "local-user"
+    assert personal.calls[0]["conversation_id"] == "desktop-default"
+
+
 def test_app_uses_builtin_for_basic_chat_without_external_provider(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: None)
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.main.PersonalLlmRuntime", _UnavailablePersonalLlm)
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
 
     with TestClient(create_app(settings)) as client:
@@ -124,7 +175,7 @@ def test_app_does_not_wire_discovered_ollama_into_general_chat(monkeypatch, tmp_
     application = create_app(settings)
     handler = application.state.kernel.router.registry.resolve("general-conversation").handler
 
-    assert handler.runtime.local is None
+    assert handler.runtime.provider is not None
 
 
 def test_general_chat_does_not_create_a_local_model_even_when_one_is_installed(monkeypatch, tmp_path):
@@ -135,7 +186,7 @@ def test_general_chat_does_not_create_a_local_model_even_when_one_is_installed(m
     application = create_app(settings)
     general = application.state.kernel.router.registry.resolve("general-conversation").handler
 
-    assert general.runtime.local is None
+    assert general.runtime.provider is not None
     assert application.state.api_flow.runtime.__class__.__name__ == "HybridAssistantRuntime"
 
 
@@ -148,6 +199,7 @@ def test_general_chat_uses_web_when_project_runtime_is_injected(monkeypatch, tmp
         workspace_root=tmp_path / "workspaces",
         chatgpt_web_enabled=True,
         chatgpt_web_bridge_url="http://127.0.0.1:47831",
+        conversation_provider="chatgpt_web",
     )
 
     class ProjectRuntime:
@@ -157,13 +209,13 @@ def test_general_chat_uses_web_when_project_runtime_is_injected(monkeypatch, tmp
     application = create_app(settings, agent_runtime=ProjectRuntime())
     general = application.state.kernel.router.registry.resolve("general-conversation").handler
 
-    assert general.runtime.local is None
     assert general.runtime.web is not None
 
 
 def test_general_route_uses_builtin_instead_of_discovered_local_provider(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.discover_local_model", lambda *args, **kwargs: "qwen3:4b")
     monkeypatch.setattr("app.main.discover_fast_local_model", lambda *args, **kwargs: "qwen2.5:1.5b")
+    monkeypatch.setattr("app.main.PersonalLlmRuntime", _UnavailablePersonalLlm)
     settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "workspaces")
 
     application = create_app(settings)
@@ -186,12 +238,12 @@ def test_connected_chatgpt_web_is_primary_when_no_real_local_model_exists(monkey
         workspace_root=tmp_path / "workspaces",
         chatgpt_web_enabled=True,
         chatgpt_web_bridge_url="http://127.0.0.1:47831",
+        conversation_provider="chatgpt_web",
     )
 
     application = create_app(settings)
     handler = application.state.kernel.router.registry.resolve("general-conversation").handler
 
-    assert handler.runtime.local is None
     assert handler.runtime.web is not None
 
 

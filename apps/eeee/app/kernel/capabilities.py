@@ -231,6 +231,7 @@ class GeneralConversationCapability:
                 "conversationId": context.conversation_id,
                 "conversationHistory": context.conversation_turns,
                 "chatgptWebEnabled": self.chatgpt_web_enabled,
+                "userId": _request_user_id(request),
             },
             side_effect_level=self.descriptor.side_effect_level,
             requires_approval=False,
@@ -259,7 +260,10 @@ class GeneralConversationCapability:
                     ),
                 ),
                 workspace=workspace,
-                allowed_actions=["read"], run_id=envelope_context.envelope.execution_id,
+                allowed_actions=["read"],
+                run_id=envelope_context.envelope.execution_id,
+                user_id=str(plan.inputs.get("userId", "local-user")),
+                conversation_id=str(plan.inputs.get("conversationId", "desktop-default")),
             ))
             if result.status == "completed" and not result.summary.strip():
                 return CapabilityOutcome(

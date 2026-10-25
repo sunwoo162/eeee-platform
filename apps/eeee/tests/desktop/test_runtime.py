@@ -144,6 +144,219 @@ def test_embedded_runtime_does_not_start_ollama_for_web_gpt_default(monkeypatch,
     assert launched == []
 
 
+def test_embedded_runtime_starts_personal_llm_for_personal_provider(monkeypatch, tmp_path):
+    launched = []
+    waited = []
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+    project_root = tmp_path / "eeee-personal-llm-project"
+    project_root.mkdir()
+    monkeypatch.setattr(
+        desktop_runtime,
+        "_personal_llm_is_healthy",
+        lambda _: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        desktop_runtime,
+        "_resolve_personal_llm_executable",
+        lambda *_: "personal-llm.exe",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        desktop_runtime,
+        "_wait_for_personal_llm",
+        lambda url, timeout: (waited.append((url, timeout)) or True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "Popen",
+        lambda args, **kwargs: (launched.append((args, kwargs)) or FakeProcess()),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+            conversation_provider="personal_llm",
+            personal_llm_project_root=project_root,
+        )
+    )
+
+    runtime._ensure_personal_llm_service()
+
+    assert launched[0][0] == ["personal-llm.exe"]
+    assert launched[0][1]["cwd"] == str(project_root)
+    assert waited == [("http://127.0.0.1:8765", 45.0)]
+
+
+def test_embedded_runtime_starts_personal_llm_for_auto_provider(monkeypatch, tmp_path):
+    launched = []
+    project_root = tmp_path / "eeee-personal-llm-project"
+    project_root.mkdir()
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(desktop_runtime, "_personal_llm_is_healthy", lambda _: False, raising=False)
+    monkeypatch.setattr(
+        desktop_runtime,
+        "_resolve_personal_llm_executable",
+        lambda *_: "personal-llm.exe",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        desktop_runtime,
+        "_wait_for_personal_llm",
+        lambda *_: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "Popen",
+        lambda args, **kwargs: (launched.append(args) or FakeProcess()),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+            conversation_provider="auto",
+            personal_llm_project_root=project_root,
+        )
+    )
+
+    runtime._ensure_personal_llm_service()
+
+    assert launched == [["personal-llm.exe"]]
+
+
+def test_embedded_runtime_auto_configures_discovered_transformers_adapter(monkeypatch, tmp_path):
+    launched = []
+    project_root = tmp_path / "eeee-personal-llm-project"
+    adapter_root = project_root / "runtime" / "adapters" / "adapter-1"
+    adapter_root.mkdir(parents=True)
+    (adapter_root / "adapter_config.json").write_text(
+        '{"base_model_name_or_path":"Qwen/Qwen2.5-0.5B-Instruct"}',
+        encoding="utf-8",
+    )
+    (adapter_root / "adapter_model.safetensors").write_bytes(b"adapter")
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(desktop_runtime, "_personal_llm_is_healthy", lambda _: False, raising=False)
+    monkeypatch.setattr(
+        desktop_runtime,
+        "_resolve_personal_llm_executable",
+        lambda *_: "personal-llm.exe",
+        raising=False,
+    )
+    monkeypatch.setattr(desktop_runtime, "_wait_for_personal_llm", lambda *_: True, raising=False)
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "Popen",
+        lambda args, **kwargs: (launched.append((args, kwargs)) or FakeProcess()),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+            conversation_provider="personal_llm",
+            personal_llm_project_root=project_root,
+        )
+    )
+
+    runtime._ensure_personal_llm_service()
+
+    environment = launched[0][1]["env"]
+    assert environment["PERSONAL_LLM_BACKEND"] == "transformers"
+    assert environment["PERSONAL_LLM_TRANSFORMERS_MODEL"] == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert environment["PERSONAL_LLM_TRANSFORMERS_ADAPTER_PATH"] == str(adapter_root)
+
+
+def test_embedded_runtime_reuses_healthy_personal_llm_without_spawning(monkeypatch, tmp_path):
+    launched = []
+    monkeypatch.setattr(desktop_runtime, "_personal_llm_is_healthy", lambda _: True, raising=False)
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "Popen",
+        lambda args, **kwargs: launched.append(args),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+            conversation_provider="personal_llm",
+        )
+    )
+
+    runtime._ensure_personal_llm_service()
+
+    assert launched == []
+
+
+def test_embedded_runtime_does_not_autostart_non_loopback_personal_llm(monkeypatch, tmp_path):
+    launched = []
+    monkeypatch.setattr(desktop_runtime, "_personal_llm_is_healthy", lambda _: False, raising=False)
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "Popen",
+        lambda args, **kwargs: launched.append(args),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+            conversation_provider="personal_llm",
+            personal_llm_base_url="https://personal.example.test",
+        )
+    )
+
+    runtime._ensure_personal_llm_service()
+
+    assert launched == []
+
+
+def test_embedded_runtime_stops_only_personal_llm_child_it_started(monkeypatch, tmp_path):
+    class FakeProcess:
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+    child = FakeProcess()
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+        )
+    )
+    runtime._personal_llm_process = child
+
+    runtime.stop()
+
+    assert child.terminated is True
+    assert runtime._personal_llm_process is None
+
+
 def test_embedded_runtime_serves_health_and_stops(tmp_path):
     runtime = EmbeddedApiRuntime(
         settings=Settings(

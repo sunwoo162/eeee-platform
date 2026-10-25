@@ -92,6 +92,111 @@ def _resolve_ollama_executable() -> str | None:
     return None
 
 
+def _default_personal_llm_project_root() -> Path | None:
+    candidates = (
+        Path(__file__).resolve().parents[4].parent / "eeee-personal-llm-project",
+        Path.home() / "Documents" / "eeee-personal-llm-project",
+    )
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _resolve_personal_llm_project_root(configured: Path | None) -> Path | None:
+    if configured is not None:
+        return configured if configured.is_dir() else None
+    return _default_personal_llm_project_root()
+
+
+def _resolve_personal_llm_executable(configured: str, project_root: Path) -> str | None:
+    configured_path = Path(configured)
+    if configured_path.is_file():
+        return str(configured_path)
+    discovered = shutil.which(configured)
+    if discovered:
+        return discovered
+    candidates = (
+        project_root / ".venv" / "Scripts" / "personal-llm.exe",
+        project_root / ".venv" / "bin" / "personal-llm",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _discover_personal_llm_adapter(project_root: Path) -> tuple[str, Path] | None:
+    adapters_root = project_root / "runtime" / "adapters"
+    try:
+        candidates = sorted(
+            (path for path in adapters_root.iterdir() if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return None
+    for candidate in candidates:
+        config_path = candidate / "adapter_config.json"
+        weights_path = candidate / "adapter_model.safetensors"
+        if not config_path.is_file() or not weights_path.is_file():
+            continue
+        try:
+            with config_path.open(encoding="utf-8") as handle:
+                metadata = json.load(handle)
+        except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+            continue
+        model = metadata.get("base_model_name_or_path") if isinstance(metadata, dict) else None
+        if isinstance(model, str) and model.strip():
+            return model.strip(), candidate
+    return None
+
+
+def _personal_llm_environment(project_root: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    backend = environment.get("PERSONAL_LLM_BACKEND", "").strip().casefold()
+    discovered = _discover_personal_llm_adapter(project_root)
+    if discovered is None:
+        return environment
+    model, adapter_path = discovered
+    if not backend:
+        environment["PERSONAL_LLM_BACKEND"] = "transformers"
+        backend = "transformers"
+    if backend == "transformers":
+        environment.setdefault("PERSONAL_LLM_TRANSFORMERS_MODEL", model)
+        environment.setdefault("PERSONAL_LLM_TRANSFORMERS_ADAPTER_PATH", str(adapter_path))
+    return environment
+
+
+def _is_loopback_http_url(value: str) -> bool:
+    parsed = urlsplit(value)
+    return parsed.scheme in {"http", "https"} and parsed.hostname in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    }
+
+
+def _personal_llm_is_healthy(base_url: str) -> bool:
+    try:
+        with urllib.request.urlopen(f"{base_url.rstrip('/')}/health", timeout=0.5) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read(4096).decode("utf-8"))
+            return isinstance(payload, dict) and payload.get("status") == "ok"
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+        return False
+
+
+def _wait_for_personal_llm(base_url: str, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _personal_llm_is_healthy(base_url):
+            return True
+        time.sleep(0.2)
+    return _personal_llm_is_healthy(base_url)
+
+
 def _wait_for_tcp_port(host: str, port: int, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -200,6 +305,8 @@ class EmbeddedApiRuntime:
         self._chatgpt_browser: subprocess.Popen[str] | None = None
         self._chatgpt_bridge_log = None
         self._ollama_process: subprocess.Popen[str] | None = None
+        self._personal_llm_process: subprocess.Popen[str] | None = None
+        self._personal_llm_log = None
 
     @property
     def is_running(self) -> bool:
@@ -248,10 +355,85 @@ class EmbeddedApiRuntime:
         self.stop()
         raise ApiStartupError(f"Embedded API failed to start: {detail}")
 
+    def _ensure_personal_llm_service(self) -> None:
+        if self.settings.conversation_provider not in {"personal_llm", "auto"}:
+            return
+        if not self.settings.personal_llm_autostart:
+            _runtime_debug("personal LLM startup skipped; autostart disabled")
+            return
+        base_url = self.settings.personal_llm_base_url
+        if not _is_loopback_http_url(base_url):
+            _runtime_debug("personal LLM startup skipped; URL is not loopback")
+            return
+        if _personal_llm_is_healthy(base_url):
+            _runtime_debug("reuse healthy existing personal LLM")
+            return
+
+        project_root = _resolve_personal_llm_project_root(self.settings.personal_llm_project_root)
+        if project_root is None:
+            _runtime_debug("personal LLM startup skipped; project root not found")
+            return
+        executable = _resolve_personal_llm_executable(
+            self.settings.personal_llm_executable,
+            project_root,
+        )
+        if executable is None:
+            _runtime_debug("personal LLM startup skipped; executable not found")
+            return
+
+        self.settings.data_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._personal_llm_log = (self.settings.data_dir / "personal-llm.log").open(
+                "a", encoding="utf-8"
+            )
+            self._personal_llm_process = subprocess.Popen(
+                [executable],
+                cwd=str(project_root),
+                env=_personal_llm_environment(project_root),
+                stdout=self._personal_llm_log,
+                stderr=subprocess.STDOUT,
+                text=True,
+                **_background_process_kwargs(),
+            )
+        except OSError as exc:
+            _runtime_debug(f"personal LLM startup failed: {exc}")
+            self._close_personal_llm_log()
+            self._personal_llm_process = None
+            return
+
+        _runtime_debug(f"personal LLM pid={getattr(self._personal_llm_process, 'pid', 'unknown')}")
+        ready = _wait_for_personal_llm(
+            base_url,
+            self.settings.personal_llm_startup_timeout_seconds,
+        )
+        if not ready:
+            _runtime_debug("personal LLM did not become healthy before startup deadline")
+        elif self._personal_llm_process.poll() is not None:
+            _runtime_debug(
+                f"personal LLM exited before readiness code={self._personal_llm_process.returncode}"
+            )
+
+    def _close_personal_llm_log(self) -> None:
+        if self._personal_llm_log is not None:
+            self._personal_llm_log.close()
+            self._personal_llm_log = None
+
+    def _stop_personal_llm_process(self) -> None:
+        if self._personal_llm_process is not None:
+            if self._personal_llm_process.poll() is None:
+                self._personal_llm_process.terminate()
+                try:
+                    self._personal_llm_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self._personal_llm_process.kill()
+            self._personal_llm_process = None
+        self._close_personal_llm_log()
+
     def _ensure_local_model_service(self) -> None:
-        """Start Ollama only for the explicit legacy provider lane."""
+        """Start local model services selected by the desktop provider settings."""
+        self._ensure_personal_llm_service()
         if self.settings.conversation_provider != "ollama":
-            _runtime_debug("ollama startup skipped; Web GPT is the active provider")
+            _runtime_debug("ollama startup skipped; Ollama is not the active provider")
             return
         parsed = urlsplit(self.settings.local_model_base_url)
         if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
@@ -300,6 +482,7 @@ class EmbeddedApiRuntime:
             except subprocess.TimeoutExpired:
                 self._chatgpt_browser.kill()
             self._chatgpt_browser = None
+        self._stop_personal_llm_process()
 
     def _start_chatgpt_web_bridge(self, *, visible: bool | None = None) -> None:
         _runtime_debug(

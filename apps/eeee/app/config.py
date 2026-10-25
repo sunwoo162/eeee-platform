@@ -95,6 +95,34 @@ class Settings(BaseSettings):
             "PERSONAL_LLM_GENERATION_TIMEOUT_SECONDS",
         ),
     )
+    personal_llm_autostart: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "EEEE_PERSONAL_LLM_AUTOSTART",
+            "PERSONAL_LLM_AUTOSTART",
+        ),
+    )
+    personal_llm_project_root: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "EEEE_PERSONAL_LLM_PROJECT_ROOT",
+            "PERSONAL_LLM_PROJECT_ROOT",
+        ),
+    )
+    personal_llm_executable: str = Field(
+        default="personal-llm",
+        validation_alias=AliasChoices(
+            "EEEE_PERSONAL_LLM_EXECUTABLE",
+            "PERSONAL_LLM_EXECUTABLE",
+        ),
+    )
+    personal_llm_startup_timeout_seconds: float = Field(
+        default=45.0,
+        validation_alias=AliasChoices(
+            "EEEE_PERSONAL_LLM_STARTUP_TIMEOUT_SECONDS",
+            "PERSONAL_LLM_STARTUP_TIMEOUT_SECONDS",
+        ),
+    )
     ollama_base_url: str = Field(
         default="http://127.0.0.1:11434",
         validation_alias=AliasChoices("EEEE_OLLAMA_BASE_URL", "OLLAMA_BASE_URL"),
@@ -195,6 +223,13 @@ class Settings(BaseSettings):
     def validate_personal_llm_timeouts(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("Personal LLM timeouts must be positive")
+        return value
+
+    @field_validator("personal_llm_startup_timeout_seconds")
+    @classmethod
+    def validate_personal_llm_startup_timeout(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Personal LLM startup timeout must be positive")
         return value
 
     @field_validator("ollama_context_tokens")

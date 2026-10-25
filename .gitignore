@@ -17,6 +17,7 @@ build/
 **/tmp/
 **/data/
 **/workspaces/
+**/.gleave/
 
 # Local agent/runtime state
 .superpowers/

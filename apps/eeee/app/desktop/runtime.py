@@ -168,13 +168,12 @@ def _personal_llm_environment(project_root: Path) -> dict[str, str]:
     return environment
 
 
-def _is_loopback_http_url(value: str) -> bool:
+def _personal_llm_autostart_supported_url(value: str) -> bool:
     parsed = urlsplit(value)
-    return parsed.scheme in {"http", "https"} and parsed.hostname in {
+    return parsed.scheme == "http" and parsed.hostname in {
         "127.0.0.1",
         "localhost",
-        "::1",
-    }
+    } and parsed.port == 8765 and parsed.path in {"", "/"} and not parsed.query and not parsed.fragment
 
 
 def _personal_llm_is_healthy(base_url: str) -> bool:
@@ -188,12 +187,21 @@ def _personal_llm_is_healthy(base_url: str) -> bool:
         return False
 
 
-def _wait_for_personal_llm(base_url: str, timeout: float) -> bool:
+def _wait_for_personal_llm(
+    base_url: str,
+    timeout: float,
+    *,
+    process: subprocess.Popen[str] | None = None,
+) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            return False
         if _personal_llm_is_healthy(base_url):
             return True
         time.sleep(0.2)
+    if process is not None and process.poll() is not None:
+        return False
     return _personal_llm_is_healthy(base_url)
 
 
@@ -362,8 +370,8 @@ class EmbeddedApiRuntime:
             _runtime_debug("personal LLM startup skipped; autostart disabled")
             return
         base_url = self.settings.personal_llm_base_url
-        if not _is_loopback_http_url(base_url):
-            _runtime_debug("personal LLM startup skipped; URL is not loopback")
+        if not _personal_llm_autostart_supported_url(base_url):
+            _runtime_debug("personal LLM startup skipped; autostart supports only loopback port 8765")
             return
         if _personal_llm_is_healthy(base_url):
             _runtime_debug("reuse healthy existing personal LLM")
@@ -405,10 +413,11 @@ class EmbeddedApiRuntime:
         ready = _wait_for_personal_llm(
             base_url,
             self.settings.personal_llm_startup_timeout_seconds,
+            process=self._personal_llm_process,
         )
         if not ready:
             _runtime_debug("personal LLM did not become healthy before startup deadline")
-        elif self._personal_llm_process.poll() is not None:
+        elif self._personal_llm_process is not None and self._personal_llm_process.poll() is not None:
             _runtime_debug(
                 f"personal LLM exited before readiness code={self._personal_llm_process.returncode}"
             )

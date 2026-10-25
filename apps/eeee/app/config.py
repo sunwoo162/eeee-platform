@@ -232,6 +232,13 @@ class Settings(BaseSettings):
             raise ValueError("Personal LLM startup timeout must be positive")
         return value
 
+    @field_validator("personal_llm_project_root", mode="before")
+    @classmethod
+    def normalize_personal_llm_project_root(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("ollama_context_tokens")
     @classmethod
     def validate_ollama_context_tokens(cls, value: int) -> int:

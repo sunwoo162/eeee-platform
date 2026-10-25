@@ -175,7 +175,7 @@ def test_embedded_runtime_starts_personal_llm_for_personal_provider(monkeypatch,
     monkeypatch.setattr(
         desktop_runtime,
         "_wait_for_personal_llm",
-        lambda url, timeout: (waited.append((url, timeout)) or True),
+        lambda url, timeout, process=None: (waited.append((url, timeout)) or True),
         raising=False,
     )
     monkeypatch.setattr(
@@ -218,7 +218,7 @@ def test_embedded_runtime_starts_personal_llm_for_auto_provider(monkeypatch, tmp
     monkeypatch.setattr(
         desktop_runtime,
         "_wait_for_personal_llm",
-        lambda *_: True,
+        lambda *_, **__: True,
         raising=False,
     )
     monkeypatch.setattr(
@@ -262,7 +262,12 @@ def test_embedded_runtime_auto_configures_discovered_transformers_adapter(monkey
         lambda *_: "personal-llm.exe",
         raising=False,
     )
-    monkeypatch.setattr(desktop_runtime, "_wait_for_personal_llm", lambda *_: True, raising=False)
+    monkeypatch.setattr(
+        desktop_runtime,
+        "_wait_for_personal_llm",
+        lambda *_, **__: True,
+        raising=False,
+    )
     monkeypatch.setattr(
         desktop_runtime.subprocess,
         "Popen",
@@ -326,6 +331,59 @@ def test_embedded_runtime_does_not_autostart_non_loopback_personal_llm(monkeypat
     runtime._ensure_personal_llm_service()
 
     assert launched == []
+
+
+def test_blank_personal_llm_project_root_uses_discovery():
+    assert Settings(personal_llm_project_root="").personal_llm_project_root is None
+
+
+def test_embedded_runtime_does_not_autostart_custom_personal_llm_port(monkeypatch, tmp_path):
+    launched = []
+    project_root = tmp_path / "eeee-personal-llm-project"
+    project_root.mkdir()
+    monkeypatch.setattr(desktop_runtime, "_personal_llm_is_healthy", lambda _: False, raising=False)
+    monkeypatch.setattr(
+        desktop_runtime,
+        "_wait_for_personal_llm",
+        lambda *_, **__: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        desktop_runtime.subprocess,
+        "Popen",
+        lambda args, **kwargs: launched.append(args),
+    )
+    runtime = EmbeddedApiRuntime(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            workspace_root=tmp_path / "workspaces",
+            conversation_provider="personal_llm",
+            personal_llm_base_url="http://127.0.0.1:9999",
+            personal_llm_project_root=project_root,
+        )
+    )
+
+    runtime._ensure_personal_llm_service()
+
+    assert launched == []
+
+
+def test_wait_for_personal_llm_returns_when_child_exits(monkeypatch):
+    class ExitedProcess:
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(desktop_runtime, "_personal_llm_is_healthy", lambda _: False)
+    started = time.monotonic()
+
+    ready = desktop_runtime._wait_for_personal_llm(
+        "http://127.0.0.1:8765",
+        45.0,
+        process=ExitedProcess(),
+    )
+
+    assert ready is False
+    assert time.monotonic() - started < 1.0
 
 
 def test_embedded_runtime_stops_only_personal_llm_child_it_started(monkeypatch, tmp_path):

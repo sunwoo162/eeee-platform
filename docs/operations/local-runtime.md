@@ -34,7 +34,10 @@ registry adapter and SQLite profile/memory store remain independent from EEEE.
 If that project contains a trained adapter under `runtime/adapters`, the
 desktop launcher automatically supplies the Transformers backend, base model,
 and adapter path unless explicit `PERSONAL_LLM_*` environment variables already
-override them.
+override them. Automatic startup is limited to the default
+`http://127.0.0.1:8765` endpoint because the personal-llm launcher owns that
+fixed port; custom `EEEE_PERSONAL_LLM_BASE_URL` values remain externally
+managed.
 The manual equivalent is:
 
 ```powershell

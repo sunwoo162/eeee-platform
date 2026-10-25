@@ -153,7 +153,9 @@ the sibling `C:\Users\user\Documents\eeee-personal-llm-project`; override it
 with `EEEE_PERSONAL_LLM_PROJECT_ROOT` when needed. If the project contains a
 trained adapter under `runtime/adapters`, the launcher also discovers its
 Transformers base model and adapter path unless explicit `PERSONAL_LLM_*`
-variables override them. To run the service manually:
+variables override them. Automatic process startup is limited to the default
+`http://127.0.0.1:8765` endpoint; a custom `EEEE_PERSONAL_LLM_BASE_URL` is
+treated as an externally managed service. To run the service manually:
 
 ```powershell
 Set-Location C:\Users\user\Documents\eeee-personal-llm-project

@@ -172,6 +172,23 @@ def test_pet_mode_only_shows_character_and_bubble_until_command_surface_opens():
     window.close()
 
 
+def test_clicking_pet_after_reply_opens_a_fresh_input_bubble():
+    app = QApplication.instance() or QApplication([])
+    window = PetWindow(SlowClient())
+    window.show()
+    window._start_reply_typing("이전 답변")
+    _wait_for(app, lambda: window.reply_surface.isVisible())
+    assert not window.quick_reply.isVisible()
+
+    QTest.mouseClick(window.character, Qt.MouseButton.LeftButton)
+    _wait_for(app, lambda: window.assistant_input.isVisible())
+
+    assert window.assistant_input.isVisible()
+    assert window.assistant_input.text() == ""
+    assert window.quick_reply.text() == ""
+    window.close()
+
+
 def test_pet_surface_is_transparent_and_compact():
     app = QApplication.instance() or QApplication([])
     window = PetWindow(SlowClient())

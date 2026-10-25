@@ -937,7 +937,7 @@ class PetWindow:
                     self._pet_window_origin = None
                     self._pet_is_dragging = False
                     if not was_dragging:
-                        self.show_command_surface()
+                        self.show_command_surface(show_latest_reply=False)
                     return True
                 return super().eventFilter(watched, event)
 

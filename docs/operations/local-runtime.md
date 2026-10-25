@@ -25,10 +25,17 @@ process and relaunch; the lock is released automatically during normal shutdown.
 
 ## EEEE general conversation engine
 
-The default general conversation provider is the separately running
-`eeee-personal-llm` loopback service. Start it from its own repository so its
-active registry adapter and SQLite profile/memory store remain independent from
-EEEE:
+The default general conversation provider is the `eeee-personal-llm` loopback
+service. When the EEEE desktop cat starts, it automatically reuses a healthy
+service or starts `personal-llm` from the sibling project
+`C:\Users\user\Documents\eeee-personal-llm-project`. Set
+`EEEE_PERSONAL_LLM_PROJECT_ROOT` if the project is elsewhere. Its active
+registry adapter and SQLite profile/memory store remain independent from EEEE.
+If that project contains a trained adapter under `runtime/adapters`, the
+desktop launcher automatically supplies the Transformers backend, base model,
+and adapter path unless explicit `PERSONAL_LLM_*` environment variables already
+override them.
+The manual equivalent is:
 
 ```powershell
 Set-Location C:\Users\user\Documents\eeee-personal-llm-project
@@ -37,7 +44,8 @@ Invoke-RestMethod http://127.0.0.1:8765/health
 Invoke-RestMethod http://127.0.0.1:8765/v1/model/status
 ```
 
-Then start EEEE with the default or explicit setting:
+Then start EEEE with the default or explicit setting (the desktop launcher does
+this automatically):
 
 ```powershell
 $env:EEEE_CONVERSATION_PROVIDER = "personal_llm"
@@ -50,8 +58,10 @@ EEEE calls only the personal service's typed `/v1/chat` boundary. It passes the
 conversation context, EEEE request ID, conversation ID, and user ID in both
 `userId` and `X-Personal-User-Id`; the first slice uses
 `profileRevision=0` and `approvedMemoryIds=[]`. The response's
-`modelVersion` is retained as message provenance. EEEE does not manage the
-personal service process and does not copy its adapter artifacts or database.
+`modelVersion` is retained as message provenance. The desktop runtime manages
+only a personal LLM process that it started itself; an already-running service
+is reused and is not terminated. EEEE does not copy personal adapter artifacts
+or the personal database.
 
 If `/v1/model/status` is unavailable, the EEEE provider state is
 `unavailable`/`model_missing` and a generation failure remains a failed or

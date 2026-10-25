@@ -109,6 +109,10 @@ Copy `.env.example` to `.env` when environment configuration is needed.
 | `EEEE_PERSONAL_LLM_BASE_URL` | Loopback personal LLM `/v1/chat` service URL | `http://127.0.0.1:8765` |
 | `EEEE_PERSONAL_LLM_CONNECT_TIMEOUT_SECONDS` | Personal LLM connection timeout | `3` |
 | `EEEE_PERSONAL_LLM_GENERATION_TIMEOUT_SECONDS` | Personal LLM generation timeout | `120` |
+| `EEEE_PERSONAL_LLM_AUTOSTART` | Start the local personal LLM when the desktop cat starts | `true` |
+| `EEEE_PERSONAL_LLM_PROJECT_ROOT` | Personal LLM project directory; blank discovers the sibling Documents project | auto-discovered |
+| `EEEE_PERSONAL_LLM_EXECUTABLE` | Personal LLM launcher executable | `personal-llm` |
+| `EEEE_PERSONAL_LLM_STARTUP_TIMEOUT_SECONDS` | Maximum wait for the personal LLM health endpoint | `45` |
 | `EEEE_OLLAMA_BASE_URL` | Ollama endpoint for local conversation generation | `http://127.0.0.1:11434` |
 | `EEEE_OLLAMA_MODEL` | Ollama model used by the local provider | empty |
 | `CHATGPT_WEB_ENABLED` | Enables the optional ChatGPT Web bridge | `false` |
@@ -142,15 +146,21 @@ conversation context, request ID, conversation ID, and user ID to its loopback
 `/v1/chat` contract; it does not copy model files or databases into this
 repository.
 
-Start the personal LLM service first, using the active adapter configured in
-that repository:
+The desktop cat automatically starts the personal LLM when
+`EEEE_CONVERSATION_PROVIDER=personal_llm` (the default). It reuses a healthy
+`127.0.0.1:8765` service if one is already running. The default project path is
+the sibling `C:\Users\user\Documents\eeee-personal-llm-project`; override it
+with `EEEE_PERSONAL_LLM_PROJECT_ROOT` when needed. If the project contains a
+trained adapter under `runtime/adapters`, the launcher also discovers its
+Transformers base model and adapter path unless explicit `PERSONAL_LLM_*`
+variables override them. To run the service manually:
 
 ```powershell
 Set-Location C:\Users\user\Documents\eeee-personal-llm-project
 personal-llm
 ```
 
-Confirm readiness before starting EEEE:
+Confirm readiness at any time with:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8765/health

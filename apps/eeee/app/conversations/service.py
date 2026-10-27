@@ -40,6 +40,7 @@ class ConversationService:
     ) -> None:
         self.store = store
         self.provider = provider
+        self.provider_hub = None
         self.context_builder = context_builder or ConversationContextBuilder(store)
         self._cancel_events: dict[str, threading.Event] = {}
         self._request_state_lock = threading.RLock()
@@ -66,10 +67,13 @@ class ConversationService:
         attempt: int = 1,
         user_message_id: str | None = None,
         user_id: str = "local-user",
+        selected_provider: str = "auto",
     ) -> tuple[AssistantRequest, bool]:
         # Validate ownership before any idempotency lookup or message write.
         # The canonical ids remain globally unique, but access is user-scoped.
         self.store.get_conversation(conversation_id, user_id=user_id)
+        from app.conversations.multimodel import normalize_provider
+        selected_provider = normalize_provider(selected_provider)
         existing = self.store.find_request_by_client_message(
             conversation_id, client_message_id
         )
@@ -79,6 +83,8 @@ class ConversationService:
             )
             if existing_message.content != content:
                 raise ValueError("client_message_id was reused with different message content")
+            if existing.selected_provider != selected_provider:
+                raise ValueError("client_message_id was reused with different provider")
             return existing, False
         if not self._accepting:
             raise CoreShuttingDownError()
@@ -97,6 +103,7 @@ class ConversationService:
             client_message_id,
             parent_request_id=parent_request_id,
             attempt=attempt,
+            selected_provider=selected_provider,
         )
         if not request_created:
             return request, False
@@ -154,12 +161,16 @@ class ConversationService:
         assistant = None
         collected = ""
         cancel_event = self._cancel_events.setdefault(request.id, threading.Event())
+        active_provider = self.provider
         try:
             messages = self.context_builder.build(
                 conversation_id, user_id=conversation.user_id
             )
+            if self.provider_hub is not None:
+                active_provider = self.provider_hub.select(request.selected_provider, messages)
             for delta in self._stream_provider(
                 messages,
+                provider=active_provider,
                 user_id=conversation.user_id,
                 request_id=request.id,
                 conversation_id=conversation_id,
@@ -174,8 +185,8 @@ class ConversationService:
                         content="",
                         status=MessageStatus.STREAMING,
                         request_id=request.id,
-                        provider=_active_provider_name(self.provider),
-                        model=_active_provider_model(self.provider),
+                        provider=_active_provider_name(active_provider),
+                        model=_active_provider_model(active_provider),
                     )
                     yield self.store.append_event(
                         request.id, "message.started", {"messageId": assistant.id}
@@ -188,8 +199,8 @@ class ConversationService:
                     assistant.id,
                     content=collected,
                     status=MessageStatus.STREAMING,
-                    provider=_active_provider_name(self.provider),
-                    model=_active_provider_model(self.provider),
+                    provider=_active_provider_name(active_provider),
+                    model=_active_provider_model(active_provider),
                 )
                 yield self.store.append_event(
                     request.id,
@@ -208,8 +219,8 @@ class ConversationService:
                     content="",
                     status=MessageStatus.STREAMING,
                     request_id=request.id,
-                    provider=_active_provider_name(self.provider),
-                    model=_active_provider_model(self.provider),
+                    provider=_active_provider_name(active_provider),
+                    model=_active_provider_model(active_provider),
                 )
                 yield self.store.append_event(
                     request.id, "message.started", {"messageId": assistant.id}
@@ -225,8 +236,8 @@ class ConversationService:
                     assistant.id,
                     content=collected,
                     status=MessageStatus.COMPLETED,
-                    provider=_active_provider_name(self.provider),
-                    model=_active_provider_model(self.provider),
+                    provider=_active_provider_name(active_provider),
+                    model=_active_provider_model(active_provider),
                 )
                 request = self.store.transition_request(request.id, RequestState.COMPLETED)
             yield self.store.append_event(
@@ -250,8 +261,8 @@ class ConversationService:
                         content="",
                         status=MessageStatus.CANCELLED if cancelled else MessageStatus.FAILED,
                         request_id=request.id,
-                        provider=_active_provider_name(self.provider),
-                        model=_active_provider_model(self.provider),
+                        provider=_active_provider_name(active_provider),
+                        model=_active_provider_model(active_provider),
                         error_code=error_code,
                     )
                 else:
@@ -259,8 +270,8 @@ class ConversationService:
                         assistant.id,
                         content=collected,
                         status=MessageStatus.CANCELLED if cancelled else MessageStatus.FAILED,
-                        provider=_active_provider_name(self.provider),
-                        model=_active_provider_model(self.provider),
+                        provider=_active_provider_name(active_provider),
+                        model=_active_provider_model(active_provider),
                         error_code=error_code,
                     )
                 if current.state not in terminal_states:
@@ -284,6 +295,7 @@ class ConversationService:
         self,
         messages: list[dict[str, str]],
         *,
+        provider: ConversationProvider,
         user_id: str,
         request_id: str,
         conversation_id: str,
@@ -292,7 +304,7 @@ class ConversationService:
         """Pass request scope while keeping old embedded adapters usable."""
 
         try:
-            return self.provider.stream(
+            return provider.stream(
                 messages,
                 cancel_event=cancel_event,
                 user_id=user_id,
@@ -308,7 +320,7 @@ class ConversationService:
             ):
                 raise
             try:
-                return self.provider.stream(
+                return provider.stream(
                     messages,
                     cancel_event=cancel_event,
                     user_id=user_id,
@@ -316,7 +328,7 @@ class ConversationService:
             except TypeError as legacy_exc:
                 if "user_id" not in str(legacy_exc):
                     raise
-                return self.provider.stream(messages, cancel_event=cancel_event)
+                return provider.stream(messages, cancel_event=cancel_event)
 
     def consume_request(self, request_id: str) -> None:
         for _event in self.run_request(request_id):
@@ -373,6 +385,7 @@ class ConversationService:
             attempt=original.attempt + 1,
             user_message_id=original.user_message_id,
             user_id=user_id,
+            selected_provider=original.selected_provider,
         )
         return request
 

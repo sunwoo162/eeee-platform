@@ -25,6 +25,7 @@ class ConversationCreatePayload(BaseModel):
 class TurnPayload(BaseModel):
     client_message_id: str = Field(alias="clientMessageId", min_length=1, max_length=200)
     content: str = Field(min_length=1, max_length=50_000)
+    provider: str = Field(default="auto", max_length=40)
 
     model_config = {"populate_by_name": True}
 
@@ -148,6 +149,13 @@ def build_conversation_router(
             "capabilities": capabilities.snapshot() if capabilities is not None else {},
         }
 
+    @router.get("/providers")
+    def available_providers(request: Request) -> dict[str, object]:
+        _plugin_user_id(request, request.headers.get("X-EEEE-User-Id"))
+        if service.provider_hub is None:
+            return {"items": [{"id": "auto", "label": "Auto", "available": True}]}
+        return {"items": service.provider_hub.catalog()}
+
     @router.post("/conversations", status_code=status.HTTP_201_CREATED)
     def create_conversation(
         payload: ConversationCreatePayload, request: Request
@@ -210,6 +218,7 @@ def build_conversation_router(
                 content=payload.content,
                 client_message_id=payload.client_message_id,
                 user_id=user_id,
+                selected_provider=payload.provider,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

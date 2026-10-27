@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -19,11 +19,11 @@ from app.conversations.state import validate_request_transition
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _iso(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat()
+    return value.astimezone(UTC).isoformat()
 
 
 def _datetime(value: str | None) -> datetime | None:
@@ -743,6 +743,7 @@ class ConversationStore:
     def create_request_with_status(
         self, conversation_id: str, user_message_id: str, client_message_id: str,
         *, parent_request_id: str | None = None, attempt: int = 1,
+        selected_provider: str = "auto",
     ) -> tuple[AssistantRequest, bool]:
         now = _now()
         request = AssistantRequest(
@@ -753,6 +754,7 @@ class ConversationStore:
             state=RequestState.RECEIVED,
             parent_request_id=parent_request_id,
             attempt=attempt,
+            selected_provider=selected_provider,
             created_at=now,
             updated_at=now,
         )
@@ -768,14 +770,18 @@ class ConversationStore:
                     raise ValueError(
                         "client_message_id was reused with a different user message"
                     )
+                if existing["selected_provider"] != selected_provider:
+                    raise ValueError("client_message_id was reused with different provider")
                 return _request_from_row(existing), False
             connection.execute(
                 "INSERT INTO assistant_requests (id, conversation_id, user_message_id, "
-                "client_message_id, state, parent_request_id, attempt, error_code, created_at, "
-                "updated_at, completed_at, interrupted_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL)",
+                "client_message_id, state, parent_request_id, attempt, selected_provider, "
+                "error_code, created_at, updated_at, completed_at, interrupted_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL)",
                 (
                     request.id, conversation_id, user_message_id, client_message_id,
-                    request.state.value, parent_request_id, attempt, _iso(now), _iso(now),
+                    request.state.value, parent_request_id, attempt, selected_provider,
+                    _iso(now), _iso(now),
                 ),
             )
         return request, True
@@ -982,7 +988,9 @@ def _request_from_row(row: sqlite3.Row) -> AssistantRequest:
     return AssistantRequest(
         id=row["id"], conversation_id=row["conversation_id"], user_message_id=row["user_message_id"],
         client_message_id=row["client_message_id"], state=RequestState(row["state"]),
-        parent_request_id=row["parent_request_id"], attempt=row["attempt"], error_code=row["error_code"],
+        parent_request_id=row["parent_request_id"], attempt=row["attempt"],
+        selected_provider=row["selected_provider"] if "selected_provider" in row.keys() else "auto",
+        error_code=row["error_code"],
         created_at=_datetime(row["created_at"]), updated_at=_datetime(row["updated_at"]),
         completed_at=_datetime(row["completed_at"]), interrupted_at=_datetime(row["interrupted_at"]),
     )

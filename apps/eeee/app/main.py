@@ -34,7 +34,13 @@ from app.assistant.service import AssistantService
 from app.capabilities.registry import build_core_capability_manager
 from app.config import Settings
 from app.conversations.context import ConversationContextBuilder
-from app.conversations.providers import BuiltinConversationProvider, build_conversation_provider
+from app.conversations.providers import (
+    BuiltinConversationProvider,
+    ChatGptWebConversationProvider,
+    PersonalLlmConversationProvider,
+    build_conversation_provider,
+)
+from app.conversations.multimodel import ProviderHub
 from app.conversations.service import ConversationProvider, ConversationService
 from app.conversations.store import ConversationStore
 from app.chat_scopes.store import WorkspaceStore
@@ -148,6 +154,22 @@ def create_app(
         provider=selected_conversation_provider,
         context_builder=conversation_context,
     )
+    provider_hub = (
+        ProviderHub(selected_conversation_provider)
+        if conversation_provider is not None
+        else ProviderHub.from_environment(
+            selected_conversation_provider,
+            personal_llm=PersonalLlmConversationProvider(personal_llm_runtime),
+            ollama=ollama_runtime,
+            chatgpt_web=(
+                ChatGptWebConversationProvider(
+                    web_runtime, workspace=app_settings.workspace_root,
+                    context_tokens=app_settings.ollama_context_tokens,
+                ) if web_runtime is not None else None
+            ),
+        )
+    )
+    conversation_service.provider_hub = provider_hub
     core_lifecycle = CoreLifecycle(
         store,
         conversation_service,

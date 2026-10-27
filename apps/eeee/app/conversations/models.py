@@ -76,6 +76,7 @@ class AssistantRequest(BaseModel):
     state: RequestState
     parent_request_id: str | None = None
     attempt: int = 1
+    selected_provider: str = "auto"
     error_code: str | None = None
     created_at: datetime
     updated_at: datetime

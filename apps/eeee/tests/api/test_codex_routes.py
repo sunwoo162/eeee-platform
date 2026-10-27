@@ -100,3 +100,33 @@ def test_create_dedicated_project_directory_only_with_owner_access(tmp_path):
         headers={"X-EEEE-User-Id": "someone-else"},
     )
     assert forged.status_code == 404
+
+
+def test_finished_codex_task_appears_in_canonical_project_chat(tmp_path, monkeypatch):
+    app, client, pid, chat, _ = _setup(tmp_path)
+    client.put(f"/v1/projects/{pid}/codex/directory", json={"relativePath": "repo1"})
+    manager = app.state.codex_manager
+    manager.executable = "fake-app-server"
+
+    def finish_without_external_model(task, command):
+        task.answer = "Reviewed files and found no changes needed."
+        task.status = "completed"
+        manager.on_finished(task)
+
+    monkeypatch.setattr(manager, "_execute", finish_without_external_model)
+    requested = client.post(f"/v1/projects/{pid}/codex/tasks", json={
+        "conversationId": chat, "prompt": "Check existing code.",
+        "mode": "readOnly",
+    })
+    assert requested.status_code == 202
+    for _ in range(100):
+        rows = client.get(f"/v1/conversations/{chat}/messages").json()["items"]
+        if len(rows) == 2:
+            break
+        time.sleep(0.01)
+    assert len(rows) == 2
+    assert rows[0]["content"] == "Check existing code."
+    assert rows[1]["provider"] == "codex"
+    assert rows[1]["status"] == "completed"
+    assert "Reviewed files" in rows[1]["content"]
+    assert "Work only in the bound project" not in rows[0]["content"]

@@ -109,6 +109,7 @@ def build_codex_router(
             manager.start,
             user_id=user, project_id=project_id, conversation_id=body.conversation_id,
             directory=Path(directory["absolutePath"]), prompt=prompt,
+            display_prompt=body.prompt,
             mode=body.mode, confirmed_write=body.approved_workspace_write,
         )
         return task.snapshot()

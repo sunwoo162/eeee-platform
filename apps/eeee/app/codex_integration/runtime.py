@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ class CodexTask:
     conversation_id: str
     directory: str
     prompt: str
+    display_prompt: str
     mode: str
     status: str = "queued"
     thread_id: str | None = None
@@ -77,8 +79,12 @@ class CodexTask:
 class CodexTaskManager:
     """Bounded in-process task manager; no task runs until an explicit POST."""
 
-    def __init__(self, executable: str | None = None, timeout_seconds: float = 600):
+    def __init__(
+        self, executable: str | None = None, timeout_seconds: float = 600,
+        on_finished: Callable[[CodexTask], None] | None = None,
+    ):
         self.executable = executable
+        self.on_finished = on_finished
         self.timeout_seconds = timeout_seconds
         self._tasks: dict[str, CodexTask] = {}
         self._lock = threading.RLock()
@@ -96,15 +102,15 @@ class CodexTaskManager:
     def start(
         self, *, user_id: str, project_id: str, conversation_id: str,
         directory: Path, prompt: str, mode: str = "readOnly",
-        confirmed_write: bool = False,
+        confirmed_write: bool = False, display_prompt: str | None = None,
     ) -> CodexTask:
         if mode not in {"readOnly", "workspaceWrite"}:
             raise ValueError("invalid Codex mode")
         if mode == "workspaceWrite" and not confirmed_write:
             raise PermissionError("쓰기 작업 시작 전 명시적 동의가 필요합니다.")
         prompt = prompt.strip()
-        if not prompt or len(prompt) > 15_000:
-            raise ValueError("task prompt must be 1 to 15000 characters")
+        if not prompt or len(prompt) > 20_000:
+            raise ValueError("task prompt must be 1 to 20000 characters")
         command = self.configured_executable()
         with self._lock:
             active = sum(
@@ -122,7 +128,8 @@ class CodexTaskManager:
             task = CodexTask(
                 id=f"codex-task-{uuid4().hex}", user_id=user_id,
                 project_id=project_id, conversation_id=conversation_id,
-                directory=str(directory), prompt=prompt, mode=mode,
+                directory=str(directory), prompt=prompt,
+                display_prompt=display_prompt or prompt, mode=mode,
             )
             self._tasks[task.id] = task
         threading.Thread(
@@ -211,6 +218,11 @@ class CodexTaskManager:
                     pass
             with task._lock:
                 task._process = None
+            if self.on_finished and task.status in {"completed", "failed", "cancelled"}:
+                try:
+                    self.on_finished(task)
+                except Exception:  # noqa: BLE001
+                    task.publish("warning", "작업 결과를 채팅 기록에 저장하지 못했습니다.")
 
     def _run_protocol(self, task: CodexTask, proc: subprocess.Popen[str]) -> None:
         if proc.stdin is None or proc.stdout is None:

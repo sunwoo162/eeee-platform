@@ -34,6 +34,7 @@ from app.assistant.service import AssistantService
 from app.capabilities.registry import build_core_capability_manager
 from app.config import Settings
 from app.conversations.context import ConversationContextBuilder
+from app.conversations.models import MessageRole, MessageStatus
 from app.conversations.providers import (
     BuiltinConversationProvider,
     ChatGptWebConversationProvider,
@@ -326,7 +327,33 @@ def create_app(
     application.state.conversation_provider_selection = provider_selection
     application.state.conversation_store = conversation_store
     application.state.workspace_store = workspace_store
-    codex_manager = CodexTaskManager()
+    def archive_codex_task(task) -> None:
+        # After a completed/failed agent run, persist its outcome in the same
+        # canonical conversation used by GPT/Claude. Never save hidden
+        # provider instructions as if the user typed them.
+        conversation_store.get_conversation(task.conversation_id, user_id=task.user_id)
+        conversation_store.add_message(
+            task.conversation_id, role=MessageRole.USER,
+            content=task.display_prompt, status=MessageStatus.COMPLETED,
+            client_message_id=f"codex:{task.id}",
+        )
+        success = task.status == "completed"
+        report = task.answer.strip() if success and task.answer.strip() else (
+            "Codex 작업 완료. 상세 결과가 기록되지 않았습니다."
+            if success else f"Codex 작업 {task.status}: {task.error or '완료되지 않음'}"
+        )
+        conversation_store.add_message(
+            task.conversation_id, role=MessageRole.ASSISTANT,
+            content=report[:15000],
+            status=MessageStatus.COMPLETED if success else (
+                MessageStatus.CANCELLED if task.status == "cancelled" else MessageStatus.FAILED
+            ),
+            provider="codex", model="app-server",
+            error_code=None if success else "codex_task_incomplete",
+        )
+        task.publish("chatSaved", "Codex 작업 결과를 이 채팅에 저장했습니다.")
+
+    codex_manager = CodexTaskManager(on_finished=archive_codex_task)
     application.state.codex_manager = codex_manager
     application.state.conversation_service = conversation_service
     application.state.core_lifecycle = core_lifecycle

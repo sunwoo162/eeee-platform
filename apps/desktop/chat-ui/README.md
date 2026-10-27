@@ -45,10 +45,40 @@ $env:GLEAVE_CLAUDE_MODEL = "claude-sonnet-5-5"
 These are separately billed API connections, not a reuse of consumer chat subscriptions.
 No network inference is made until a conversation turn is submitted.
 
+## Codex agent panel (P3 foundation)
+
+Use the code icon in a project chat's top bar. Gleave launches the installed
+`codex app-server` via local stdio, not via a web scraping bridge.
+
+1. Install and sign in to Codex CLI using its supported authentication flow.
+2. Open a project chat and the Codex panel.
+3. Click **Create dedicated workspace folder** for an empty managed folder,
+   or enter an existing directory **relative to EEEE_WORKSPACE_ROOT**.
+4. Start in `readOnly` to analyze a codebase without file edits.
+5. For edits, select `workspaceWrite` and explicitly acknowledge that the
+   agent can modify files inside that folder. Additional Codex approval
+   requests show explicit accept/decline controls.
+6. The app shows the answer, unified diff notifications, and task status.
+   Cancel terminates the subprocess.
+
+**Security constraints:** Codex tasks are loopback-only, folder bindings are
+resolved and checked under the configured workspace root, unknown Codex
+approval requests fail closed, and tasks have bounded time/concurrency.
+An owner may create a managed folder, but it starts empty; no external
+repository has been imported automatically. If you allow write mode, changes
+may be made before a final diff appears. Review backups and Git status first.
+Codex may send project data to its service. Do not store credentials in workspaces.
+
+**Limitations:** This is a first development-tool panel, not yet a seamless
+Codex turn inside the canonical Gleave chat; the Codex option in the general
+model selector stays disabled until that integration is complete. Task event
+history is currently in memory and does not survive server restarts. A
+protocol-only CLI initialization smoke test passed locally; real authenticated
+Codex model runs still require user setup and end-to-end testing.
+
 ## Not implemented yet
 
-Codex app-server execution and model selection, empirical cost-based smart routing,
-conversation imports, cloud
-team authentication, file/terminal/browser agent panels, packaging. Do not
-describe them as supported until tested. The local team folder schema is *not*
-an authenticated multi-user sharing feature.
+Seamless Codex turns in regular chat, persistent agent task logs, empirical
+cost-based smart routing, conversation imports, cloud team authentication,
+full file/terminal/browser agent panels, Windows standalone packaging.
+The local team folder schema is *not* an authenticated multi-user sharing feature.

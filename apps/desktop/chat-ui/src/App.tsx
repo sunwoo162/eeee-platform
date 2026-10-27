@@ -1,11 +1,12 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
-  ArrowDown, ArrowUp, BrainCircuit, ChevronDown, ChevronRight, CirclePlus,
+  ArrowDown, ArrowUp, BrainCircuit, ChevronDown, ChevronRight, CirclePlus, CodeXml,
   Folder, FolderOpen, Layers3, Menu, MessageSquare, MoreHorizontal,
   PanelRight, Plus, Search, Settings2, Sparkles, SquarePen, Trash2, Users, UserRound,
   X
 } from "lucide-react";
 import { Conversation, Message, Project, ProjectMemory, ProviderOption, RuntimeStatus, ServerEvent, Workspace, del, get, post, put } from "./api";
+import CodexPanel from "./CodexPanel";
 
 type EditKind = {kind:"workspace"|"project"; workspaceId?:string}|null;
 const terminal = new Set(["message.completed","request.failed","request.cancelled"]);
@@ -30,6 +31,7 @@ export default function App() {
   const [entryName,setEntryName] = useState("");
   const [workspaceKind,setWorkspaceKind] = useState<"personal"|"team">("personal");
   const [memoryOpen,setMemoryOpen] = useState(false);
+  const [devOpen,setDevOpen] = useState(false);
   const [memories,setMemories] = useState<ProjectMemory[]>([]);
   const [memoryDraft,setMemoryDraft] = useState("");
   const [mobileSidebar,setMobileSidebar] = useState(false);
@@ -281,7 +283,8 @@ export default function App() {
                 {option.label}{option.available?"":" (연결 필요)"}
               </option>):<option value="auto">Auto</option>}
             </select><ChevronDown size={13}/></div>
-          <button className="icon-button" title="프로젝트 기억" onClick={()=>{setMemoryOpen(v=>!v);void loadMemories();}} disabled={!selectedProject}><BrainCircuit size={18}/></button>
+          <button className="icon-button" title="Codex 개발 작업" aria-label="Codex 개발 작업" onClick={()=>{setDevOpen(v=>!v);setMemoryOpen(false);}} disabled={!selectedProject}><CodeXml size={18}/></button>
+          <button className="icon-button" title="프로젝트 기억" onClick={()=>{setMemoryOpen(v=>!v);setDevOpen(false);void loadMemories();}} disabled={!selectedProject}><BrainCircuit size={18}/></button>
           <button className="icon-button" aria-label="채팅 만들기" title="새 채팅" onClick={()=>void createChat()}><SquarePen size={17}/></button>
         </div>
       </header>
@@ -320,6 +323,9 @@ export default function App() {
       </div>
     </main>
 
+    {devOpen&&selectedProject&&<CodexPanel
+      key={selectedProject.id} project={selectedProject} chat={selectedChat}
+      onCreateChat={createChat} onClose={()=>setDevOpen(false)} />}
     {memoryOpen&&selectedProject&&<aside className="memory-panel">
       <div className="memory-header"><div><BrainCircuit size={18}/><strong>프로젝트 기억</strong></div><button className="icon-button" onClick={()=>setMemoryOpen(false)}><X size={18}/></button></div>
       <p className="memory-intro">같은 프로젝트에 속한 채팅에서 공통으로 참고하는 승인된 메모리입니다.</p>

@@ -47,6 +47,8 @@ def test_codex_journal_restores_completed_task_and_approval_audit(tmp_path, monk
     audit = client.get(f"/v1/codex/tasks/{task_id}/audit").json()["items"]
     assert any(row["kind"] == "started" for row in audit)
     assert client.get(f"/v1/codex/tasks/{task_id}", headers={"X-EEEE-User-Id":"intruder"}).status_code == 404
+    assert client.get(f"/v1/codex/tasks/{task_id}/audit", headers={"X-EEEE-User-Id":"intruder"}).status_code == 404
+    assert client.get(f"/v1/conversations/{cid}/codex/tasks", headers={"X-EEEE-User-Id":"intruder"}).status_code == 404
 
     # Create a new process/store instance; running manager's tasks are not reused.
     second = create_app(Settings(data_dir=tmp_path / "data", workspace_root=root))

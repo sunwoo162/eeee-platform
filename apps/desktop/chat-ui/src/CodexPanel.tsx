@@ -3,8 +3,10 @@ import { Check, CodeXml, FolderOpen, Play, RefreshCcw, ShieldAlert, Square, X } 
 import { Conversation, Project, get, post, put } from "./api";
 
 type Approval = {id:string;method:string;reason:string;command:string};
+type AuditEntry = {sequence:number;kind:string;timestamp:string;data:Record<string,unknown>};
 type CodexTask = {
   id:string;status:string;mode:string;directory:string;answer:string;diff:string;
+  prompt?:string;
   error:string|null;pendingApproval:Approval|null;
   events:Array<{index:number;type:string;text:string}>;
 };
@@ -25,10 +27,18 @@ export default function CodexPanel({project,chat,onCreateChat,onTaskCompleted,in
   const [mode,setMode] = useState<"readOnly"|"workspaceWrite">("readOnly");
   const [confirmed,setConfirmed] = useState(false);
   const [task,setTask] = useState<CodexTask|null>(null);
+  const [history,setHistory] = useState<CodexTask[]>([]);
+  const [audit,setAudit] = useState<AuditEntry[]>([]);
   const completedRef=useRef<Set<string>>(new Set());
   const [working,setWorking] = useState(false);
   const [error,setError] = useState("");
   const active = task && ["queued","running","approvalRequired"].includes(task.status);
+
+  async function loadHistory(conversationId:string){
+    const response=await get<{items:CodexTask[]}>(`/v1/conversations/${conversationId}/codex/tasks`);
+    setHistory(response.items);
+    return response.items;
+  }
 
   async function loadDirectory() {
     const result = await get<{directory:{relativePath:string}|null}>(
@@ -50,18 +60,26 @@ export default function CodexPanel({project,chat,onCreateChat,onTaskCompleted,in
   },[initialTaskId]);
 
   useEffect(()=>{
-    if(!chat?.id||initialTaskId)return;
-    void get<{items:CodexTask[]}>(`/v1/conversations/${chat.id}/codex/tasks`)
-      .then(r=>setTask(r.items[0]??null))
-      .catch(e=>setError(String(e)));
+    if(!chat?.id)return;
+    void loadHistory(chat.id).then(items=>{
+      if(!initialTaskId)setTask(items[0]??null);
+    }).catch(e=>setError(String(e)));
   },[chat?.id,initialTaskId]);
+
+  useEffect(()=>{
+    if(!task?.id){setAudit([]);return;}
+    void get<{items:AuditEntry[]}>(`/v1/codex/tasks/${task.id}/audit`)
+      .then(r=>setAudit(r.items))
+      .catch(e=>setError(String(e)));
+  },[task?.id,task?.status]);
 
   useEffect(()=>{
     if(!task?.id||active||completedRef.current.has(task.id))return;
     if(!task.events.some(e=>e.type==="chatSaved"))return;
     completedRef.current.add(task.id);
     void onTaskCompleted();
-  },[task?.id,task?.status,active]);
+    if(chat?.id)void loadHistory(chat.id).catch(e=>setError(String(e)));
+  },[task?.id,task?.status,active,chat?.id]);
 
   useEffect(()=>{
     if(!task?.id||!active)return;
@@ -111,6 +129,7 @@ export default function CodexPanel({project,chat,onCreateChat,onTaskCompleted,in
         }
       );
       setTask(created);
+      await loadHistory(currentChat.id);
     }catch(e){setError(String(e));}
     finally{setWorking(false);}
   }
@@ -174,6 +193,16 @@ export default function CodexPanel({project,chat,onCreateChat,onTaskCompleted,in
         </button>
       </form>
       {error&&<div role="alert" className="codex-error">{error}</div>}
+      {history.length>0&&<details className="codex-section codex-history">
+        <summary>이 채팅의 Codex 작업 기록 ({history.length})</summary>
+        <div className="codex-history-list">{history.map(item=><button key={item.id}
+          className={task?.id===item.id?"codex-history-item chosen":"codex-history-item"}
+          onClick={()=>void get<CodexTask>(`/v1/codex/tasks/${item.id}`).then(setTask)
+            .catch(e=>setError(String(e)))}>
+          <span>{(item.prompt||"Codex 작업").slice(0,65)}</span>
+          <small>{item.mode==="workspaceWrite"?"파일 수정":"읽기 전용"} · {item.status}</small>
+        </button>)}</div>
+      </details>}
       {task&&<div className="codex-section codex-result">
         <div className="codex-label">
           <RefreshCcw size={15}/> 작업 상태: <strong>{task.status}</strong>
@@ -203,7 +232,15 @@ export default function CodexPanel({project,chat,onCreateChat,onTaskCompleted,in
         <div className="codex-events">{task.events.slice(-15).map(event=>
           <p key={event.index}><span>{event.type}</span> {event.text}</p>
         )}</div>
-        <p className="codex-hint">Codex로 전달한 요청·소스 파일은 연결된 AI 서비스에서 처리될 수 있습니다. 현재 작업 결과는 프로그램 실행 중에만 유지됩니다.</p>
+        {audit.length>0&&<details className="codex-audit">
+          <summary>저장된 작업·승인 감사 기록 ({audit.length})</summary>
+          {audit.map(entry=><div key={entry.sequence} className="codex-audit-entry">
+            <strong>{entry.kind}</strong>
+            <time>{new Date(entry.timestamp).toLocaleString("ko-KR")}</time>
+            <pre>{JSON.stringify(entry.data,null,2)}</pre>
+          </div>)}
+        </details>}
+        <p className="codex-hint">Codex로 전달한 요청·소스 파일은 연결된 AI 서비스에서 처리될 수 있습니다. 작업 상태·로그·승인 기록은 로컬 DB에 보관되며, 중단된 프로세스는 자동 재실행되지 않습니다.</p>
       </div>}
     </div>
   </aside>;

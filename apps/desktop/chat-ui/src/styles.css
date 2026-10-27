@@ -97,3 +97,13 @@
 @media(max-width:770px){.codex-panel{position:fixed;right:0;top:0;bottom:0;width:min(370px,94vw);z-index:16;box-shadow:-8px 0 30px #35486224}}
 
 .codex-managed{margin-top:8px;width:100%;background:#eef4ff;color:#396bb4;border:1px solid #d7e5fc;border-radius:8px;font-size:11px;font-weight:650;padding:9px}
+
+.codex-history summary,.codex-audit summary{font-size:12px;font-weight:700;color:#50657e;cursor:pointer}
+.codex-history-list{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.codex-history-item{width:100%;display:flex;flex-direction:column;text-align:left;gap:4px;border:1px solid #e5eaf3;background:#fff;border-radius:8px;padding:9px;color:#3a4d67;font-size:11px;overflow-wrap:anywhere}
+.codex-history-item.chosen{border-color:#99b7eb;background:#f1f6ff}
+.codex-history-item small{font-size:10px;color:#8293a9}
+.codex-audit{margin-top:16px;border-top:1px solid #e6edf4;padding-top:12px}
+.codex-audit-entry{padding:10px 0;border-bottom:1px solid #eef1f5;font-size:10px;color:#6b7e99}
+.codex-audit-entry strong{color:#4b69a2}.codex-audit-entry time{display:block;margin-top:3px}
+.codex-audit-entry pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;background:#f3f6fb;padding:8px;border-radius:6px}

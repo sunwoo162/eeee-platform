@@ -155,6 +155,21 @@ class WorkspaceStore:
                 (conversation_id, project_id, user_id, _now()),
             )
 
+    def unlink_conversation(self, conversation_id: str, *, user_id: str) -> None:
+        """Return an owned conversation to the unassigned list."""
+        user_id = _owner(user_id)
+        with self.db._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM conversations WHERE id=? AND user_id=?",
+                (conversation_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("conversation not found")
+            conn.execute(
+                "DELETE FROM chat_conversation_links WHERE conversation_id=?",
+                (conversation_id,),
+            )
+
     def list_conversations(self, project_id: str, *, user_id: str) -> list[dict]:
         user_id = _owner(user_id)
         with self.db._connect() as conn:

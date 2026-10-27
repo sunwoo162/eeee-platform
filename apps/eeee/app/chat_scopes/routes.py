@@ -77,6 +77,11 @@ def build_workspace_router(
         call(workspaces.link_conversation, project_id, conversation_id, user_id=principal(request))
         return {"conversationId": conversation_id, "projectId": project_id}
 
+    @router.delete("/conversations/{conversation_id}/project")
+    def unassign_chat(conversation_id: str, request: Request) -> dict:
+        call(workspaces.unlink_conversation, conversation_id, user_id=principal(request))
+        return {"conversationId": conversation_id, "projectId": None}
+
     @router.get("/projects/{project_id}/conversations")
     def list_chats(project_id: str, request: Request) -> dict:
         return {"items": call(workspaces.list_conversations, project_id, user_id=principal(request))}

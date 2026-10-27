@@ -41,6 +41,9 @@ def test_folder_chat_memory_api_and_project_reassignment(tmp_path):
     assert client.put(f"/v1/projects/{p2}/conversations/{cid}").status_code == 200
     assert client.get(f"/v1/projects/{p1}/conversations").json()["items"] == []
     assert client.get(f"/v1/conversations/{cid}/project").json()["project"]["id"] == p2
+    assert client.delete(f"/v1/conversations/{cid}/project").status_code == 200
+    assert client.get(f"/v1/conversations/{cid}/project").json()["project"] is None
+    assert client.get(f"/v1/conversations/{cid}/messages").status_code == 200
 
 
 def test_folder_api_is_user_scoped(tmp_path):

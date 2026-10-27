@@ -45,6 +45,8 @@ from app.conversations.multimodel import ProviderHub
 from app.conversations.service import ConversationProvider, ConversationService
 from app.conversations.store import ConversationStore
 from app.chat_scopes.store import WorkspaceStore
+from app.conversation_imports.service import ConversationImportService
+from app.conversation_imports.routes import build_import_router
 from app.chat_scopes.routes import build_workspace_router
 from app.codex_integration.routes import build_codex_router
 from app.codex_integration.runtime import CodexTaskManager, CodexUnavailable
@@ -539,6 +541,7 @@ def create_app(
         )
     )
     application.include_router(build_workspace_router(workspace_store, conversation_store))
+    application.include_router(build_import_router(ConversationImportService(conversation_store, workspace_store)))
     application.include_router(
         build_codex_router(
             workspace_store, conversation_store, codex_manager,

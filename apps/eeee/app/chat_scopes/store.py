@@ -352,6 +352,8 @@ class WorkspaceStore:
                 "JOIN conversations c ON c.id=m.conversation_id "
                 "JOIN chat_conversation_links l ON l.conversation_id=c.id "
                 "WHERE l.project_id=? AND c.user_id=? AND c.id<>? "
+                "AND NOT EXISTS (SELECT 1 FROM chat_import_sources i "
+                "WHERE i.conversation_id=c.id) "
                 "AND m.role='user' AND m.status='completed' "
                 "ORDER BY m.created_at DESC LIMIT ?",
                 (project["id"], user_id, conversation_id, limit),

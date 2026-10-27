@@ -521,6 +521,21 @@ def create_app(
             oauth_configs=configured_oauth_configs,
         )
     )
+    # The React chat frontend is an optional build artifact. Keep the legacy
+    # EEEE root UI functional when frontend dependencies are not installed.
+    chat_dist = Path(__file__).resolve().parents[3] / "apps" / "desktop" / "chat-ui" / "dist"
+    if (chat_dist / "index.html").is_file() and (chat_dist / "assets").is_dir():
+        application.mount(
+            "/chat/assets",
+            StaticFiles(directory=chat_dist / "assets"),
+            name="gleave-chat-assets",
+        )
+
+        @application.get("/chat", include_in_schema=False)
+        @application.get("/chat/", include_in_schema=False)
+        def chat_index() -> FileResponse:
+            return FileResponse(chat_dist / "index.html")
+
     static_dir = Path(__file__).parent / "static"
     application.mount("/static", StaticFiles(directory=static_dir), name="static")
 

@@ -59,7 +59,9 @@ Use the code icon in a project chat's top bar. Gleave launches the installed
    agent can modify files inside that folder. Additional Codex approval
    requests show explicit accept/decline controls.
 6. The app shows the answer, unified diff notifications, and task status.
-   Cancel terminates the subprocess.
+   Cancel terminates the subprocess. When an agent job finishes, Gleave saves
+   the original user task and its final Codex result to the same project's
+   canonical chat transcript. The panel can reload that chat directly.
 
 **Security constraints:** Codex tasks are loopback-only, folder bindings are
 resolved and checked under the configured workspace root, unknown Codex

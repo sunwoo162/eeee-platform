@@ -13,10 +13,11 @@ interface Props {
   project:Project;
   chat:Conversation|null;
   onCreateChat:()=>Promise<Conversation|null>;
+  onTaskCompleted:()=>Promise<void>;
   onClose:()=>void;
 }
 
-export default function CodexPanel({project,chat,onCreateChat,onClose}:Props) {
+export default function CodexPanel({project,chat,onCreateChat,onTaskCompleted,onClose}:Props) {
   const [directory,setDirectory] = useState("");
   const [bound,setBound] = useState(false);
   const [prompt,setPrompt] = useState("");
@@ -167,6 +168,9 @@ export default function CodexPanel({project,chat,onCreateChat,onClose}:Props) {
             <button onClick={()=>void decide("accept")} disabled={working}><Check size={14}/> 허용</button>
           </div>
         </div>}
+        {!active&&<button className="codex-managed" onClick={()=>void onTaskCompleted()}>
+          이 채팅에서 Codex 결과 보기
+        </button>}
         {task.error&&<p className="codex-error">{task.error}</p>}
         {task.answer&&<div className="codex-output">
           <strong>Codex 결과</strong><p>{task.answer}</p>

@@ -14,6 +14,7 @@
 - workspaceWrite 범위는 연결된 root에 제한하고 networkAccess=false로 요청.
 - 지원하는 command/fileChange 추가 승인 요청을 받아 사용자가 accept/decline, 미지원 요청은 거절.
 - 실시간 agentMessage delta, diff 업데이트, 단계 로그, 완료/실패, 취소 및 동시 작업 제한.
+- 작업 종료 시 원본 사용자 작업과 최종 Codex 결과를 canonical project chat에 기록. 채팅 화면에서 재조회 가능.
 - 소유하지 않은 채팅, 다른 프로젝트 채팅, 등록되지 않은 폴더, 상대경로 탈출, symlink 탈출 검사.
 - FastAPI 서버 종료 시 남은 Codex 작업 프로세스 종료.
 
@@ -27,7 +28,7 @@
 
 **아직 부족한 부분**
 - Codex는 일반 채팅의 model selector에서 비활성 상태. 이번 버전은 별도 우측 에이전트 패널.
-- Codex의 작업 단계, 변경된 파일, 승인 기록을 중앙 채팅 로그/DB에 영속 기록하지 않음.
+- 원본 요청과 최종 결과는 중앙 채팅에 저장하되, 작업 단계·변경 파일·추가 승인 기록의 독립적인 영속 저장은 아직 미구현.
 - 프로젝트 파일 편집기/터미널/브라우저 미리보기 아직 미완성.
 - GPT·Claude 실제 결제 인증, 모델 품질 기반 자동 라우팅 실측은 미검증.
 - Windows 앱 패키징, 팀원 인증, 원격 동기화, AI 대화 Import/학습은 진행 대상.
@@ -43,5 +44,5 @@
 - Mock Codex 프로세스 테스트에서 protocol lifecycle, approval wait/decline, cancel 검증.
 - 변경 후 npm build 및 pytest/CI 테스트로 회귀 검사.
 
-다음 목표: Codex 작업과 canonical Gleave 채팅 이벤트의 연결, task state 영속화,
+다음 목표: Codex 상태 스트림과 canonical 채팅 이벤트의 완전 통합, task state 영속화,
 프로젝트 코드 리뷰(diff)/터미널/웹 미리보기, 사용자별 승인 감사 로그.

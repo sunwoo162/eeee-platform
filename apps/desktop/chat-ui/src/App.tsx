@@ -131,6 +131,14 @@ export default function App() {
       setEntryName("");setEditor(null);await refreshTree();
     }catch(err){setError(String(err));}
   }
+  async function refreshCurrentChat(){
+    const id=currentChatId.current;
+    if(!id)return;
+    try{
+      const result=await get<{items:Message[]}>(`/v1/conversations/${id}/messages?limit=500`);
+      if(currentChatId.current===id)setMessages(result.items);
+    }catch(e){setError(String(e));}
+  }
   async function loadMemories(){
     if(!selectedProject)return;
     try {const result=await get<{items:ProjectMemory[]}>(`/v1/projects/${selectedProject.id}/memories`);setMemories(result.items);}
@@ -325,7 +333,8 @@ export default function App() {
 
     {devOpen&&selectedProject&&<CodexPanel
       key={selectedProject.id} project={selectedProject} chat={selectedChat}
-      onCreateChat={createChat} onClose={()=>setDevOpen(false)} />}
+      onCreateChat={createChat} onTaskCompleted={refreshCurrentChat}
+      onClose={()=>setDevOpen(false)} />}
     {memoryOpen&&selectedProject&&<aside className="memory-panel">
       <div className="memory-header"><div><BrainCircuit size={18}/><strong>프로젝트 기억</strong></div><button className="icon-button" onClick={()=>setMemoryOpen(false)}><X size={18}/></button></div>
       <p className="memory-intro">같은 프로젝트에 속한 채팅에서 공통으로 참고하는 승인된 메모리입니다.</p>

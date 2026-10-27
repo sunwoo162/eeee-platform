@@ -20,6 +20,7 @@ jobs:
             packages/iseol/package-lock.json
             packages/claimlatch/package-lock.json
             integrations/claimlatch-adapter/package-lock.json
+            apps/desktop/chat-ui/package-lock.json
       - name: Install EEEE dependencies
         run: python -m pip install -e ".\apps\eeee[dev]"
       - name: Install TypeScript dependencies
@@ -31,6 +32,16 @@ jobs:
         run: .\scripts\check-repository.ps1
       - name: Check tracked text encoding
         run: python .\scripts\check-encoding.py
+      - name: Build Gleave chat UI
+        shell: pwsh
+        run: |
+          npm ci --prefix apps/desktop/chat-ui --ignore-scripts --no-audit
+          npm run build --prefix apps/desktop/chat-ui
+      - name: Test Gleave conversation, workspace, and Codex contracts
+        working-directory: apps/eeee
+        shell: pwsh
+        run: |
+          python -m pytest -q tests/chat_scopes tests/conversations tests/api/test_workspace_routes.py tests/api/test_chat_frontend.py tests/api/test_conversation_routes.py tests/api/test_codex_routes.py tests/api/test_codex_protocol.py
       - name: Build and test ISEOL contracts, QA, and organization
         working-directory: packages/iseol
         shell: pwsh

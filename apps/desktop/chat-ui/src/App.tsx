@@ -2,11 +2,12 @@ import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   ArrowDown, ArrowUp, BrainCircuit, ChevronDown, ChevronRight, CirclePlus, CodeXml,
   Folder, FolderOpen, Layers3, Menu, MessageSquare, MoreHorizontal,
-  PanelRight, Plus, Search, Settings2, Sparkles, SquarePen, Trash2, Users, UserRound,
+  PanelRight, Plus, Search, Settings2, Sparkles, SquarePen, Trash2, UploadCloud, Users, UserRound,
   X
 } from "lucide-react";
 import { Conversation, Message, Project, ProjectMemory, ProviderOption, RuntimeStatus, ServerEvent, Workspace, del, get, post, put } from "./api";
 import CodexPanel from "./CodexPanel";
+import ImportPanel, {ImportedResult} from "./ImportPanel";
 
 type EditKind = {kind:"workspace"|"project"; workspaceId?:string}|null;
 const terminal = new Set(["message.completed","request.failed","request.cancelled"]);
@@ -32,6 +33,7 @@ export default function App() {
   const [workspaceKind,setWorkspaceKind] = useState<"personal"|"team">("personal");
   const [memoryOpen,setMemoryOpen] = useState(false);
   const [devOpen,setDevOpen] = useState(false);
+  const [importOpen,setImportOpen] = useState(false);
   const [activeCodexTaskId,setActiveCodexTaskId] = useState<string|null>(null);
   const [memories,setMemories] = useState<ProjectMemory[]>([]);
   const [memoryDraft,setMemoryDraft] = useState("");
@@ -141,6 +143,30 @@ export default function App() {
       const result=await get<{items:Message[]}>(`/v1/conversations/${id}/messages?limit=500`);
       if(currentChatId.current===id)setMessages(result.items);
     }catch(e){setError(String(e));}
+  }
+  async function onImported(items:ImportedResult[],projectId:string|null){
+    await refreshTree();
+    if(items.length){
+      const project=Object.values(projects).flat().find(p=>p.id===projectId)||null;
+      await chooseChat({
+        id:items[0].conversationId,title:items[0].title,user_id:"local-user"
+      },project);
+      setImportOpen(false);
+    }
+  }
+  async function approveImportedMemory(message:Message){
+    if(!selectedProject||message.role!=="user"||!message.provider?.startsWith("import:"))return;
+    if(!window.confirm("선택한 메시지를 이 프로젝트의 승인된 기억으로 추가할까요? 팀 프로젝트라면 팀의 AI에게도 제공될 수 있습니다."))return;
+    try{
+      await post(`/v1/projects/${selectedProject.id}/memories`,{
+        content:message.content.slice(0,2000),source_message_id:message.id
+      });
+      setMemoryOpen(true);
+      setImportOpen(false);
+      setDevOpen(false);
+      await loadMemories();
+      setError("");
+    }catch(err){setError(err instanceof Error?err.message:String(err));}
   }
   async function loadMemories(){
     if(!selectedProject)return;
@@ -323,6 +349,8 @@ export default function App() {
                 {option.label}{option.available?"":" (연결 필요)"}
               </option>):<option value="auto">Auto</option>}
             </select><ChevronDown size={13}/></div>
+          <button className="icon-button" title="다른 AI 대화 가져오기" aria-label="AI 대화 가져오기"
+            onClick={()=>{setImportOpen(v=>!v);setDevOpen(false);setMemoryOpen(false);}}><UploadCloud size={18}/></button>
           <button className="icon-button" title="Codex 개발 작업" aria-label="Codex 개발 작업" onClick={()=>{setDevOpen(v=>!v);setMemoryOpen(false);}} disabled={!selectedProject}><CodeXml size={18}/></button>
           <button className="icon-button" title="프로젝트 기억" onClick={()=>{setMemoryOpen(v=>!v);setDevOpen(false);void loadMemories();}} disabled={!selectedProject}><BrainCircuit size={18}/></button>
           <button className="icon-button" aria-label="채팅 만들기" title="새 채팅" onClick={()=>void createChat()}><SquarePen size={17}/></button>
@@ -342,6 +370,10 @@ export default function App() {
           {messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=><div key={m.id} className={`message ${m.role}`}>
             {m.role==="assistant"&&<div className="assistant-icon"><Layers3 size={14}/></div>}
             <div className="message-body">{m.content|| (m.status==="streaming"?"생성 중…":"")}
+              {selectedProject&&m.role==="user"&&m.provider?.startsWith("import:")&&<button
+                className="import-approve-memory" onClick={()=>void approveImportedMemory(m)}>
+                이 메시지를 프로젝트 기억으로 승인
+              </button>}
               {m.status==="failed"&&<small className="message-status">응답 실패</small>}
               {m.role==="assistant"&&m.provider&&<small className="model-source">{m.provider}{m.model?` · ${m.model}`:""}</small>}
             </div>
@@ -363,6 +395,9 @@ export default function App() {
       </div>
     </main>
 
+    {importOpen&&<ImportPanel
+      currentProject={selectedProject} projects={Object.values(projects).flat()}
+      onImported={onImported} onClose={()=>setImportOpen(false)} />}
     {devOpen&&selectedProject&&<CodexPanel
       key={selectedProject.id} project={selectedProject} chat={selectedChat}
       onCreateChat={createChat} onTaskCompleted={refreshCurrentChat}

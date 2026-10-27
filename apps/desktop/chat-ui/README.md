@@ -98,3 +98,26 @@ as GPT/Claude messages. The task journal (schema v9) also stores project-scoped
 task status, events, approval decisions and snapshots. After restart, active
 jobs are marked interrupted, not silently resumed or approved. Chat owners can
 query per-task audit and their conversation's Codex task history.
+
+## Import past AI conversations (P4 MVP)
+
+Use the upload icon in the chat titlebar, choose a service and select a
+conversation export **JSON** (ChatGPT or Claude) or **JSONL** (Codex CLI).
+The browser previews text-only conversations without storing them. Select
+which conversations to save (up to 20 in one action) and assign them to a
+personal/team project folder or the unassigned conversation list. Repeated
+imports with the same provider/source ID are skipped. Original chat titles and
+text roles are preserved; tool/system/developer and image records are excluded.
+
+**Privacy boundary:** Importing a transcript never trains the personal model
+and never auto-creates approved project memories. Imported user messages are
+also excluded from sibling-chat automatic project context. Open an imported
+chat and explicitly select "Approve this message as project memory" to create
+a traceable approved note. Continuing an imported chat with a cloud model
+may send the chosen conversation to that model; importing alone is local.
+
+**Current limits:** max 8 MB input, 200 readable conversations per file, 20
+selected per import action, up to 500 imported text messages per conversation.
+Extract conversations.json from official export ZIP archives before selecting
+it. Formats change; unsupported branches, attachments, images and tool output
+are deliberately omitted. Large exports need manual splitting in this MVP.

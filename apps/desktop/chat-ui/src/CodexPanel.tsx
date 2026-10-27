@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, CodeXml, FolderOpen, Play, RefreshCcw, ShieldAlert, Square, X } from "lucide-react";
 import { Conversation, Project, get, post, put } from "./api";
 
@@ -14,16 +14,18 @@ interface Props {
   chat:Conversation|null;
   onCreateChat:()=>Promise<Conversation|null>;
   onTaskCompleted:()=>Promise<void>;
+  initialTaskId?:string|null;
   onClose:()=>void;
 }
 
-export default function CodexPanel({project,chat,onCreateChat,onTaskCompleted,onClose}:Props) {
+export default function CodexPanel({project,chat,onCreateChat,onTaskCompleted,initialTaskId,onClose}:Props) {
   const [directory,setDirectory] = useState("");
   const [bound,setBound] = useState(false);
   const [prompt,setPrompt] = useState("");
   const [mode,setMode] = useState<"readOnly"|"workspaceWrite">("readOnly");
   const [confirmed,setConfirmed] = useState(false);
   const [task,setTask] = useState<CodexTask|null>(null);
+  const completedRef=useRef<Set<string>>(new Set());
   const [working,setWorking] = useState(false);
   const [error,setError] = useState("");
   const active = task && ["queued","running","approvalRequired"].includes(task.status);
@@ -40,6 +42,26 @@ export default function CodexPanel({project,chat,onCreateChat,onTaskCompleted,on
     void loadDirectory().catch(e=>setError(String(e)));
     // Each project mounts a different panel (key={project.id}).
   },[project.id]);
+
+  useEffect(()=>{
+    if(!initialTaskId)return;
+    void get<CodexTask>(`/v1/codex/tasks/${initialTaskId}`).then(setTask)
+      .catch(e=>setError(String(e)));
+  },[initialTaskId]);
+
+  useEffect(()=>{
+    if(!chat?.id||initialTaskId)return;
+    void get<{items:CodexTask[]}>(`/v1/conversations/${chat.id}/codex/tasks`)
+      .then(r=>setTask(r.items[0]??null))
+      .catch(e=>setError(String(e)));
+  },[chat?.id,initialTaskId]);
+
+  useEffect(()=>{
+    if(!task?.id||active||completedRef.current.has(task.id))return;
+    if(!task.events.some(e=>e.type==="chatSaved"))return;
+    completedRef.current.add(task.id);
+    void onTaskCompleted();
+  },[task?.id,task?.status,active]);
 
   useEffect(()=>{
     if(!task?.id||!active)return;

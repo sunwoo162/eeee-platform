@@ -71,16 +71,30 @@ repository has been imported automatically. If you allow write mode, changes
 may be made before a final diff appears. Review backups and Git status first.
 Codex may send project data to its service. Do not store credentials in workspaces.
 
-**Limitations:** This is a first development-tool panel, not yet a seamless
-Codex turn inside the canonical Gleave chat; the Codex option in the general
-model selector stays disabled until that integration is complete. Task event
-history is currently in memory and does not survive server restarts. A
-protocol-only CLI initialization smoke test passed locally; real authenticated
-Codex model runs still require user setup and end-to-end testing.
+**Limitations:** Read-only Codex jobs can be launched directly from the chat
+model selector, but file edits still require explicit permission in the drawer.
+Task state and approval decisions survive restarts; the agent process itself
+cannot automatically resume after a restart. Protocol-only CLI initialization
+passed locally; live authenticated model runs still require user setup and
+end-to-end testing.
 
 ## Not implemented yet
 
-Seamless Codex turns in regular chat, persistent agent task logs, empirical
+Fully unified token streaming and resumable Codex sessions, empirical
 cost-based smart routing, conversation imports, cloud team authentication,
 full file/terminal/browser agent panels, Windows standalone packaging.
 The local team folder schema is *not* an authenticated multi-user sharing feature.
+
+## Codex in the main chat (P3 follow-up)
+
+On machines with a detected Codex CLI, **Codex** appears in the normal model
+selector. It runs *readOnly* through the same approved project-folder task
+pipeline and opens the development drawer for progress and approval handling.
+For code edits, use `workspaceWrite` from the development drawer after explicit
+consent; the model selector alone never grants file-write permission.
+
+The finalized task and Codex output appear in the same canonical conversation
+as GPT/Claude messages. The task journal (schema v9) also stores project-scoped
+task status, events, approval decisions and snapshots. After restart, active
+jobs are marked interrupted, not silently resumed or approved. Chat owners can
+query per-task audit and their conversation's Codex task history.

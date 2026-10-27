@@ -32,6 +32,7 @@ export default function App() {
   const [workspaceKind,setWorkspaceKind] = useState<"personal"|"team">("personal");
   const [memoryOpen,setMemoryOpen] = useState(false);
   const [devOpen,setDevOpen] = useState(false);
+  const [activeCodexTaskId,setActiveCodexTaskId] = useState<string|null>(null);
   const [memories,setMemories] = useState<ProjectMemory[]>([]);
   const [memoryDraft,setMemoryDraft] = useState("");
   const [mobileSidebar,setMobileSidebar] = useState(false);
@@ -75,6 +76,7 @@ export default function App() {
   async function chooseChat(chat:Conversation, project:Project|null) {
     sourceRef.current?.close();
     currentChatId.current=chat.id;
+    setActiveCodexTaskId(null);
     setSelectedChat(chat);
     setProviderMode(sessionStorage.getItem("gleave-provider:"+chat.id)||"auto");
     setSelectedProject(project);
@@ -88,6 +90,7 @@ export default function App() {
   function chooseProject(project:Project){
     sourceRef.current?.close();
     currentChatId.current=null;
+    setActiveCodexTaskId(null);
     setSelectedProject(project);setSelectedChat(null);setMessages([]);
     setExpanded(old=>({...old,[project.id]:true}));setMobileSidebar(false);setBusy(false);
   }
@@ -160,10 +163,39 @@ export default function App() {
   async function send(e?:FormEvent){
     e?.preventDefault();
     if(!draft.trim()||busy)return;
+    if(providerMode==="codex"&&!selectedProject){
+      setError("Codex는 프로젝트 채팅에서만 실행할 수 있습니다.");
+      return;
+    }
     let chat=selectedChat;
     if(!chat){chat=await createChat();if(!chat)return;}
     const message=draft.trim();
     const id=chat.id;
+    if(providerMode==="codex"){
+      if(!selectedProject){
+        setError("Codex는 프로젝트 채팅에서만 실행할 수 있습니다.");
+        return;
+      }
+      setBusy(true);setError("");
+      try{
+        const result=await post<{id:string}>(
+          `/v1/projects/${selectedProject.id}/codex/tasks`,{
+            conversationId:id,prompt:message,mode:"readOnly",
+          }
+        );
+        setDraft("");
+        setActiveCodexTaskId(result.id);
+        setDevOpen(true);setMemoryOpen(false);
+        setMessages(items=>[...items,{
+          id:`codex-pending-${result.id}`,role:"user",
+          content:message,status:"pending",
+        }]);
+      }catch(err){
+        setDevOpen(true);setMemoryOpen(false);
+        setError(err instanceof Error?err.message:String(err));
+      }finally{setBusy(false);}
+      return;
+    }
     setDraft("");setBusy(true);setError("");
     currentChatId.current=id;
     setMessages(items=>[...items,{id:`local-${crypto.randomUUID()}`,role:"user",content:message,status:"completed"}]);
@@ -334,6 +366,7 @@ export default function App() {
     {devOpen&&selectedProject&&<CodexPanel
       key={selectedProject.id} project={selectedProject} chat={selectedChat}
       onCreateChat={createChat} onTaskCompleted={refreshCurrentChat}
+      initialTaskId={activeCodexTaskId}
       onClose={()=>setDevOpen(false)} />}
     {memoryOpen&&selectedProject&&<aside className="memory-panel">
       <div className="memory-header"><div><BrainCircuit size={18}/><strong>프로젝트 기억</strong></div><button className="icon-button" onClick={()=>setMemoryOpen(false)}><X size={18}/></button></div>

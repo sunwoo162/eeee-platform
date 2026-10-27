@@ -50,15 +50,19 @@ class CodexTask:
     _cancelled: threading.Event = field(default_factory=threading.Event, repr=False)
     _process: subprocess.Popen[str] | None = field(default=None, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _on_event: Callable[[CodexTask, dict], None] | None = field(default=None, repr=False)
 
     def publish(self, event: str, value: str) -> None:
         with self._lock:
-            self.events.append({
+            record = {
                 "index": (self.events[-1]["index"] if self.events else 0) + 1,
                 "type": event,
                 "text": value[:3000],
-            })
+            }
+            self.events.append(record)
             self.events = self.events[-150:]
+        if self._on_event is not None:
+            self._on_event(self, record)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -66,6 +70,8 @@ class CodexTask:
                 "id": self.id, "projectId": self.project_id,
                 "conversationId": self.conversation_id,
                 "directory": self.directory, "mode": self.mode,
+                "prompt": self.display_prompt[:15000],
+                "threadId": self.thread_id, "turnId": self.turn_id,
                 "status": self.status, "answer": self.answer[-20000:],
                 "diff": self.diff[-20000:], "error": self.error,
                 "events": self.events.copy(),
@@ -82,9 +88,11 @@ class CodexTaskManager:
     def __init__(
         self, executable: str | None = None, timeout_seconds: float = 600,
         on_finished: Callable[[CodexTask], None] | None = None,
+        journal: Any | None = None,
     ):
         self.executable = executable
         self.on_finished = on_finished
+        self.journal = journal
         self.timeout_seconds = timeout_seconds
         self._tasks: dict[str, CodexTask] = {}
         self._lock = threading.RLock()
@@ -131,6 +139,9 @@ class CodexTaskManager:
                 directory=str(directory), prompt=prompt,
                 display_prompt=display_prompt or prompt, mode=mode,
             )
+            if self.journal is not None:
+                task._on_event = self.journal.save
+                self.journal.save(task)
             self._tasks[task.id] = task
         threading.Thread(
             target=self._execute, args=(task, command), daemon=True,
@@ -145,6 +156,29 @@ class CodexTaskManager:
             raise KeyError("Codex task not found")
         return task
 
+    def snapshot(self, task_id: str, *, user_id: str) -> dict:
+        try:
+            return self.get(task_id, user_id=user_id).snapshot()
+        except KeyError:
+            if self.journal is not None:
+                return self.journal.snapshot(task_id, user_id=user_id)
+            raise
+
+    def history(self, conversation_id: str, *, user_id: str) -> list[dict]:
+        if self.journal is not None:
+            return self.journal.history(conversation_id, user_id=user_id)
+        with self._lock:
+            return [
+                task.snapshot() for task in self._tasks.values()
+                if task.user_id == user_id and task.conversation_id == conversation_id
+            ]
+
+    def audit(self, task_id: str, *, user_id: str) -> list[dict]:
+        if self.journal is not None:
+            return self.journal.audit(task_id, user_id=user_id)
+        self.get(task_id, user_id=user_id)
+        return []
+
     def approve(self, task_id: str, approval_id: str, decision: str, *, user_id: str) -> None:
         if decision not in {"accept", "decline"}:
             raise ValueError("Unsupported approval decision")
@@ -157,6 +191,12 @@ class CodexTaskManager:
                 raise ValueError("Approval ID does not match pending request")
             task._approval_decision = decision
             task._approval_ready.set()
+        if self.journal is not None:
+            self.journal.append_audit(
+                task, kind="approvalDecision",
+                details={"approvalId": approval_id, "decision": decision, "userId": user_id},
+            )
+        task.publish("approvalDecision", decision)
 
     def cancel(self, task_id: str, *, user_id: str) -> None:
         task = self.get(task_id, user_id=user_id)
@@ -168,6 +208,7 @@ class CodexTaskManager:
             proc = task._process
         if proc is not None and proc.poll() is None:
             proc.kill()
+        task.publish("cancelRequested", "user")
 
     def shutdown(self) -> None:
         """Do not leave Codex subprocesses running after the Gleave Core exits."""
@@ -195,6 +236,7 @@ class CodexTaskManager:
                     proc.kill()
                     return
                 task.status = "running"
+            task.publish("started", "Codex app-server connected")
             self._run_protocol(task, proc)
         except _TurnComplete:
             pass
@@ -218,11 +260,15 @@ class CodexTaskManager:
                     pass
             with task._lock:
                 task._process = None
+            if self.journal is not None:
+                self.journal.save(task)
             if self.on_finished and task.status in {"completed", "failed", "cancelled"}:
                 try:
                     self.on_finished(task)
                 except Exception:  # noqa: BLE001
                     task.publish("warning", "작업 결과를 채팅 기록에 저장하지 못했습니다.")
+            if self.journal is not None:
+                self.journal.save(task)
 
     def _run_protocol(self, task: CodexTask, proc: subprocess.Popen[str]) -> None:
         if proc.stdin is None or proc.stdout is None:

@@ -47,7 +47,8 @@ from app.conversations.store import ConversationStore
 from app.chat_scopes.store import WorkspaceStore
 from app.chat_scopes.routes import build_workspace_router
 from app.codex_integration.routes import build_codex_router
-from app.codex_integration.runtime import CodexTaskManager
+from app.codex_integration.runtime import CodexTaskManager, CodexUnavailable
+from app.codex_integration.journal import CodexJournal
 from app.contracts import LocalEventBus
 from app.core.lifecycle import CoreLifecycle
 from app.core.lock import ProcessLock
@@ -353,7 +354,13 @@ def create_app(
         )
         task.publish("chatSaved", "Codex 작업 결과를 이 채팅에 저장했습니다.")
 
-    codex_manager = CodexTaskManager(on_finished=archive_codex_task)
+    codex_journal = CodexJournal(store)
+    codex_manager = CodexTaskManager(on_finished=archive_codex_task, journal=codex_journal)
+    try:
+        codex_manager.configured_executable()
+        provider_hub.available["codex"] = True
+    except CodexUnavailable:
+        provider_hub.available["codex"] = False
     application.state.codex_manager = codex_manager
     application.state.conversation_service = conversation_service
     application.state.core_lifecycle = core_lifecycle

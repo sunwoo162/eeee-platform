@@ -140,3 +140,29 @@ def test_unavailable_manual_choice_fails_instead_of_using_default(tmp_path, monk
     assert messages[-1]["status"] == "failed"
     assert messages[-1]["error_code"] == "claude_unavailable"
     assert "MUST_NOT_APPEAR" not in str(messages)
+
+
+def test_codex_model_catalog_requires_cli_and_direct_chat_never_runs_agent(monkeypatch, tmp_path):
+    from app.codex_integration.runtime import CodexTaskManager
+    monkeypatch.setattr(CodexTaskManager, "configured_executable", lambda self: "codex")
+    app = create_app(
+        Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "work"),
+        conversation_provider=FakeProvider("SHOULD_NOT_ANSWER", "legacy"),
+    )
+    client = TestClient(app)
+    catalog = client.get("/v1/providers").json()["items"]
+    assert next(row for row in catalog if row["id"] == "codex")["available"] is True
+    cid = client.post("/v1/conversations", json={}).json()["id"]
+    result = client.post(f"/v1/conversations/{cid}/turns", json={
+        "clientMessageId": "unsafe-codex-turn",
+        "content": "change all files", "provider": "codex",
+    })
+    assert result.status_code == 202
+    import time
+    for _ in range(80):
+        rows = client.get(f"/v1/conversations/{cid}/messages").json()["items"]
+        if len(rows) >= 2 and rows[-1]["status"] in {"failed", "completed"}:
+            break
+        time.sleep(0.01)
+    assert rows[-1]["status"] == "failed"
+    assert rows[-1]["error_code"] == "codex_unavailable"

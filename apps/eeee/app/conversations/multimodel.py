@@ -231,6 +231,12 @@ class ProviderHub:
 
     def select(self, choice: str, messages: list[dict[str, str]]) -> Any:
         choice = normalize_provider(choice)
+        if choice == "codex":
+            return BlockedProvider(
+                "codex",
+                "Codex는 프로젝트에 연결된 코드 에이전트입니다. "
+                "Gleave의 Codex 작업 API를 통해 실행해 주세요.",
+            )
         if choice == "auto":
             # Rule-based first implementation. Formal cost/quality router follows.
             last_user = next((m["content"] for m in reversed(messages)

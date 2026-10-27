@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-LATEST_SCHEMA_VERSION = 8
+LATEST_SCHEMA_VERSION = 9
 
 
 def apply_migrations(connection: sqlite3.Connection) -> None:
@@ -275,6 +275,33 @@ def apply_migrations(connection: sqlite3.Connection) -> None:
         connection.execute(
             "INSERT INTO schema_migrations(version, applied_at) "
             "VALUES (8, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        )
+    if current < 9:
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS codex_agent_tasks (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                project_id TEXT NOT NULL REFERENCES chat_projects(id) ON DELETE CASCADE,
+                status TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_codex_agent_tasks_owner
+                ON codex_agent_tasks(user_id, conversation_id, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS codex_agent_audit (
+                task_id TEXT NOT NULL REFERENCES codex_agent_tasks(id) ON DELETE CASCADE,
+                sequence INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                PRIMARY KEY (task_id, sequence)
+            );
+        """)
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) "
+            "VALUES (9, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
         )
     # Keep the idempotency guard self-healing even if an operator restored a
     # database with the schema marker intact but the index missing.

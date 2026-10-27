@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path, PureWindowsPath
 from uuid import uuid4
 
 
@@ -110,6 +111,84 @@ class WorkspaceStore:
         with self.db._connect() as conn:
             if self._project_role(conn, project_id, user_id) == "viewer":
                 raise PermissionError("viewer cannot write to project")
+
+    @staticmethod
+    def validate_directory(relative_path: str, workspace_root: Path) -> Path:
+        """Accept only existing, fully resolved subdirectories of a trusted root."""
+        relative_path = relative_path.strip().replace("\\\\", "/").replace("\\", "/")
+        windows = PureWindowsPath(relative_path)
+        if (
+            not relative_path or relative_path in {".", ".."}
+            or windows.is_absolute() or windows.drive
+            or Path(relative_path).is_absolute()
+            or ".." in windows.parts
+            or any(part in {"", "."} for part in windows.parts)
+        ):
+            raise ValueError("directory must be a child of the configured workspace root")
+        root = workspace_root.resolve()
+        if not root.is_dir():
+            raise ValueError("configured workspace root does not exist")
+        candidate = (root / relative_path).resolve()
+        if not candidate.is_relative_to(root) or candidate == root:
+            raise ValueError("directory escapes workspace root")
+        if not candidate.is_dir():
+            raise ValueError("project directory does not exist")
+        return candidate
+
+    def bind_directory(
+        self, project_id: str, relative_path: str, *, workspace_root: Path, user_id: str,
+    ) -> dict:
+        user_id = _owner(user_id)
+        candidate = self.validate_directory(relative_path, workspace_root)
+        relative_normal = candidate.relative_to(workspace_root.resolve()).as_posix()
+        with self.db._connect() as conn:
+            role = self._project_role(conn, project_id, user_id)
+            if role != "owner":
+                raise PermissionError("only an owner can bind a local workspace")
+            conn.execute(
+                "INSERT INTO chat_project_directories "
+                "(project_id, relative_path, bound_by_user_id, bound_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET "
+                "relative_path=excluded.relative_path, "
+                "bound_by_user_id=excluded.bound_by_user_id, bound_at=excluded.bound_at",
+                (project_id, relative_normal, user_id, _now()),
+            )
+        return {"projectId": project_id, "relativePath": relative_normal}
+
+    def create_managed_directory(
+        self, project_id: str, *, workspace_root: Path, user_id: str,
+    ) -> dict:
+        """Create a dedicated empty project folder inside the trusted root."""
+        user_id = _owner(user_id)
+        with self.db._connect() as conn:
+            if self._project_role(conn, project_id, user_id) != "owner":
+                raise PermissionError("only the project owner can create a managed directory")
+        if not project_id.startswith("chat-project-") or not project_id[13:].isalnum():
+            raise ValueError("invalid project ID for managed directory")
+        root = workspace_root.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        candidate = (root / project_id).resolve()
+        if not candidate.is_relative_to(root) or candidate == root:
+            raise ValueError("project directory escapes workspace root")
+        candidate.mkdir(exist_ok=True)
+        return self.bind_directory(
+            project_id, project_id, workspace_root=root, user_id=user_id,
+        )
+
+    def project_directory(
+        self, project_id: str, *, workspace_root: Path, user_id: str,
+    ) -> dict | None:
+        user_id = _owner(user_id)
+        with self.db._connect() as conn:
+            self._project_role(conn, project_id, user_id)
+            row = conn.execute(
+                "SELECT relative_path FROM chat_project_directories WHERE project_id=?",
+                (project_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        validated = self.validate_directory(row["relative_path"], workspace_root)
+        return {"projectId": project_id, "relativePath": row["relative_path"], "absolutePath": str(validated)}
 
     def create_project(self, workspace_id: str, name: str, *, user_id: str) -> dict:
         user_id = _owner(user_id)

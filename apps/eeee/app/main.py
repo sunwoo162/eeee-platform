@@ -45,6 +45,8 @@ from app.conversations.service import ConversationProvider, ConversationService
 from app.conversations.store import ConversationStore
 from app.chat_scopes.store import WorkspaceStore
 from app.chat_scopes.routes import build_workspace_router
+from app.codex_integration.routes import build_codex_router
+from app.codex_integration.runtime import CodexTaskManager
 from app.contracts import LocalEventBus
 from app.core.lifecycle import CoreLifecycle
 from app.core.lock import ProcessLock
@@ -182,6 +184,7 @@ def create_app(
         try:
             yield
         finally:
+            codex_manager.shutdown()
             core_lifecycle.stop()
 
     application.router.lifespan_context = core_lifespan
@@ -323,6 +326,8 @@ def create_app(
     application.state.conversation_provider_selection = provider_selection
     application.state.conversation_store = conversation_store
     application.state.workspace_store = workspace_store
+    codex_manager = CodexTaskManager()
+    application.state.codex_manager = codex_manager
     application.state.conversation_service = conversation_service
     application.state.core_lifecycle = core_lifecycle
     application.state.capabilities = capability_manager
@@ -506,6 +511,12 @@ def create_app(
         )
     )
     application.include_router(build_workspace_router(workspace_store, conversation_store))
+    application.include_router(
+        build_codex_router(
+            workspace_store, conversation_store, codex_manager,
+            workspace_root=app_settings.workspace_root,
+        )
+    )
     application.include_router(build_project_view_router(project_view))
     application.include_router(
         build_assistant_router(

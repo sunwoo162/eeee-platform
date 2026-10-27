@@ -12,9 +12,10 @@ def _now() -> str:
 
 
 class CodexJournal:
-    def __init__(self, sqlite_store) -> None:
+    def __init__(self, sqlite_store, *, recover: bool = True) -> None:
         self.db = sqlite_store
-        self.recover_abandoned()
+        if recover:
+            self.recover_abandoned()
 
     def recover_abandoned(self) -> None:
         """Never imply a pre-restart subprocess is still running or approvable."""

@@ -180,16 +180,6 @@ def create_app(
         lock=ProcessLock(app_settings.data_dir / "core.lock"),
     )
 
-    @asynccontextmanager
-    async def core_lifespan(_application: FastAPI):
-        core_lifecycle.start()
-        try:
-            yield
-        finally:
-            codex_manager.shutdown()
-            core_lifecycle.stop()
-
-    application.router.lifespan_context = core_lifespan
     mobile_bridge = MobileBridge(
         store.path,
         enabled=app_settings.mobile_bridge_enabled,
@@ -354,7 +344,8 @@ def create_app(
         )
         task.publish("chatSaved", "Codex 작업 결과를 이 채팅에 저장했습니다.")
 
-    codex_journal = CodexJournal(store)
+    # Recovery must happen only after CoreLifecycle acquired the process lock.
+    codex_journal = CodexJournal(store, recover=False)
     codex_manager = CodexTaskManager(on_finished=archive_codex_task, journal=codex_journal)
     try:
         codex_manager.configured_executable()
@@ -369,8 +360,11 @@ def create_app(
     async def application_lifespan(_application: FastAPI):
         core_lifecycle.start()
         try:
+            # Recover only after acquiring the exclusive Core process lock.
+            codex_journal.recover_abandoned()
             yield
         finally:
+            codex_manager.shutdown()
             core_lifecycle.stop()
             if claim_latch_process is not None:
                 claim_latch_process.stop()

@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 6
 
 
 def apply_migrations(connection: sqlite3.Connection) -> None:
@@ -199,6 +198,57 @@ def apply_migrations(connection: sqlite3.Connection) -> None:
         connection.execute(
             "INSERT INTO schema_migrations(version, applied_at) "
             "VALUES (5, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        )
+        current = 5
+    if current < 6:
+        # Project folders are authoritative scope boundaries, never inferred from titles.
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS chat_workspaces (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN ('personal', 'team')),
+                owner_user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS chat_workspace_members (
+                workspace_id TEXT NOT NULL REFERENCES chat_workspaces(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('owner', 'editor', 'viewer')),
+                PRIMARY KEY (workspace_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_workspace_members_user
+                ON chat_workspace_members(user_id, workspace_id);
+            CREATE TABLE IF NOT EXISTS chat_projects (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL REFERENCES chat_workspaces(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_projects_workspace
+                ON chat_projects(workspace_id, id);
+            CREATE TABLE IF NOT EXISTS chat_conversation_links (
+                conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+                project_id TEXT NOT NULL REFERENCES chat_projects(id) ON DELETE CASCADE,
+                linked_by_user_id TEXT NOT NULL,
+                linked_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_links_project
+                ON chat_conversation_links(project_id, conversation_id);
+            CREATE TABLE IF NOT EXISTS chat_project_memories (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES chat_projects(id) ON DELETE CASCADE,
+                content TEXT NOT NULL,
+                created_by_user_id TEXT NOT NULL,
+                source_message_id TEXT,
+                status TEXT NOT NULL CHECK(status IN ('active','revoked')),
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_memories_project_status
+                ON chat_project_memories(project_id, status, created_at DESC);
+        """)
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) "
+            "VALUES (6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
         )
     # Keep the idempotency guard self-healing even if an operator restored a
     # database with the schema marker intact but the index missing.

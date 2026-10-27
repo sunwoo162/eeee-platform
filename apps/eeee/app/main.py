@@ -37,6 +37,8 @@ from app.conversations.context import ConversationContextBuilder
 from app.conversations.providers import BuiltinConversationProvider, build_conversation_provider
 from app.conversations.service import ConversationProvider, ConversationService
 from app.conversations.store import ConversationStore
+from app.chat_scopes.store import WorkspaceStore
+from app.chat_scopes.routes import build_workspace_router
 from app.contracts import LocalEventBus
 from app.core.lifecycle import CoreLifecycle
 from app.core.lock import ProcessLock
@@ -135,10 +137,12 @@ def create_app(
         )
         selected_conversation_provider = provider_selection.provider
     conversation_store = ConversationStore(store)
+    workspace_store = WorkspaceStore(store)
     conversation_context = ConversationContextBuilder(
         conversation_store,
         max_context_tokens=app_settings.ollama_context_tokens,
     )
+    conversation_context.workspace_store = workspace_store
     conversation_service = ConversationService(
         conversation_store,
         provider=selected_conversation_provider,
@@ -296,6 +300,7 @@ def create_app(
     application.state.chatgpt_web_runtime = web_runtime
     application.state.conversation_provider_selection = provider_selection
     application.state.conversation_store = conversation_store
+    application.state.workspace_store = workspace_store
     application.state.conversation_service = conversation_service
     application.state.core_lifecycle = core_lifecycle
     application.state.capabilities = capability_manager
@@ -478,6 +483,7 @@ def create_app(
             schema_version=1,
         )
     )
+    application.include_router(build_workspace_router(workspace_store, conversation_store))
     application.include_router(build_project_view_router(project_view))
     application.include_router(
         build_assistant_router(

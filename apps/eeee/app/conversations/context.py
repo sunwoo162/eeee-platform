@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.conversations.models import ConversationMessage, MessageRole, MessageStatus
 from app.conversations.store import ConversationStore
@@ -20,6 +20,7 @@ class ConversationContextBuilder:
             raise ValueError("max_context_tokens must be positive")
         self.store = store
         self.memory_store = memory_store
+        self.workspace_store = None
         self.max_context_tokens = max_context_tokens
 
     def build(
@@ -30,7 +31,14 @@ class ConversationContextBuilder:
         # without requiring a tokenizer in the Core package.
         max_characters = self.max_context_tokens * 4
         memory_items: list[dict[str, str]] = []
-        if self.memory_store is not None:
+        project = (
+            self.workspace_store.project_for_conversation(conversation_id, user_id=user_id)
+            if self.workspace_store is not None else None
+        )
+        # Personal/global memories do not silently enter a team conversation.
+        # Explicit sharing requires a separate, reviewable project memory note.
+        team_project = project is not None and project.get("workspace_kind") == "team"
+        if self.memory_store is not None and not team_project:
             if memory_ids:
                 memories = []
                 for memory_id in memory_ids:
@@ -43,7 +51,10 @@ class ConversationContextBuilder:
             memory_budget = max_characters // 2
             memory_used = 0
             for memory in memories:
-                if not _is_usable_memory(memory, conversation_id, automatic=not memory_ids):
+                if not _is_usable_memory(
+                    memory, conversation_id, project_id=(project or {}).get("id"),
+                    automatic=not memory_ids,
+                ):
                     continue
                 item = {
                     "role": "system",
@@ -63,6 +74,21 @@ class ConversationContextBuilder:
                     continue
                 memory_items.append(item)
                 memory_used += size
+
+        # Project membership, not chat title, determines which sibling chats and
+        # reviewed project notes are visible. Reserve most of the context for
+        # the active conversation so folders cannot drown out the user's turn.
+        if self.workspace_store is not None:
+            project_budget = max_characters // 4
+            project_used = 0
+            for item in self.workspace_store.context_items(
+                conversation_id, user_id=user_id
+            ):
+                size = len(item["content"])
+                if size + project_used > project_budget:
+                    continue
+                memory_items.append(item)
+                project_used += size
 
         transcript: list[dict[str, str]] = []
         used = sum(len(item["content"]) for item in memory_items)
@@ -99,15 +125,26 @@ def _is_usable_context_message(message: ConversationMessage) -> bool:
     return message.status in {MessageStatus.PENDING, MessageStatus.COMPLETED}
 
 
-def _is_usable_memory(memory, conversation_id: str, *, automatic: bool) -> bool:
+def _is_usable_memory(
+    memory, conversation_id: str, *, project_id: str | None = None,
+    automatic: bool,
+) -> bool:
     if memory.status is not MemoryStatus.ACTIVE:
         return False
     if memory.expires_at is not None:
         expires_at = memory.expires_at
         if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at <= datetime.now(timezone.utc):
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at <= datetime.now(UTC):
             return False
+    # Project-scoped facts must not escape their project, even when explicitly
+    # requested by memory ID. Unscoped project outcomes are excluded from
+    # folder conversations until they are curated into that folder.
+    declared_project = memory.scope.get("projectId") or memory.scope.get("project_id")
+    if declared_project is not None and declared_project != project_id:
+        return False
+    if project_id is not None and declared_project is None and memory.kind != "user_preference":
+        return False
     if automatic:
         scoped_conversation = memory.scope.get("conversationId")
         if scoped_conversation is not None and scoped_conversation != conversation_id:

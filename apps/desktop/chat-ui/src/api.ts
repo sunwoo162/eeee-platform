@@ -5,6 +5,7 @@ export type Message = {id:string;role:"user"|"assistant"|"tool"|"system";content
 export type ProjectMemory = {id:string;project_id:string;content:string;status:string};
 export type ServerEvent = {eventId:string;requestId:string;sequence:number;eventType:string;payload:Record<string,unknown>};
 export type RuntimeStatus = {conversationProvider?:{name:string;status:string;model?:string|null};providers?:Record<string,{status:string}>};
+export type ProviderOption = {id:string;label:string;type:string;available:boolean;model:string|null};
 
 export async function request<T>(path:string, init:RequestInit = {}):Promise<T> {
   const headers: Record<string,string> = {"Content-Type":"application/json", ...(init.headers as Record<string,string>||{})};

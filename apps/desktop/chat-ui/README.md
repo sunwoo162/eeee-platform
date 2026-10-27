@@ -28,11 +28,27 @@ terminal. Vite proxies `/v1` to the FastAPI server and serves at /chat/.
 - Persistent conversation transcript, SSE updates, server-side request cancellation
 - Read, add, and revoke approved project memory from the side panel
 - Same-origin /v1 API; no third-party keys exposed to frontend
-- Model status shown as read-only; the Auto label is not yet a selectable provider.
+- Model selector: Auto, GPT, Claude, Personal LLM and Ollama; unavailable providers are shown but disabled.
+- A manually selected model is stored on each turn. Auto uses an initial deterministic rule,
+  not a measured cost-optimizing router.
+
+## Connecting GPT and Claude
+
+Configure server-side environment variables (not in browser code or Git):
+```powershell
+$env:OPENAI_API_KEY = "<your OpenAI API key>"
+$env:ANTHROPIC_API_KEY = "<your Anthropic API key>"
+# Optional API model overrides:
+$env:GLEAVE_OPENAI_MODEL = "gpt-6.1-sol"
+$env:GLEAVE_CLAUDE_MODEL = "claude-sonnet-5-5"
+```
+These are separately billed API connections, not a reuse of consumer chat subscriptions.
+No network inference is made until a conversation turn is submitted.
 
 ## Not implemented yet
 
-GPT/Claude/Codex manual selection, real model routing, conversation imports, cloud
+Codex app-server execution and model selection, empirical cost-based smart routing,
+conversation imports, cloud
 team authentication, file/terminal/browser agent panels, packaging. Do not
 describe them as supported until tested. The local team folder schema is *not*
 an authenticated multi-user sharing feature.

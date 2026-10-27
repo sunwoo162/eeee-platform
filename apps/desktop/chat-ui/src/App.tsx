@@ -5,7 +5,7 @@ import {
   PanelRight, Plus, Search, Settings2, Sparkles, SquarePen, Trash2, Users, UserRound,
   X
 } from "lucide-react";
-import { Conversation, Message, Project, ProjectMemory, RuntimeStatus, ServerEvent, Workspace, del, get, post, put } from "./api";
+import { Conversation, Message, Project, ProjectMemory, ProviderOption, RuntimeStatus, ServerEvent, Workspace, del, get, post, put } from "./api";
 
 type EditKind = {kind:"workspace"|"project"; workspaceId?:string}|null;
 const terminal = new Set(["message.completed","request.failed","request.cancelled"]);
@@ -20,6 +20,8 @@ export default function App() {
   const [selectedChat,setSelectedChat] = useState<Conversation|null>(null);
   const [messages,setMessages] = useState<Message[]>([]);
   const [runtime,setRuntime] = useState<RuntimeStatus|null>(null);
+  const [providerMode,setProviderMode] = useState("auto");
+  const [providers,setProviders] = useState<ProviderOption[]>([]);
   const [error,setError] = useState("");
   const [busy,setBusy] = useState(false);
   const [draft,setDraft] = useState("");
@@ -58,7 +60,11 @@ export default function App() {
   }
 
   useEffect(()=>{
-    void Promise.all([refreshTree(),get<RuntimeStatus>("/v1/runtime").then(setRuntime)])
+    void Promise.all([
+      refreshTree(),
+      get<RuntimeStatus>("/v1/runtime").then(setRuntime),
+      get<{items:ProviderOption[]}>("/v1/providers").then(r=>setProviders(r.items)),
+    ])
       .catch(e=>setError(e instanceof Error?e.message:String(e)));
     return ()=>sourceRef.current?.close();
   },[]);
@@ -68,6 +74,7 @@ export default function App() {
     sourceRef.current?.close();
     currentChatId.current=chat.id;
     setSelectedChat(chat);
+    setProviderMode(sessionStorage.getItem("gleave-provider:"+chat.id)||"auto");
     setSelectedProject(project);
     setMobileSidebar(false);
     setBusy(false);
@@ -152,7 +159,7 @@ export default function App() {
     setMessages(items=>[...items,{id:`local-${crypto.randomUUID()}`,role:"user",content:message,status:"completed"}]);
     try {
       const result=await post<{requestId:string}>(`/v1/conversations/${id}/turns`,{
-        clientMessageId:crypto.randomUUID(),content:message
+        clientMessageId:crypto.randomUUID(),content:message,provider:providerMode
       });
       sourceRef.current?.close();
       activeRequestRef.current=result.requestId;
@@ -212,7 +219,11 @@ export default function App() {
   const linked=new Set(Object.values(projectChats).flat().map(c=>c.id));
   const unassigned=allChats.filter(c=>!linked.has(c.id));
   const currentProvider=runtime?.conversationProvider;
-  const providerLabel=({personal_llm:"Personal LLM",chatgpt_web:"GPT Web",ollama:"Ollama",builtin:"기본 응답"} as Record<string,string>)[currentProvider?.name||""]||currentProvider?.name||"연결 확인";
+  const providerLabel=providers.find(item=>item.id===providerMode)?.label||"Auto";
+  function chooseProvider(value:string){
+    setProviderMode(value);
+    if(selectedChat)sessionStorage.setItem("gleave-provider:"+selectedChat.id,value);
+  }
 
   return <div className="shell">
     <aside className={`sidebar ${mobileSidebar?"sidebar-open":""}`}>
@@ -264,7 +275,12 @@ export default function App() {
         <div className="breadcrumbs"><span>Gleave</span>{selectedProject&&<><ChevronRight size={15}/><span>{selectedProject.name}</span></>}
           {selectedChat&&<><ChevronRight size={15}/><strong>{selectedChat.title}</strong></>}</div>
         <div className="top-actions">
-          <div className="model-pill" title="현재 EEEE가 사용하는 모델입니다. 수동 모델 선택은 후속 단계에서 연결됩니다."><Sparkles size={15}/><span>{providerLabel}</span></div>
+          <div className="model-pill" title="모델을 직접 선택하거나 Auto로 돌아갈 수 있습니다."><Sparkles size={15}/>
+            <select aria-label="AI 모델 선택" value={providerMode} onChange={e=>chooseProvider(e.target.value)}>
+              {providers.length ? providers.map(option=><option key={option.id} value={option.id} disabled={!option.available}>
+                {option.label}{option.available?"":" (연결 필요)"}
+              </option>):<option value="auto">Auto</option>}
+            </select><ChevronDown size={13}/></div>
           <button className="icon-button" title="프로젝트 기억" onClick={()=>{setMemoryOpen(v=>!v);void loadMemories();}} disabled={!selectedProject}><BrainCircuit size={18}/></button>
           <button className="icon-button" aria-label="채팅 만들기" title="새 채팅" onClick={()=>void createChat()}><SquarePen size={17}/></button>
         </div>

@@ -67,3 +67,7 @@
 @media(max-width:1000px){.sidebar{width:244px}.memory-panel{width:265px}.composer-area{padding:8px 19px 15px}}
 @media(max-width:770px){.mobile-only{display:grid}.sidebar{position:fixed;z-index:15;top:0;bottom:0;left:0;box-shadow:0 0 30px #26354e16;transform:translateX(-105%);transition:transform .22s;width:282px}.sidebar.sidebar-open{transform:translateX(0)}.brand .mobile-only{margin-left:auto}.memory-panel{position:fixed;right:0;top:0;bottom:0;z-index:15;box-shadow:-8px 0 35px #25354b15;width:min(330px,92vw)}.topbar{padding:0 13px;height:61px}.context-line{padding:0 15px}.model-pill{padding:8px 9px}.composer-area{padding:8px 13px 15px}.welcome h1{font-size:23px}.messages{padding:27px 18px 10px}.context-provider{max-width:42%}}
 @media(max-width:480px){.breadcrumbs{font-size:11px;gap:5px}.top-actions{gap:1px}.top-actions>.icon-button:last-child{display:none}.quick-asks{flex-direction:column;width:100%}.quick-asks button{justify-content:space-between}.model-pill{font-size:11px}}
+
+.model-pill select{appearance:none;background:none;border:0;outline:0;font-size:12px;color:#536780;font-weight:650;min-width:40px;max-width:160px;cursor:pointer}
+.model-pill select:focus-visible{outline:2px solid #7e9de2;outline-offset:3px;border-radius:4px}
+.model-pill option{color:#31465e;background:white}

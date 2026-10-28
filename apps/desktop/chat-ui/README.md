@@ -196,3 +196,32 @@ separately for each provider. Run from `apps/eeee`:
 `verdict`, and `relatedMemoryIds`. The evaluator performs **no model calls**
 and scores nothing unless predictions are provided. Automated fixtures only
 verify the scoring implementation, not actual GPT or Claude quality.
+
+## Resolving conflicting project memories (P5)
+
+When AI review flags a candidate as a possible **conflict** with an approved
+project memory, expand the suggested comparison, acknowledge the risk and
+choose **기존 기억을 새 결정으로 교체**. Gleave shows both versions and asks
+for explicit final confirmation before performing any change.
+
+The backend requires the original owner-visible import message, previously
+recorded conflict analysis, a referenced active target memory, an unchanged
+project-memory snapshot digest, an exact expected target version, no duplicate
+active note, and an explicit acknowledgement. The existing memory ID is
+preserved; the new source message and old/new contents are retained in its
+revision history. One atomic transaction records replacement and marks the
+candidate reviewed. This is never triggered by an AI answer alone.
+
+## Opt-in GPT/Claude memory-review benchmark
+
+Gleave also has an optional CLI evaluation runner using the same system
+prompt as the product's memory reviewer. Its default command is a **dry run**,
+without any API request:
+
+python -m app.conversation_imports.evaluation_runner --gold ../../docs/architecture/memory-review-benchmark.json --provider gpt
+
+From apps/eeee, the user must explicitly select a provider, an output file,
+--execute and --confirm-api-charges before any real API request is made.
+At most 8 synthetic cases are sent in one run. Never run this automatically
+as part of CI. Predictions can be scored with evaluation.py. No real GPT or
+Claude performance numbers or API costs are claimed until actual runs exist.

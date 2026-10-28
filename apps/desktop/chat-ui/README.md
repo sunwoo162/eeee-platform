@@ -145,3 +145,31 @@ The upload endpoint is local-only and has an in-process staging cache; this
 is not resumable chunked transfer. Unsupported export formats, media and
 embedded attachments remain excluded. A real-model memory extraction and
 approval-quality evaluation pipeline have not yet been built.
+
+## AI-assisted project-memory review (P4 extension)
+
+Open the project memory panel after importing transcripts. Gleave first
+lists user-authored project-decision candidates using **local heuristics**,
+without sending anything to an AI service. To check a specific candidate for
+potential duplication or contradiction, explicitly choose an available
+GPT/Claude/local Ollama model and acknowledge that the candidate text plus
+up to 12 approved project notes will be sent to the selected provider.
+GPT/Claude can process this information in the cloud and incur separate API
+charges; no model is called merely by viewing the memory panel.
+
+The model returns a structured, unverified proposal with `new`,
+`duplicate`, `conflict`, or `uncertain` verdict, a suggested rewrite,
+reason and validated references to existing notes. Gleave saves the review
+for the candidate, but **does not auto-save the suggestion as a memory**.
+A human can revise it and explicitly approve or dismiss. Similarity judgments
+may be incorrect. Warning verdicts require a separate acknowledgement at both
+the frontend and backend before approval. The backend blocks exact normalized
+duplicates, rejects obvious secret patterns and invalidates stale analyses
+when previously approved notes change.
+
+**Current limitations:** This is on-demand AI review, not a trained memory
+extractor scanning all conversation history autonomously. Model/API connection
+and billing must be configured by the user, and real-provider quality has not
+been proven by unit tests. Imported assistant/tool messages are not promoted
+to memories. Existing local user-header identity is not a production
+multi-user authentication mechanism.

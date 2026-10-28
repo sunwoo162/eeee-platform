@@ -140,3 +140,17 @@
 .candidate-buttons button{display:flex;align-items:center;gap:4px;border:1px solid #dbe3f0;border-radius:7px;background:#f8fafc;color:#667895;font-size:10px;padding:7px 9px}
 .candidate-buttons button:last-child{background:#416dd4;color:#fff;border-color:#416dd4}
 .candidate-buttons button:disabled{opacity:.5}
+
+.candidate-ai-controls{margin:12px 0;padding:10px;border:1px solid #e1e9f6;background:#f8faff;border-radius:10px}
+.candidate-ai-controls>label:first-child{display:block;color:#526d96;font-size:11px;font-weight:650;margin-bottom:6px}
+.candidate-ai-controls select{width:100%;border-radius:7px;border:1px solid #cfdbec;background:#fff;color:#415774;padding:7px 9px;font-size:11px}
+.candidate-ai-button{display:flex;align-items:center;justify-content:center;gap:6px;border:1px solid #c9d8f0;border-radius:7px;background:#eef4ff;color:#3968b1;padding:8px 10px;width:100%;font-size:11px;margin:10px 0}
+.candidate-ai-button:disabled{opacity:.5;cursor:default}
+.candidate-consent{display:flex;align-items:flex-start;gap:7px;color:#63758d;font-size:10px;line-height:1.55;margin-top:10px}
+.candidate-consent input{margin-top:2px;flex:none}
+.candidate-risk{background:#fff5e9;border:1px solid #eed9bd;border-radius:8px;padding:9px;color:#855c34}
+.candidate-analysis{padding:10px;border-radius:8px;background:#edf6f7;border:1px solid #cfe3e8;margin-top:10px}
+.candidate-analysis.warning{background:#fff5ec;border-color:#edcfab}
+.candidate-analysis p{font-size:11px;line-height:1.6;color:#52627b;overflow-wrap:anywhere}
+.candidate-related{padding:7px;background:#fff;border-radius:7px;margin:6px 0}
+.candidate-related strong{font-size:10px;color:#8b6038}

@@ -1,21 +1,27 @@
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from collections.abc import Mapping
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.agent.local_runtime import LocalAgentRuntime, LocalConversationRuntime, OllamaBackend
-from app.agent.local_model_discovery import discover_fast_local_model, discover_local_model
+from app.activity.store import ActivityLedger
+from app.agent.conversation_runtime import ConversationProviderAgentRuntime
+from app.agent.local_model_discovery import (
+    discover_fast_local_model,
+    discover_local_model,
+)
+from app.agent.local_runtime import (
+    LocalAgentRuntime,
+    LocalConversationRuntime,
+    OllamaBackend,
+)
 from app.agent.ollama_runtime import OllamaRuntime
 from app.agent.personal_llm_runtime import PersonalLlmRuntime
-from app.agent.conversation_runtime import ConversationProviderAgentRuntime
 from app.agent.protocol import AgentRuntime
-from app.activity.store import ActivityLedger
-from app.agent.lazy_runtime import LazyAgentRuntime
-from app.api.service import ApiFlowService
+from app.api.conversation_routes import build_conversation_router
 from app.api.routes import (
     build_api_router,
     build_assistant_router,
@@ -26,35 +32,36 @@ from app.api.routes import (
     build_project_view_router,
     build_router,
 )
-from app.api.conversation_routes import build_conversation_router
+from app.api.service import ApiFlowService
+from app.assistant.background import BackgroundExecutionSupervisor
 from app.assistant.registry import build_default_registry
 from app.assistant.router import CapabilityRouter
-from app.assistant.background import BackgroundExecutionSupervisor
 from app.assistant.service import AssistantService
 from app.capabilities.registry import build_core_capability_manager
+from app.chat_scopes.routes import build_workspace_router
+from app.chat_scopes.store import WorkspaceStore
+from app.codex_integration.journal import CodexJournal
+from app.codex_integration.routes import build_codex_router
+from app.codex_integration.runtime import CodexTaskManager, CodexUnavailable
 from app.config import Settings
+from app.contracts import LocalEventBus
+from app.conversation_imports.routes import build_import_router
+from app.conversation_imports.service import ConversationImportService
+from app.conversation_imports.staging import ImportStaging
 from app.conversations.context import ConversationContextBuilder
 from app.conversations.models import MessageRole, MessageStatus
+from app.conversations.multimodel import ProviderHub
 from app.conversations.providers import (
     BuiltinConversationProvider,
     ChatGptWebConversationProvider,
     PersonalLlmConversationProvider,
     build_conversation_provider,
 )
-from app.conversations.multimodel import ProviderHub
 from app.conversations.service import ConversationProvider, ConversationService
 from app.conversations.store import ConversationStore
-from app.chat_scopes.store import WorkspaceStore
-from app.conversation_imports.service import ConversationImportService
-from app.conversation_imports.routes import build_import_router
-from app.chat_scopes.routes import build_workspace_router
-from app.codex_integration.routes import build_codex_router
-from app.codex_integration.runtime import CodexTaskManager, CodexUnavailable
-from app.codex_integration.journal import CodexJournal
-from app.contracts import LocalEventBus
+from app.coordinator.service import Coordinator
 from app.core.lifecycle import CoreLifecycle
 from app.core.lock import ProcessLock
-from app.coordinator.service import Coordinator
 from app.design.references import DesignService
 from app.domain.errors import ApprovalError
 from app.execution.runner import WorkspaceCommandRunner
@@ -66,18 +73,21 @@ from app.kernel.service import KernelService
 from app.mobile.bridge import MobileBridge
 from app.oss.github_client import GitHubClient
 from app.oss.researcher import GitHubResearcher
-from app.project_runtime.provisioner import ProjectProvisioner
-from app.project_runtime.iseol_bridge import IseolPlanBridge
 from app.planning.service import PlanningService
-from app.project_runtime.connectors import build_default_connectors
-from app.project_runtime.documents import PluginPlatformNotionAdapter, ProjectDocumentService
-from app.project_runtime.evidence import ProjectEvidenceService
-from app.project_view.service import ProjectViewService
 from app.plugins.host import PluginHost
 from app.plugins.notion_connector import NotionConnector
 from app.plugins.oauth import HttpOAuthTransport, OAuthBroker, OAuthProviderConfig
 from app.plugins.platform import PluginPlatformService
 from app.plugins.providers import build_provider_connectors, load_provider_configs
+from app.project_runtime.connectors import build_default_connectors
+from app.project_runtime.documents import (
+    PluginPlatformNotionAdapter,
+    ProjectDocumentService,
+)
+from app.project_runtime.evidence import ProjectEvidenceService
+from app.project_runtime.iseol_bridge import IseolPlanBridge
+from app.project_runtime.provisioner import ProjectProvisioner
+from app.project_view.service import ProjectViewService
 from app.storage.sqlite import SQLiteStore
 from app.trust.gate import TrustGate
 from app.trust.pipeline import TrustPipeline
@@ -95,7 +105,10 @@ def create_app(
 ) -> FastAPI:
     from app.agent.chatgpt_web_agent_runtime import ChatGptWebAgentRuntime
     from app.agent.chatgpt_web_runtime import ChatGptWebRuntime
-    from app.agent.hybrid_runtime import FastLocalConversationRuntime, HybridAssistantRuntime
+    from app.agent.hybrid_runtime import (
+        FastLocalConversationRuntime,
+        HybridAssistantRuntime,
+    )
 
     app_settings = settings or Settings()
     configured_provider_configs = load_provider_configs(
@@ -367,6 +380,7 @@ def create_app(
             yield
         finally:
             codex_manager.shutdown()
+            import_staging.shutdown()
             core_lifecycle.stop()
             if claim_latch_process is not None:
                 claim_latch_process.stop()
@@ -541,7 +555,12 @@ def create_app(
         )
     )
     application.include_router(build_workspace_router(workspace_store, conversation_store))
-    application.include_router(build_import_router(ConversationImportService(conversation_store, workspace_store)))
+    import_staging = ImportStaging()
+    application.state.import_staging = import_staging
+    application.include_router(build_import_router(
+        ConversationImportService(conversation_store, workspace_store),
+        staging=import_staging,
+    ))
     application.include_router(
         build_codex_router(
             workspace_store, conversation_store, codex_manager,

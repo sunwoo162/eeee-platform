@@ -31,10 +31,13 @@ class ImportedChat:
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def parse_export(provider: str, content: str) -> list[ImportedChat]:
+def parse_export(
+    provider: str, content: str, *, max_bytes: int = MAX_BYTES,
+    max_conversations: int = MAX_CONVERSATIONS,
+) -> list[ImportedChat]:
     if provider not in {"chatgpt", "claude", "codex"}:
         raise ValueError("지원하지 않는 내보내기 형식입니다.")
-    if not content or len(content.encode("utf-8")) > MAX_BYTES:
+    if not content or len(content.encode("utf-8")) > max_bytes:
         raise ValueError("파일 크기는 8MB 이하만 지원합니다. 큰 파일은 나누어 주세요.")
     try:
         if provider == "codex":
@@ -44,7 +47,7 @@ def parse_export(provider: str, content: str) -> list[ImportedChat]:
             parsed = _chatgpt(value) if provider == "chatgpt" else _claude(value)
     except (TypeError, KeyError, json.JSONDecodeError) as exc:
         raise ValueError("내보내기 파일을 해석할 수 없습니다. 형식을 확인해 주세요.") from exc
-    if len(parsed) > MAX_CONVERSATIONS:
+    if len(parsed) > max_conversations:
         raise ValueError("한 번에 최대 200개 대화까지 읽을 수 있습니다. 파일을 나누어 주세요.")
     return [chat for chat in parsed if chat.messages]
 

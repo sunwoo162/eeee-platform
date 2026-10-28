@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-LATEST_SCHEMA_VERSION = 10
+LATEST_SCHEMA_VERSION = 11
 
 
 def apply_migrations(connection: sqlite3.Connection) -> None:
@@ -320,6 +320,22 @@ def apply_migrations(connection: sqlite3.Connection) -> None:
         connection.execute(
             "INSERT INTO schema_migrations(version, applied_at) "
             "VALUES (10, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        )
+    if current < 11:
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS chat_memory_reviews (
+                project_id TEXT NOT NULL REFERENCES chat_projects(id) ON DELETE CASCADE,
+                source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                reviewed_by TEXT NOT NULL,
+                decision TEXT NOT NULL CHECK(decision IN ('approved','dismissed')),
+                reviewed_at TEXT NOT NULL,
+                memory_id TEXT REFERENCES chat_project_memories(id) ON DELETE SET NULL,
+                PRIMARY KEY(project_id,source_message_id)
+            );
+        """)
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) "
+            "VALUES (11, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
         )
     # Keep the idempotency guard self-healing even if an operator restored a
     # database with the schema marker intact but the index missing.

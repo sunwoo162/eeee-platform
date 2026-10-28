@@ -5,6 +5,8 @@ itself; approval and dismissal are transactional human-review decisions.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -24,6 +26,16 @@ _SECRETS = re.compile(
     r"-----BEGIN|\b\d{3}-\d{2}-\d{4}\b|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})",
     re.IGNORECASE,
 )
+
+
+def memory_set_digest(notes: list[dict]) -> str:
+    normalized = sorted(
+        [(note["id"], note["content"]) for note in notes],
+        key=lambda entry: entry[0],
+    )
+    return hashlib.sha256(
+        json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 class MemoryCandidates:
@@ -72,7 +84,7 @@ class MemoryCandidates:
 
     def review(
         self, project_id: str, message_id: str, *, user_id: str,
-        decision: str, content: str | None = None,
+        decision: str, content: str | None = None, acknowledged_risk: bool = False,
     ) -> dict:
         if decision not in {"approve", "dismiss"}:
             raise ValueError("Review decision must be approve or dismiss")
@@ -80,6 +92,8 @@ class MemoryCandidates:
             not content or not content.strip() or len(content.strip()) > 2000
         ):
             raise ValueError("Approved memory must contain 1-2000 characters")
+        if decision == "approve" and _SECRETS.search(content or ""):
+            raise ValueError("Approved memory appears to contain sensitive data")
         with self.db._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             role = self.projects._project_role(conn, project_id, user_id)
@@ -106,6 +120,38 @@ class MemoryCandidates:
             ).fetchone()
             if reviewed or approved:
                 raise ValueError("This source has already been reviewed")
+            if decision == "approve":
+                # Exact duplicates remain disallowed even when a model says new.
+                normalized = re.sub(r"\s+", "", content or "").casefold()
+                existing_texts = conn.execute(
+                    "SELECT content FROM chat_project_memories "
+                    "WHERE project_id=? AND status='active'",
+                    (project_id,),
+                ).fetchall()
+                if any(
+                    re.sub(r"\s+", "", row["content"]).casefold() == normalized
+                    for row in existing_texts
+                ):
+                    raise ValueError("Identical approved memory already exists")
+                analysis = conn.execute(
+                    "SELECT verdict,analysis_json FROM chat_memory_analyses "
+                    "WHERE project_id=? AND source_message_id=? AND analyzed_by=?",
+                    (project_id, message_id, user_id),
+                ).fetchone()
+                if analysis is not None:
+                    report = json.loads(analysis["analysis_json"])
+                    approved_notes = conn.execute(
+                        "SELECT id,content FROM chat_project_memories "
+                        "WHERE project_id=? AND status='active'",
+                        (project_id,),
+                    ).fetchall()
+                    if report.get("memorySetDigest") != memory_set_digest(approved_notes):
+                        raise ValueError("Approved memories changed. Re-run analysis before approval")
+                    if (
+                        analysis["verdict"] in {"conflict", "duplicate"}
+                        and not acknowledged_risk
+                    ):
+                        raise ValueError("Confirm the flagged conflict or duplicate before approval")
             now = datetime.now(UTC).isoformat()
             memory_id = None
             if decision == "approve":

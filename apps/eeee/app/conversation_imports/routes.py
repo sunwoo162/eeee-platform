@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.routes import _plugin_user_id
+from app.conversation_imports.analyzer import MemoryAnalysisError, MemoryAnalyzer
 from app.conversation_imports.candidates import MemoryCandidates
 from app.conversation_imports.parser import parse_export
 from app.conversation_imports.service import ConversationImportService
@@ -23,6 +24,12 @@ class ExportPayload(BaseModel):
 class ReviewPayload(BaseModel):
     decision: str
     content: str | None = Field(default=None, max_length=2000)
+    acknowledged_risk: bool = Field(default=False, alias="acknowledgedRisk")
+
+
+class AnalyzePayload(BaseModel):
+    provider: str
+    consent: bool = False
 
 
 class StagedCommitPayload(BaseModel):
@@ -37,9 +44,11 @@ class CommitPayload(ExportPayload):
 
 def build_import_router(
     service: ConversationImportService, *, staging: ImportStaging | None = None,
+    provider_hub=None,
 ) -> APIRouter:
     staging = staging or ImportStaging()
     candidates = MemoryCandidates(service.projects)
+    analyzer = MemoryAnalyzer(candidates, provider_hub) if provider_hub is not None else None
     router = APIRouter(prefix="/v1/imports")
 
     def principal(request: Request) -> str:
@@ -143,9 +152,33 @@ def build_import_router(
     def memory_candidates(project_id: str, request: Request) -> dict:
         user = principal(request)
         try:
-            return {"items": candidates.list(project_id, user_id=user)}
+            items = candidates.list(project_id, user_id=user)
+            if analyzer is not None:
+                previous = analyzer.previous(project_id, user_id=user)
+                for item in items:
+                    item["analysis"] = previous.get(item["sourceMessageId"])
+            return {"items": items}
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/projects/{project_id}/memory-candidates/{message_id}/analyze")
+    def analyze_candidate(
+        project_id: str, message_id: str, body: AnalyzePayload, request: Request,
+    ) -> dict:
+        if analyzer is None:
+            raise HTTPException(status_code=503, detail="AI analysis is unavailable")
+        user = principal(request)
+        try:
+            return analyzer.analyze(
+                project_id, message_id, user_id=user,
+                provider=body.provider, consent=body.consent,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (ValueError, MemoryAnalysisError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/projects/{project_id}/memory-candidates/{message_id}/review")
     def review_candidate(
@@ -156,6 +189,7 @@ def build_import_router(
             return candidates.review(
                 project_id, message_id, user_id=user,
                 decision=body.decision, content=body.content,
+                acknowledged_risk=body.acknowledged_risk,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

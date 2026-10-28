@@ -560,6 +560,7 @@ def create_app(
     application.include_router(build_import_router(
         ConversationImportService(conversation_store, workspace_store),
         staging=import_staging,
+        provider_hub=provider_hub,
     ))
     application.include_router(
         build_codex_router(

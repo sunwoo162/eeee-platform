@@ -41,7 +41,7 @@ jobs:
         working-directory: apps/eeee
         shell: pwsh
         run: |
-          python -m pytest -q tests/chat_scopes tests/conversations tests/api/test_workspace_routes.py tests/api/test_chat_frontend.py tests/api/test_conversation_routes.py tests/api/test_codex_routes.py tests/api/test_codex_protocol.py tests/api/test_codex_journal.py tests/api/test_conversation_imports.py tests/api/test_import_staging_and_candidates.py tests/api/test_memory_ai_review.py
+          python -m pytest -q tests/chat_scopes tests/conversations tests/api/test_workspace_routes.py tests/api/test_chat_frontend.py tests/api/test_conversation_routes.py tests/api/test_codex_routes.py tests/api/test_codex_protocol.py tests/api/test_codex_journal.py tests/api/test_conversation_imports.py tests/api/test_import_staging_and_candidates.py tests/api/test_memory_ai_review.py tests/api/test_memory_revisions.py tests/api/test_memory_eval.py
       - name: Build and test ISEOL contracts, QA, and organization
         working-directory: packages/iseol
         shell: pwsh

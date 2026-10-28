@@ -67,7 +67,7 @@ def run_benchmark(
                 raw=match.group(1)
             result=json.loads(raw)
             if not isinstance(result,dict):
-                raise ValueError("Model response must be a JSON object")
+                raise TypeError("Model response must be a JSON object")
             verdict=result.get("verdict")
             ids=result.get("relatedMemoryIds")
             suggested=result.get("suggestedText")

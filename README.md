@@ -1,5 +1,7 @@
 # Gleave
 
+For development continuity across ChatGPT/Codex conversations, read [`AGENTS.md`](AGENTS.md) and [`docs/DEVELOPMENT_HANDOFF.md`](docs/DEVELOPMENT_HANDOFF.md), then run `pwsh -NoProfile -File scripts/gleave-context.ps1` in the local checkout before editing. The script is read-only and reports live Git state.
+
 `Gleave` is one local-first open-source personal assistant platform combining:
 
 - EEEE: the top-level assistant that understands context and chooses the best capability or connector.

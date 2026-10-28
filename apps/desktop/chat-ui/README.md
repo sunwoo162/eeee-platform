@@ -116,8 +116,32 @@ chat and explicitly select "Approve this message as project memory" to create
 a traceable approved note. Continuing an imported chat with a cloud model
 may send the chosen conversation to that model; importing alone is local.
 
-**Current limits:** max 8 MB input, 200 readable conversations per file, 20
-selected per import action, up to 500 imported text messages per conversation.
-Extract conversations.json from official export ZIP archives before selecting
-it. Formats change; unsupported branches, attachments, images and tool output
-are deliberately omitted. Large exports need manual splitting in this MVP.
+**ZIP import (P4 extension):** Upload your ChatGPT/Claude official export
+ZIP directly or select a text JSON/JSONL. The Gleave local Core accepts up to
+64 MB per upload; ZIP entries are never extracted to disk. Each text
+transcript is bounded to 48 MB after inflation. Entries with unsafe names,
+oversized content or encryption are rejected. The server supports at most
+1,000 readable conversations in the uploaded data, shows paginated previews,
+and saves only up to 20 selected conversations at once. Original dedup IDs are
+preserved. Each conversation is limited to 500 text messages, with 15,000
+characters per message; longer records fail rather than being silently cut.
+
+Previews are volatile and expire after 30 minutes or on restart; no original
+archive is persistently stored. Parsed previews occupy memory temporarily,
+with at most 3 per local user. For ZIP files, ChatGPT/Claude must have one
+`conversations.json` entry. Codex ZIPs may contain multiple .jsonl sessions.
+
+**Memory candidates (P4 extension):** The project's memory panel proposes
+candidate decisions/preferences found in imported user-authored messages.
+Candidate detection currently uses transparent *local keyword heuristics*, not
+an AI model or fact verification. It excludes likely credentials and allows
+the user to edit and then explicitly approve or dismiss each candidate.
+Only approved text enters the shared project-memory context. Dismissals and
+approvals are persisted with message provenance. Exported tool output and
+assistant claims are never automatically elevated into memories.
+
+**Limitations:** Older JSON-only API calls retain the original 8 MB limit.
+The upload endpoint is local-only and has an in-process staging cache; this
+is not resumable chunked transfer. Unsupported export formats, media and
+embedded attachments remain excluded. A real-model memory extraction and
+approval-quality evaluation pipeline have not yet been built.

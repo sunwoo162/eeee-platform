@@ -8,6 +8,7 @@ import {
 import { Conversation, Message, Project, ProjectMemory, ProviderOption, RuntimeStatus, ServerEvent, Workspace, del, get, post, put } from "./api";
 import CodexPanel from "./CodexPanel";
 import ImportPanel, {ImportedResult} from "./ImportPanel";
+import MemoryCandidates from "./MemoryCandidates";
 
 type EditKind = {kind:"workspace"|"project"; workspaceId?:string}|null;
 const terminal = new Set(["message.completed","request.failed","request.cancelled"]);
@@ -407,6 +408,7 @@ export default function App() {
       <div className="memory-header"><div><BrainCircuit size={18}/><strong>프로젝트 기억</strong></div><button className="icon-button" onClick={()=>setMemoryOpen(false)}><X size={18}/></button></div>
       <p className="memory-intro">같은 프로젝트에 속한 채팅에서 공통으로 참고하는 승인된 메모리입니다.</p>
       <form className="memory-form" onSubmit={e=>void addMemory(e)}><textarea placeholder="확정된 프로젝트 결정이나 규칙" value={memoryDraft} onChange={e=>setMemoryDraft(e.target.value)} rows={3}/><button disabled={!memoryDraft.trim()}>기억 추가 <CirclePlus size={14}/></button></form>
+      <MemoryCandidates projectId={selectedProject.id} onApproved={loadMemories}/>
       <div className="memory-list">{memories.map(m=><div className="memory-card" key={m.id}><p>{m.content}</p><button onClick={()=>void removeMemory(m.id)} aria-label="기억 철회" title="기억 철회"><Trash2 size={15}/></button></div>)}{memories.length===0&&<div className="memory-empty">아직 승인된 프로젝트 기억이 없습니다.</div>}</div>
     </aside>}
     {editor&&<div className="modal-backdrop" onClick={()=>setEditor(null)}><form className="modal" onSubmit={e=>void createFolder(e)} onClick={e=>e.stopPropagation()}>

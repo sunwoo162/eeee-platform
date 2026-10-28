@@ -53,6 +53,31 @@ export default function MemoryDetail({projectId,memoryId,onClose,onSaved}:Props)
     finally{setBusy(false);}
   }
 
+  // Reapply a historical text through the existing version-checked edit API.
+  // This intentionally does not reactivate revoked notes or rewrite provenance.
+  async function applyRevision(revision:Revision){
+    if(!detail||detail.memory.status!=="active"||busy||
+      !revision.new_content||revision.new_content===detail.memory.content)return;
+    if(!window.confirm(
+      `v${revision.version}의 내용을 현재 프로젝트 기억에 다시 적용할까요?\n\n`+
+      `현재: ${detail.memory.content}\n\n선택: ${revision.new_content}\n\n`+
+      "이전 변경 이력은 유지되며, 원본 출처 연결은 그대로 남습니다."
+    ))return;
+    setBusy(true);setError("");
+    try{
+      await request(`/v1/projects/${projectId}/memories/${memoryId}`,{
+        method:"PUT",
+        body:JSON.stringify({
+          content:revision.new_content,
+          expectedVersion:detail.revisions[0]?.version||1,
+        }),
+      });
+      await load();
+      await onSaved();
+    }catch(e){setError(e instanceof Error?e.message:String(e));}
+    finally{setBusy(false);}
+  }
+
   return <section className="memory-detail">
     <header className="memory-detail-header">
       <strong><Clock3 size={14}/> 기억 변경 이력</strong>
@@ -84,7 +109,13 @@ export default function MemoryDetail({projectId,memoryId,onClose,onSaved}:Props)
           }</strong>
           <small>{new Date(r.occurred_at).toLocaleString("ko-KR")} · {r.actor_user_id}</small>
           {r.old_content!==null&&<p className="memory-revision-before">이전: {r.old_content}</p>}
-          {r.new_content!==null&&<p>현재: {r.new_content}</p>}
+          {r.new_content!==null&&<p>변경 후: {r.new_content}</p>}
+          {detail.memory.status==="active"&&r.new_content!==null&&
+            r.new_content!==detail.memory.content&&
+            <button type="button" className="memory-reapply"
+              disabled={busy} onClick={()=>void applyRevision(r)}>
+              v{r.version} 내용 다시 적용
+            </button>}
         </div>)}
       </div>
     </>}

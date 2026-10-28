@@ -155,3 +155,42 @@ def test_shared_team_note_does_not_reveal_another_users_raw_source(tmp_path):
     assert client.put(f"/v1/projects/{pid}/memories/{mid}",json={
         "content":"bad edit","expectedVersion":1,
     },headers={"X-EEEE-User-Id":"bob"}).status_code==403
+
+
+def test_reapply_historical_text_keeps_source_and_appends_revision(tmp_path):
+    """The UI reapply action uses existing optimistic edit, not deletion/rewind."""
+    app, client, pid, chat = _setup(tmp_path)
+    first = client.post(f"/v1/projects/{pid}/memories", json={
+        "content": "Use FastAPI",
+    })
+    assert first.status_code == 201
+    memory_id = first.json()["id"]
+    endpoint = f"/v1/projects/{pid}/memories/{memory_id}"
+    history = f"{endpoint}/history"
+    assert client.put(endpoint, json={
+        "content": "Use Flask", "expectedVersion": 1,
+    }).status_code == 200
+    old = client.get(history).json()["revisions"][-1]
+    assert old["new_content"] == "Use FastAPI" and old["version"] == 1
+    # Another tab cannot restore using an obsolete expectedVersion.
+    assert client.put(endpoint, json={
+        "content": old["new_content"], "expectedVersion": 1,
+    }).status_code == 400
+    restored = client.put(endpoint, json={
+        "content": old["new_content"], "expectedVersion": 2,
+    })
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["version"] == 3
+    updated = client.get(history).json()
+    assert updated["memory"]["content"] == "Use FastAPI"
+    assert [r["version"] for r in updated["revisions"]] == [3, 2, 1]
+    assert updated["revisions"][0]["action"] == "updated"
+    assert updated["revisions"][0]["old_content"] == "Use Flask"
+    assert updated["revisions"][0]["new_content"] == "Use FastAPI"
+    assert "Use FastAPI" in str(app.state.workspace_store.context_items(chat, user_id="local-user"))
+    assert "Use Flask" not in str(app.state.workspace_store.context_items(chat, user_id="local-user"))
+    # Revocation is a separate state; simple reapply does not reactivate a note.
+    assert client.delete(endpoint).status_code == 200
+    assert client.put(endpoint, json={
+        "content": "Use Flask", "expectedVersion": 4,
+    }).status_code == 404

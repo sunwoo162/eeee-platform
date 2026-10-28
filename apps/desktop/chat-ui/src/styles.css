@@ -180,3 +180,5 @@
 
 .candidate-replace-button{display:block;margin:8px 0 2px;border:1px solid #b7c9ea;border-radius:7px;background:#f0f5ff;color:#345d9f;padding:7px 9px;font-size:10px}
 .candidate-replace-button:disabled{opacity:.45;cursor:default}
+.memory-reapply{border:1px solid #ceddf3;background:#eef5ff;color:#3564a1;border-radius:7px;font-size:10px;margin-top:6px;padding:6px 9px;cursor:pointer}
+.memory-reapply:disabled{opacity:.45;cursor:default}

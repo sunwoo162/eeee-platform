@@ -8,6 +8,7 @@ from app.api.routes import _plugin_user_id
 from app.conversation_imports.analyzer import MemoryAnalysisError, MemoryAnalyzer
 from app.conversation_imports.candidates import MemoryCandidates
 from app.conversation_imports.parser import parse_export
+from app.conversation_imports.resolution import MemoryConflictResolver
 from app.conversation_imports.service import ConversationImportService
 from app.conversation_imports.staging import (
     MAX_ARCHIVE_BYTES,
@@ -32,6 +33,13 @@ class AnalyzePayload(BaseModel):
     consent: bool = False
 
 
+class ReplaceConflictPayload(BaseModel):
+    memory_id: str = Field(alias="memoryId", min_length=1)
+    content: str = Field(min_length=1,max_length=2000)
+    expected_version: int = Field(alias="expectedVersion",ge=1)
+    acknowledged_risk: bool = Field(alias="acknowledgedRisk",default=False)
+
+
 class StagedCommitPayload(BaseModel):
     selected_indexes: list[int] = Field(alias="selectedIndexes", min_length=1, max_length=20)
     project_id: str | None = Field(default=None, alias="projectId")
@@ -49,6 +57,7 @@ def build_import_router(
     staging = staging or ImportStaging()
     candidates = MemoryCandidates(service.projects)
     analyzer = MemoryAnalyzer(candidates, provider_hub) if provider_hub is not None else None
+    resolver = MemoryConflictResolver(candidates)
     router = APIRouter(prefix="/v1/imports")
 
     def principal(request: Request) -> str:
@@ -178,6 +187,24 @@ def build_import_router(
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ValueError, MemoryAnalysisError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/projects/{project_id}/memory-candidates/{message_id}/replace")
+    def replace_conflicting_memory(
+        project_id: str, message_id: str, body: ReplaceConflictPayload, request: Request,
+    ) -> dict:
+        user = principal(request)
+        try:
+            return resolver.replace(
+                project_id, message_id, user_id=user, memory_id=body.memory_id,
+                content=body.content, expected_version=body.expected_version,
+                acknowledged_risk=body.acknowledged_risk,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/projects/{project_id}/memory-candidates/{message_id}/review")

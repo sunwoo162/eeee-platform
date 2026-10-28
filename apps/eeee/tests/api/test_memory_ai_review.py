@@ -214,3 +214,78 @@ def test_approved_memory_edit_invalidates_ai_analysis(tmp_path):
     assert client.post(review,json={
         "decision":"approve","content":"Use Flask","acknowledgedRisk":True,
     }).status_code==200
+
+
+def test_conflict_replacement_keeps_one_active_note_and_full_provenance(tmp_path):
+    app, client, pid, sibling, item = _setup(tmp_path)
+    initial=client.post(f"/v1/projects/{pid}/memories",json={"content":"Use FastAPI"})
+    mid=initial.json()["id"]
+    fake=_ai(app,{
+        "verdict":"conflict","suggestedText":"Use Flask",
+        "reason":"Project backend changed","relatedMemoryIds":[mid],
+    })
+    assert _analyze(client,pid,item).status_code==200
+    path=f"/v1/imports/projects/{pid}/memory-candidates/{item['sourceMessageId']}/replace"
+    payload={
+        "memoryId":mid,"expectedVersion":1,"content":"Use Flask",
+        "acknowledgedRisk":True,
+    }
+    assert client.post(path,json={**payload,"acknowledgedRisk":False}).status_code==403
+    assert client.post(path,json={**payload,"memoryId":"other-memory"}).status_code==409
+    assert client.post(path,json={**payload,"expectedVersion":2}).status_code==409
+    assert client.post(path,json=payload,headers={
+        "X-EEEE-User-Id":"other-user",
+    }).status_code in {403,404}
+    assert len(fake.calls)==1
+    result=client.post(path,json=payload)
+    assert result.status_code==200,result.text
+    assert result.json()["action"]=="replaced"
+    assert result.json()["version"]==2
+    notes=app.state.workspace_store.list_memories(pid,user_id="local-user")
+    assert len(notes)==1 and notes[0]["id"]==mid and notes[0]["content"]=="Use Flask"
+    context=str(app.state.workspace_store.context_items(sibling,user_id="local-user"))
+    assert "Use Flask" in context and "Use FastAPI" not in context
+    history=client.get(f"/v1/projects/{pid}/memories/{mid}/history").json()
+    assert [r["version"] for r in history["revisions"]]==[2,1]
+    assert history["revisions"][0]["source_message_id"]==item["sourceMessageId"]
+    assert history["revisions"][0]["old_content"]=="Use FastAPI"
+    assert history["memory"]["source_message_id"]==item["sourceMessageId"]
+    assert client.get(f"/v1/imports/projects/{pid}/memory-candidates").json()["items"]==[]
+    assert client.post(path,json=payload).status_code==409
+
+
+def test_conflict_replacement_fails_if_approved_memory_changes(tmp_path):
+    app,client,pid,_,item=_setup(tmp_path)
+    mid=client.post(f"/v1/projects/{pid}/memories",json={
+        "content":"Use FastAPI",
+    }).json()["id"]
+    _ai(app,{
+        "verdict":"conflict","suggestedText":"Use Flask",
+        "reason":"Technology changed","relatedMemoryIds":[mid],
+    })
+    assert _analyze(client,pid,item).status_code==200
+    assert client.put(f"/v1/projects/{pid}/memories/{mid}",json={
+        "content":"Use Django","expectedVersion":1,
+    }).status_code==200
+    path=f"/v1/imports/projects/{pid}/memory-candidates/{item['sourceMessageId']}/replace"
+    blocked=client.post(path,json={
+        "memoryId":mid,"expectedVersion":2,
+        "content":"Use Flask","acknowledgedRisk":True,
+    })
+    assert blocked.status_code==409
+    assert client.get(f"/v1/projects/{pid}/memories/{mid}/history").json()["memory"]["content"]=="Use Django"
+
+
+def test_nonconflict_model_response_cannot_replace_project_memory(tmp_path):
+    app,client,pid,_,item=_setup(tmp_path)
+    mid=client.post(f"/v1/projects/{pid}/memories",json={"content":"Use FastAPI"}).json()["id"]
+    _ai(app,{
+        "verdict":"duplicate","suggestedText":"Use FastAPI",
+        "reason":"Same technology","relatedMemoryIds":[mid],
+    })
+    assert _analyze(client,pid,item).status_code==200
+    path=f"/v1/imports/projects/{pid}/memory-candidates/{item['sourceMessageId']}/replace"
+    assert client.post(path,json={
+        "memoryId":mid,"expectedVersion":1,
+        "content":"Use Flask","acknowledgedRisk":True,
+    }).status_code==409

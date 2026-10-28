@@ -187,3 +187,30 @@ def test_memory_change_invalidates_previous_ai_review(tmp_path):
     assert client.post(review_path,json={
         "decision":"approve","content":"Flask를 사용",
     }).status_code == 200
+
+
+def test_approved_memory_edit_invalidates_ai_analysis(tmp_path):
+    app, client, pid, _, item = _setup(tmp_path)
+    memory = client.post(f"/v1/projects/{pid}/memories", json={
+        "content":"Use FastAPI",
+    }).json()["id"]
+    fake = _ai(app, {
+        "verdict":"conflict",
+        "suggestedText":"Use Flask",
+        "reason":"Contradicts the prior backend choice",
+        "relatedMemoryIds":[memory],
+    })
+    assert _analyze(client, pid, item).status_code == 200
+    assert fake.calls
+    changed=client.put(f"/v1/projects/{pid}/memories/{memory}",json={
+        "content":"Use Django","expectedVersion":1,
+    })
+    assert changed.status_code==200,changed.text
+    review=f"/v1/imports/projects/{pid}/memory-candidates/{item['sourceMessageId']}/review"
+    assert client.post(review,json={
+        "decision":"approve","content":"Use Flask","acknowledgedRisk":True,
+    }).status_code==409
+    assert _analyze(client,pid,item).status_code==200
+    assert client.post(review,json={
+        "decision":"approve","content":"Use Flask","acknowledgedRisk":True,
+    }).status_code==200

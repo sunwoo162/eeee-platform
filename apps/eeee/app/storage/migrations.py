@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-LATEST_SCHEMA_VERSION = 12
+LATEST_SCHEMA_VERSION = 13
 
 
 def apply_migrations(connection: sqlite3.Connection) -> None:
@@ -354,6 +354,41 @@ def apply_migrations(connection: sqlite3.Connection) -> None:
         connection.execute(
             "INSERT INTO schema_migrations(version, applied_at) "
             "VALUES (12, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        )
+    if current < 13:
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS chat_memory_revisions (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES chat_projects(id) ON DELETE CASCADE,
+                memory_id TEXT NOT NULL REFERENCES chat_project_memories(id) ON DELETE CASCADE,
+                version INTEGER NOT NULL,
+                action TEXT NOT NULL CHECK(
+                    action IN ('created','updated','revoked','legacy_snapshot')
+                ),
+                actor_user_id TEXT NOT NULL,
+                old_content TEXT,
+                new_content TEXT,
+                source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+                occurred_at TEXT NOT NULL,
+                UNIQUE(memory_id,version)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_memory_revisions_project
+                ON chat_memory_revisions(project_id,memory_id,version DESC);
+        """)
+        # Old state had no revision ledger. Record only an accurate snapshot;
+        # do not pretend to reconstruct previous edits or revocations.
+        connection.execute(
+            "INSERT INTO chat_memory_revisions "
+            "(id,project_id,memory_id,version,action,actor_user_id,"
+            "old_content,new_content,source_message_id,occurred_at) "
+            "SELECT 'legacy-' || id,project_id,id,1,'legacy_snapshot',"
+            "created_by_user_id,NULL,content,source_message_id,"
+            "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+            "FROM chat_project_memories"
+        )
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) "
+            "VALUES (13, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
         )
     # Keep the idempotency guard self-healing even if an operator restored a
     # database with the schema marker intact but the index missing.

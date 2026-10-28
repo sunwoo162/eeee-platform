@@ -290,6 +290,14 @@ class WorkspaceStore:
                 "VALUES (?,?,?,?,?,'active',?)",
                 (memory_id, project_id, content, user_id, source_message_id, now),
             )
+            conn.execute(
+                "INSERT INTO chat_memory_revisions "
+                "(id,project_id,memory_id,version,action,actor_user_id,"
+                "old_content,new_content,source_message_id,occurred_at) "
+                "VALUES (?,?,?,1,'created',?,NULL,?,?,?)",
+                (f"memory-revision-{uuid4().hex}",project_id,memory_id,user_id,
+                 content,source_message_id,now),
+            )
         return {"id": memory_id, "project_id": project_id, "content": content,
                 "created_by_user_id": user_id, "source_message_id": source_message_id,
                 "status": "active", "created_at": now}
@@ -305,18 +313,113 @@ class WorkspaceStore:
             ).fetchall()
         return [_dict(row) for row in rows]
 
+    def memory_history(
+        self, project_id: str, memory_id: str, *, user_id: str,
+    ) -> dict:
+        user_id = _owner(user_id)
+        with self.db._connect() as conn:
+            self._project_role(conn, project_id, user_id)
+            memory = conn.execute(
+                "SELECT pm.*, "
+                "CASE WHEN c.user_id=? THEN m.content ELSE NULL END AS source_content, "
+                "CASE WHEN c.user_id=? THEN c.title ELSE NULL END AS source_title, "
+                "CASE WHEN c.user_id=? THEN src.provider ELSE NULL END AS import_provider, "
+                "CASE WHEN c.user_id=? THEN src.source_id ELSE NULL END AS import_source_id "
+                "FROM chat_project_memories pm "
+                "LEFT JOIN messages m ON m.id=pm.source_message_id "
+                "LEFT JOIN conversations c ON c.id=m.conversation_id "
+                "LEFT JOIN chat_import_sources src ON src.conversation_id=c.id "
+                "WHERE pm.id=? AND pm.project_id=?",
+                (user_id,user_id,user_id,user_id,memory_id,project_id),
+            ).fetchone()
+            if memory is None:
+                raise KeyError("project memory not found")
+            revisions = conn.execute(
+                "SELECT version,action,actor_user_id,old_content,new_content,"
+                "source_message_id,occurred_at FROM chat_memory_revisions "
+                "WHERE project_id=? AND memory_id=? ORDER BY version DESC",
+                (project_id,memory_id),
+            ).fetchall()
+        return {"memory":_dict(memory),"revisions":[_dict(r) for r in revisions]}
+
+    def update_memory(
+        self, project_id: str, memory_id: str, content: str, *,
+        expected_version: int, user_id: str,
+    ) -> dict:
+        user_id = _owner(user_id)
+        content = content.strip()
+        if not content or len(content)>2000:
+            raise ValueError("memory must be between 1 and 2000 characters")
+        if expected_version < 1:
+            raise ValueError("invalid memory version")
+        with self.db._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if self._project_role(conn, project_id, user_id) == "viewer":
+                raise PermissionError("viewer cannot edit project memory")
+            previous = conn.execute(
+                "SELECT content,source_message_id,status FROM chat_project_memories "
+                "WHERE id=? AND project_id=?",
+                (memory_id,project_id),
+            ).fetchone()
+            if previous is None or previous["status"]!="active":
+                raise KeyError("active project memory not found")
+            current_version = conn.execute(
+                "SELECT MAX(version) FROM chat_memory_revisions WHERE memory_id=?",
+                (memory_id,),
+            ).fetchone()[0]
+            if current_version != expected_version:
+                raise ValueError("memory has changed; reload before editing")
+            if content == previous["content"]:
+                return {"id":memory_id,"content":content,"version":current_version}
+            now=_now()
+            conn.execute(
+                "UPDATE chat_project_memories SET content=? WHERE id=? AND project_id=?",
+                (content,memory_id,project_id),
+            )
+            conn.execute(
+                "INSERT INTO chat_memory_revisions "
+                "(id,project_id,memory_id,version,action,actor_user_id,"
+                "old_content,new_content,source_message_id,occurred_at) "
+                "VALUES (?,?,?,?,'updated',?,?,?,?,?)",
+                (f"memory-revision-{uuid4().hex}",project_id,memory_id,
+                 current_version+1,user_id,previous["content"],content,
+                 previous["source_message_id"],now),
+            )
+        return {"id":memory_id,"content":content,"version":current_version+1}
+
     def revoke_memory(self, project_id: str, memory_id: str, *, user_id: str) -> None:
         user_id = _owner(user_id)
         with self.db._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             if self._project_role(conn, project_id, user_id) == "viewer":
                 raise PermissionError("viewer cannot revoke project memory")
+            previous = conn.execute(
+                "SELECT content,source_message_id FROM chat_project_memories "
+                "WHERE id=? AND project_id=? AND status='active'",
+                (memory_id,project_id),
+            ).fetchone()
+            if previous is None:
+                raise KeyError("project memory not found")
+            current_version = conn.execute(
+                "SELECT MAX(version) FROM chat_memory_revisions WHERE memory_id=?",
+                (memory_id,),
+            ).fetchone()[0]
             result = conn.execute(
                 "UPDATE chat_project_memories SET status='revoked' "
                 "WHERE id=? AND project_id=? AND status='active'",
-                (memory_id, project_id)
+                (memory_id,project_id),
             )
             if result.rowcount != 1:
                 raise KeyError("project memory not found")
+            conn.execute(
+                "INSERT INTO chat_memory_revisions "
+                "(id,project_id,memory_id,version,action,actor_user_id,"
+                "old_content,new_content,source_message_id,occurred_at) "
+                "VALUES (?,?,?,?,'revoked',?,?,NULL,?,?)",
+                (f"memory-revision-{uuid4().hex}",project_id,memory_id,
+                 current_version+1,user_id,previous["content"],
+                 previous["source_message_id"],_now()),
+            )
 
     def project_for_conversation(self, conversation_id: str, *, user_id: str) -> dict | None:
         user_id = _owner(user_id)

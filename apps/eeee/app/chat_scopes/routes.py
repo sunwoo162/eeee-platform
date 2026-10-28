@@ -27,6 +27,11 @@ class MemoryCreate(BaseModel):
     source_message_id: str | None = None
 
 
+class MemoryUpdate(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+    expected_version: int = Field(alias="expectedVersion", ge=1)
+
+
 def build_workspace_router(
     workspaces: WorkspaceStore, conversations: ConversationStore,
 ) -> APIRouter:
@@ -102,6 +107,17 @@ def build_workspace_router(
     @router.get("/projects/{project_id}/memories")
     def list_project_memories(project_id: str, request: Request) -> dict:
         return {"items": call(workspaces.list_memories, project_id, user_id=principal(request))}
+
+    @router.get("/projects/{project_id}/memories/{memory_id}/history")
+    def memory_history(project_id: str, memory_id: str, request: Request) -> dict:
+        return call(workspaces.memory_history, project_id, memory_id, user_id=principal(request))
+
+    @router.put("/projects/{project_id}/memories/{memory_id}")
+    def update_memory(project_id: str, memory_id: str, body: MemoryUpdate, request: Request) -> dict:
+        return call(
+            workspaces.update_memory, project_id, memory_id, body.content,
+            expected_version=body.expected_version, user_id=principal(request),
+        )
 
     @router.delete("/projects/{project_id}/memories/{memory_id}")
     def revoke_project_memory(project_id: str, memory_id: str, request: Request) -> dict:

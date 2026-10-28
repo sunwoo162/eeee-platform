@@ -162,6 +162,14 @@ class MemoryCandidates:
                     "VALUES (?,?,?,?,?,'active',?)",
                     (memory_id, project_id, content.strip(), user_id, message_id, now),
                 )
+                conn.execute(
+                    "INSERT INTO chat_memory_revisions "
+                    "(id,project_id,memory_id,version,action,actor_user_id,"
+                    "old_content,new_content,source_message_id,occurred_at) "
+                    "VALUES (?,?,?,1,'created',?,NULL,?,?,?)",
+                    (f"memory-revision-{uuid4().hex}",project_id,memory_id,
+                     user_id,content.strip(),message_id,now),
+                )
             conn.execute(
                 "INSERT INTO chat_memory_reviews "
                 "(project_id,source_message_id,reviewed_by,decision,reviewed_at,memory_id) "

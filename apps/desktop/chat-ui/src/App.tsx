@@ -9,6 +9,7 @@ import { Conversation, Message, Project, ProjectMemory, ProviderOption, RuntimeS
 import CodexPanel from "./CodexPanel";
 import ImportPanel, {ImportedResult} from "./ImportPanel";
 import MemoryCandidates from "./MemoryCandidates";
+import MemoryDetail from "./MemoryDetail";
 
 type EditKind = {kind:"workspace"|"project"; workspaceId?:string}|null;
 const terminal = new Set(["message.completed","request.failed","request.cancelled"]);
@@ -37,6 +38,7 @@ export default function App() {
   const [importOpen,setImportOpen] = useState(false);
   const [activeCodexTaskId,setActiveCodexTaskId] = useState<string|null>(null);
   const [memories,setMemories] = useState<ProjectMemory[]>([]);
+  const [memoryDetailId,setMemoryDetailId] = useState<string|null>(null);
   const [memoryDraft,setMemoryDraft] = useState("");
   const [mobileSidebar,setMobileSidebar] = useState(false);
   const messagesEnd=useRef<HTMLDivElement|null>(null);
@@ -83,6 +85,7 @@ export default function App() {
     setSelectedChat(chat);
     setProviderMode(sessionStorage.getItem("gleave-provider:"+chat.id)||"auto");
     setSelectedProject(project);
+    setMemoryDetailId(null);
     setMobileSidebar(false);
     setBusy(false);
     setError("");
@@ -95,6 +98,7 @@ export default function App() {
     currentChatId.current=null;
     setActiveCodexTaskId(null);
     setSelectedProject(project);setSelectedChat(null);setMessages([]);
+    setMemoryDetailId(null);
     setExpanded(old=>({...old,[project.id]:true}));setMobileSidebar(false);setBusy(false);
   }
   async function createChat(){
@@ -409,7 +413,11 @@ export default function App() {
       <p className="memory-intro">같은 프로젝트에 속한 채팅에서 공통으로 참고하는 승인된 메모리입니다.</p>
       <form className="memory-form" onSubmit={e=>void addMemory(e)}><textarea placeholder="확정된 프로젝트 결정이나 규칙" value={memoryDraft} onChange={e=>setMemoryDraft(e.target.value)} rows={3}/><button disabled={!memoryDraft.trim()}>기억 추가 <CirclePlus size={14}/></button></form>
       <MemoryCandidates projectId={selectedProject.id} onApproved={loadMemories}/>
-      <div className="memory-list">{memories.map(m=><div className="memory-card" key={m.id}><p>{m.content}</p><button onClick={()=>void removeMemory(m.id)} aria-label="기억 철회" title="기억 철회"><Trash2 size={15}/></button></div>)}{memories.length===0&&<div className="memory-empty">아직 승인된 프로젝트 기억이 없습니다.</div>}</div>
+      <div className="memory-list">{memories.map(m=><div className="memory-card" key={m.id}><p>{m.content}</p>
+      <button className="memory-history-action" title="기억 변경 이력과 원본 확인" onClick={()=>setMemoryDetailId(m.id)}>이력·수정</button>
+      <button onClick={()=>void removeMemory(m.id)} aria-label="기억 철회" title="기억 철회"><Trash2 size={15}/></button></div>)}{memories.length===0&&<div className="memory-empty">아직 승인된 프로젝트 기억이 없습니다.</div>}</div>
+      {memoryDetailId&&<MemoryDetail projectId={selectedProject.id} memoryId={memoryDetailId}
+        onClose={()=>setMemoryDetailId(null)} onSaved={loadMemories}/>}
     </aside>}
     {editor&&<div className="modal-backdrop" onClick={()=>setEditor(null)}><form className="modal" onSubmit={e=>void createFolder(e)} onClick={e=>e.stopPropagation()}>
       <div className="modal-symbol">{editor.kind==="workspace"?<Layers3 size={22}/>:<Folder size={22}/>}</div>

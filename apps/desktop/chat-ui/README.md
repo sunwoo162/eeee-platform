@@ -173,3 +173,26 @@ and billing must be configured by the user, and real-provider quality has not
 been proven by unit tests. Imported assistant/tool messages are not promoted
 to memories. Existing local user-header identity is not a production
 multi-user authentication mechanism.
+
+## Project-memory provenance and revision history
+
+Open a project's memory panel and select **이력·수정** on an approved note.
+The detail view lists the source conversation (only if you own that private
+conversation), import provider and original exported conversation ID, as well
+as all subsequent edit and revocation versions. Edit a note and save to replace
+the active content. The Core checks `expectedVersion` to prevent stale
+concurrent browser tabs from overwriting a newer edit. Deleting a note revokes
+it from project context and writes another revision; neither operation silently
+restores old content. Older notes migrated from previous schema versions
+receive a single `legacy_snapshot`, not invented prior revision history.
+
+For offline, reproducible **model comparison**, use the synthetic benchmark at
+`docs/architecture/memory-review-benchmark.json` with results recorded
+separately for each provider. Run from `apps/eeee`:
+
+`python -m app.conversation_imports.evaluation --gold ../../docs/architecture/memory-review-benchmark.json --predictions predictions.json`
+
+`predictions.json` must be an array of objects with `caseId`, `provider`,
+`verdict`, and `relatedMemoryIds`. The evaluator performs **no model calls**
+and scores nothing unless predictions are provided. Automated fixtures only
+verify the scoring implementation, not actual GPT or Claude quality.

@@ -154,3 +154,26 @@
 .candidate-analysis p{font-size:11px;line-height:1.6;color:#52627b;overflow-wrap:anywhere}
 .candidate-related{padding:7px;background:#fff;border-radius:7px;margin:6px 0}
 .candidate-related strong{font-size:10px;color:#8b6038}
+
+.memory-history-action{border:1px solid #d5e1f4;border-radius:7px;background:#f3f7fe;color:#466eaf;font-size:10px;padding:6px;margin-left:auto}
+.memory-detail{margin:12px 14px;padding:14px;border:1px solid #d9e3f3;border-radius:10px;background:#f8faff}
+.memory-detail-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;color:#385982;font-size:12px}
+.memory-detail-header strong,.memory-detail-header button{display:flex;align-items:center;gap:6px}
+.memory-detail-header button{border:0;background:none;color:#70819c;padding:4px}
+.memory-detail textarea{width:100%;padding:9px;border-radius:8px;border:1px solid #d5e1f0;color:#43536b;font-size:11px;line-height:1.5;resize:vertical;background:#fff}
+.memory-save{display:flex;align-items:center;gap:6px;margin:8px 0 13px;background:#3c70ca;border:none;border-radius:7px;color:#fff;font-size:11px;padding:8px 12px}
+.memory-save:disabled{opacity:.5}
+.memory-origin{padding:10px;background:#fff;border:1px solid #dce6f4;border-radius:8px;overflow-wrap:anywhere;margin:9px 0;font-size:11px;color:#5e7490}
+.memory-origin strong{display:flex;gap:5px;align-items:center;color:#416ca5}
+.memory-origin p{line-height:1.5;margin:6px 0}
+.memory-origin-quote{background:#f1f5fa;border-radius:6px;padding:7px}
+.memory-revision-list{max-height:250px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+.memory-revision{padding:10px;background:#fff;border:1px solid #e4ebf5;border-radius:8px;overflow-wrap:anywhere}
+.memory-revision strong{display:flex;align-items:center;gap:5px;color:#405d8d;font-size:11px}
+.memory-revision small{display:block;margin:6px 0;color:#7d8fa8;font-size:10px}
+.memory-revision p{font-size:11px;color:#536987;line-height:1.55;margin:5px 0}
+.memory-revision-before{opacity:.65;text-decoration:line-through}
+
+.memory-panel{position:relative}
+.memory-detail{position:absolute;inset:54px 4px 4px;z-index:3;overflow-y:auto;margin:0;background:#f8faff;box-shadow:0 0 12px #1f3b7020}
+.memory-card .memory-history-action{background:#eef4ff;border:1px solid #d0def2;color:#3467a4;white-space:nowrap;padding:5px 7px;border-radius:7px}

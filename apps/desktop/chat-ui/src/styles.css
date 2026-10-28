@@ -177,3 +177,6 @@
 .memory-panel{position:relative}
 .memory-detail{position:absolute;inset:54px 4px 4px;z-index:3;overflow-y:auto;margin:0;background:#f8faff;box-shadow:0 0 12px #1f3b7020}
 .memory-card .memory-history-action{background:#eef4ff;border:1px solid #d0def2;color:#3467a4;white-space:nowrap;padding:5px 7px;border-radius:7px}
+
+.candidate-replace-button{display:block;margin:8px 0 2px;border:1px solid #b7c9ea;border-radius:7px;background:#f0f5ff;color:#345d9f;padding:7px 9px;font-size:10px}
+.candidate-replace-button:disabled{opacity:.45;cursor:default}

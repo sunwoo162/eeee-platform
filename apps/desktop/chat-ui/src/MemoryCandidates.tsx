@@ -77,6 +77,34 @@ export default function MemoryCandidates({projectId,onApproved}:Props){
     finally{setActive(null);}
   }
 
+  async function replaceExisting(item:Candidate,memoryId:string){
+    if(item.analysis?.verdict!=="conflict"||!acknowledged[item.sourceMessageId]||active!==null)return;
+    const content=drafts[item.sourceMessageId]?.trim();
+    if(!content||content.length>2000)return;
+    setActive(item.sourceMessageId);setError("");
+    try{
+      const history=await get<{memory:{content:string,status:string};revisions:{version:number}[]}>(
+        `/v1/projects/${projectId}/memories/${memoryId}/history`
+      );
+      if(history.memory.status!=="active")throw new Error("기존 기억이 이미 철회되었습니다.");
+      if(!window.confirm(
+        "기존 기억을 새 결정으로 교체할까요?\n\n현재: "+
+        history.memory.content+"\n\n변경: "+content+
+        "\n\n이전 내용과 출처는 변경 이력에 남습니다."
+      ))return;
+      await post(
+        `/v1/imports/projects/${projectId}/memory-candidates/${item.sourceMessageId}/replace`,
+        {
+          memoryId,content,expectedVersion:history.revisions[0]?.version||1,
+          acknowledgedRisk:true
+        }
+      );
+      setItems(old=>old.filter(c=>c.sourceMessageId!==item.sourceMessageId));
+      await onApproved();
+    }catch(err){setError(err instanceof Error?err.message:String(err));}
+    finally{setActive(null);}
+  }
+
   async function review(item:Candidate,decision:"approve"|"dismiss"){
     const content=drafts[item.sourceMessageId]?.trim();
     if(decision==="approve"&&(!content||content.length>2000))return;
@@ -146,6 +174,13 @@ export default function MemoryCandidates({projectId,onApproved}:Props){
           {item.analysis.relatedMemories.map(note=>
             <div className="candidate-related" key={note.id}>
               <strong>비교한 기존 기억</strong><p>{note.text}</p>
+              {item.analysis?.verdict==="conflict"&&<button
+                className="candidate-replace-button"
+                disabled={active!==null||!acknowledged[item.sourceMessageId]||
+                  !(drafts[item.sourceMessageId]||"").trim()}
+                onClick={()=>void replaceExisting(item,note.id)}>
+                기존 기억을 새 결정으로 교체
+              </button>}
             </div>
           )}
           <p className="codex-hint">
